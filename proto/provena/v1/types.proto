@@ -1,0 +1,150 @@
+syntax = "proto3";
+
+package provena.v1;
+
+option go_package = "github.com/altrixy/provena/control-plane/gen/provena/v1;provenav1";
+
+import "google/protobuf/timestamp.proto";
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum MemoryKind {
+  MEMORY_KIND_UNSPECIFIED = 0;
+  MEMORY_KIND_FACT        = 1;
+  MEMORY_KIND_EPISODE     = 2;
+  MEMORY_KIND_ARTIFACT    = 3;
+  MEMORY_KIND_DECISION    = 4;
+  MEMORY_KIND_RELATION    = 5;
+  MEMORY_KIND_PREFERENCE  = 6;
+  MEMORY_KIND_INSTRUCTION = 7;
+  MEMORY_KIND_METRIC      = 8;
+  MEMORY_KIND_STAKEHOLDER = 9;
+  MEMORY_KIND_SOURCE      = 10;
+}
+
+enum MemoryStatus {
+  MEMORY_STATUS_UNSPECIFIED = 0;
+  MEMORY_STATUS_ACTIVE      = 1;
+  MEMORY_STATUS_SUPERSEDED  = 2;
+  MEMORY_STATUS_DELETED     = 3;
+  MEMORY_STATUS_HELD        = 4;  // legal hold
+}
+
+enum RelationKind {
+  RELATION_KIND_UNSPECIFIED   = 0;
+  RELATION_KIND_RELATED_TO    = 1;
+  RELATION_KIND_SUPPORTS      = 2;
+  RELATION_KIND_DERIVED_FROM  = 3;
+  RELATION_KIND_SUPERSEDES    = 4;
+  RELATION_KIND_CONFLICTS_WITH = 5;
+}
+
+enum ModelTier {
+  MODEL_TIER_UNSPECIFIED = 0;
+  MODEL_TIER_FAST        = 1;
+  MODEL_TIER_BALANCED    = 2;
+  MODEL_TIER_QUALITY     = 3;
+}
+
+enum ACLPermission {
+  ACL_PERMISSION_UNSPECIFIED = 0;
+  ACL_PERMISSION_READ        = 1;
+  ACL_PERMISSION_WRITE       = 2;
+  ACL_PERMISSION_DELETE      = 3;
+  ACL_PERMISSION_ADMIN       = 4;
+}
+
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_VIEWER      = 1;
+  ROLE_EDITOR      = 2;
+  ROLE_ADMIN       = 3;
+  ROLE_SUPERADMIN  = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Core messages
+// ---------------------------------------------------------------------------
+
+message ScopeEnvelope {
+  string tenant_id    = 1;
+  string workspace_id = 2;
+  string project_id   = 3;
+  string user_id      = 4;
+  string agent_id     = 5;
+  string session_id   = 6;
+}
+
+message SourceReference {
+  string source_type = 1;
+  string source_id   = 2;
+  string uri         = 3;
+  string title       = 4;
+  string excerpt     = 5;
+  int32  span_start  = 6;
+  int32  span_end    = 7;
+  map<string, string> metadata = 8;
+}
+
+message ACLEntry {
+  string principal_id           = 1;
+  string principal_type         = 2;  // "user" | "role" | "agent"
+  repeated ACLPermission permissions = 3;
+}
+
+message MemoryRecord {
+  string       memory_id     = 1;
+  string       fingerprint   = 2;
+  MemoryKind   kind          = 3;
+  MemoryStatus status        = 4;
+  ScopeEnvelope scope        = 5;
+  string       title         = 6;
+  string       content       = 7;
+  string       summary       = 8;
+  repeated string entity_keys = 9;
+  repeated string tags        = 10;
+  map<string, string> metadata = 11;
+  float        importance    = 12;
+  float        confidence    = 13;
+  float        strength      = 14;
+  google.protobuf.Timestamp valid_from        = 15;
+  google.protobuf.Timestamp valid_to          = 16;
+  google.protobuf.Timestamp created_at        = 17;
+  google.protobuf.Timestamp updated_at        = 18;
+  google.protobuf.Timestamp last_verified_at  = 19;
+  repeated SourceReference source_references  = 20;
+  repeated ACLEntry acl                       = 21;
+  string embedding_model                      = 22;
+  repeated float embedding                    = 23;
+}
+
+message Citation {
+  string memory_id = 1;
+  string title     = 2;
+  string excerpt   = 3;
+  repeated SourceReference source_references = 4;
+  float confidence = 5;
+}
+
+message TokenUsage {
+  string tenant_id    = 1;
+  string operation    = 2;
+  int32  input_tokens = 3;
+  int32  output_tokens = 4;
+  string model        = 5;
+  double cost_usd     = 6;
+  google.protobuf.Timestamp timestamp = 7;
+}
+
+// ---------------------------------------------------------------------------
+// Auth context — passed between services
+// ---------------------------------------------------------------------------
+
+message AuthContext {
+  string tenant_id = 1;
+  string user_id   = 2;
+  Role   role      = 3;
+  string key_id    = 4;
+}

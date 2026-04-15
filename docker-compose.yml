@@ -1,0 +1,169 @@
+services:
+  # -------------------------------------------------------------------------
+  # Rust: Pre-flight orchestration layer (hot path)
+  # Trigger index lookup, context budget, prompt assembly, cold start
+  # -------------------------------------------------------------------------
+  orchestration:
+    build:
+      context: ./orchestration
+      dockerfile: Dockerfile
+    ports:
+      - "${PROVENA_ORCHESTRATION_HOST_PORT:-50051}:50051"
+    environment:
+      - RUST_LOG=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:50051/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # Go: API gateway + control plane (AuthN, RBAC, quotas, routing)
+  # -------------------------------------------------------------------------
+  gateway:
+    build:
+      context: ./control-plane
+      dockerfile: Dockerfile
+      args:
+        CMD: gateway
+    ports:
+      - "${PROVENA_GATEWAY_HOST_PORT:-8080}:8080"
+    environment:
+      - PROVENA_LISTEN_ADDR=:8080
+      - PROVENA_ORCHESTRATION_URL=http://orchestration:50051
+      - PROVENA_INTELLIGENCE_URL=http://intelligence:8081
+      - PROVENA_STORE_URL=http://store:8000
+      - PROVENA_LIFECYCLE_URL=http://lifecycle:8092
+      - PROVENA_AUTH_ENABLED=false
+    depends_on:
+      orchestration:
+        condition: service_healthy
+      intelligence:
+        condition: service_healthy
+      store:
+        condition: service_healthy
+      lifecycle:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # Go: MCP server (Model Context Protocol for Claude/LLM clients)
+  # -------------------------------------------------------------------------
+  mcp:
+    build:
+      context: ./control-plane
+      dockerfile: Dockerfile
+      args:
+        CMD: mcp
+    ports:
+      - "${PROVENA_MCP_HOST_PORT:-8090}:8090"
+    environment:
+      - PROVENA_MCP_LISTEN_ADDR=:8090
+      - PROVENA_GATEWAY_URL=http://gateway:8080
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # Go: Message queue consumer (write backpressure)
+  # -------------------------------------------------------------------------
+  queue:
+    build:
+      context: ./control-plane
+      dockerfile: Dockerfile
+      args:
+        CMD: queue
+    ports:
+      - "${PROVENA_QUEUE_HOST_PORT:-8091}:8091"
+    environment:
+      - PROVENA_QUEUE_LISTEN_ADDR=:8091
+      - PROVENA_PIPELINE_URL=http://intelligence:8081
+      - PROVENA_QUEUE_MAX_DEPTH=1000
+      - PROVENA_QUEUE_WORKERS=4
+    depends_on:
+      intelligence:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8091/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # Go: Lifecycle + governance (retention, legal hold, RTBF)
+  # -------------------------------------------------------------------------
+  lifecycle:
+    build:
+      context: ./control-plane
+      dockerfile: Dockerfile
+      args:
+        CMD: lifecycle
+    ports:
+      - "${PROVENA_LIFECYCLE_HOST_PORT:-8092}:8092"
+    environment:
+      - PROVENA_LIFECYCLE_LISTEN_ADDR=:8092
+      - PROVENA_STORE_URL=http://store:8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8092/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # Python: ML/LLM intelligence layer (write/read pipelines, model router)
+  # -------------------------------------------------------------------------
+  intelligence:
+    build:
+      context: ./intelligence
+      dockerfile: Dockerfile
+    ports:
+      - "${PROVENA_INTELLIGENCE_HOST_PORT:-8081}:8081"
+    environment:
+      - PROVENA_INTEL_LISTEN_PORT=8081
+      - PROVENA_INTEL_PIPELINE_URL=http://store:8000
+      - PROVENA_INTEL_ORCHESTRATION_URL=http://orchestration:50051
+      - PROVENA_INTEL_EMBEDDING_PROVIDER=local
+      - PROVENA_INTEL_EMBEDDING_DIMENSIONS=384
+    depends_on:
+      store:
+        condition: service_healthy
+      orchestration:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # Python: Core memory store (existing FastAPI service)
+  # -------------------------------------------------------------------------
+  store:
+    build:
+      context: .
+      dockerfile: Dockerfile.store
+    ports:
+      - "${PROVENA_STORE_HOST_PORT:-8000}:8000"
+    environment:
+      - PROVENA_DB_PATH=/data/provena.db
+    volumes:
+      - provena-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  provena-data:

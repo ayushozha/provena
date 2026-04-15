@@ -1,0 +1,3067 @@
+{
+  "product": "Provena",
+  "updatedAt": "2026-04-15T14:30:43Z",
+  "epics": [
+    {
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "regressionRisks": [
+        {
+          "id": "EPIC-PRODUCTIZE-R1",
+          "severity": "high",
+          "risk": "Operators may treat disabled auth as a supported production default if deployment docs are not explicit.",
+          "whyItMatters": "This epic is about safe self-hosting and embeddable deployment. Misstating auth posture creates an insecure rollout path.",
+          "mitigatedBy": [
+            "PROVENA-001-T03",
+            "PROVENA-001-T04"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R2",
+          "severity": "high",
+          "risk": "Compose cleanup could accidentally change the shipped service graph or break local operator commands.",
+          "whyItMatters": "Standalone and polyglot hosting both depend on a stable compose topology and known service names.",
+          "mitigatedBy": [
+            "PROVENA-001-T01",
+            "PROVENA-001-T02",
+            "PROVENA-001-T05"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R3",
+          "severity": "medium",
+          "risk": "Docs can drift from the gateway's actual auth model and omit the credential provisioning handoff for authenticated deployments.",
+          "whyItMatters": "A production toggle without a note about API key configuration would still leave self-hosters guessing.",
+          "mitigatedBy": [
+            "PROVENA-001-T04"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R4",
+          "severity": "medium",
+          "risk": "Deployment-only changes can still hide cross-service regressions unless the full Provena end-to-end path stays green.",
+          "whyItMatters": "The shipped deployment path spans gateway routing, lifecycle, queue, MCP, and SDK smoke coverage.",
+          "mitigatedBy": [
+            "PROVENA-001-T06",
+            "PROVENA-001-T07"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R5",
+          "severity": "high",
+          "risk": "A new deployment guide can become a conflicting source of truth and misstate the actual standalone-versus-polyglot entrypoints, services, or ports.",
+          "whyItMatters": "This epic only succeeds if self-hosters can map the docs directly onto the shipped runtime topology instead of guessing which surface is externally callable.",
+          "mitigatedBy": [
+            "PROVENA-002-T02",
+            "PROVENA-002-T03",
+            "PROVENA-002-T07"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R6",
+          "severity": "medium",
+          "risk": "External teams may still fail to integrate Provena if docs omit the exported OpenAPI contract, base URL expectations, or post-deploy verification commands.",
+          "whyItMatters": "Productizing Provena for other teams is incomplete if operators still need to reverse-engineer HTTP usage from code after deployment.",
+          "mitigatedBy": [
+            "PROVENA-002-T04",
+            "PROVENA-002-T05",
+            "PROVENA-002-T06"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R7",
+          "severity": "high",
+          "risk": "The TypeScript SDK can remain effectively repo-private if its manifest still blocks publication or does not present a coherent external package identity.",
+          "whyItMatters": "This epic depends on other teams being able to evaluate Provena from outside the monorepo instead of reverse-engineering internal package assumptions.",
+          "mitigatedBy": [
+            "PROVENA-003-T01",
+            "PROVENA-003-T02",
+            "PROVENA-003-T03"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R8",
+          "severity": "high",
+          "risk": "Publish-facing metadata can point at the wrong files or omit type/runtime artifacts, causing import failures only after a consumer installs the packaged SDK outside the repo.",
+          "whyItMatters": "A package that compiles locally but fails after `npm install` does not satisfy the self-hostable and embeddable distribution goal of the productization epic.",
+          "mitigatedBy": [
+            "PROVENA-003-T02",
+            "PROVENA-003-T03",
+            "PROVENA-003-T04"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R9",
+          "severity": "medium",
+          "risk": "Metadata-only productization edits can still break the existing TypeScript smoke path if build output, package entrypoints, or test assumptions drift.",
+          "whyItMatters": "The epic should expand external consumption without regressing the current regression harness that already proves the SDK can talk to a running Provena instance.",
+          "mitigatedBy": [
+            "PROVENA-003-T04",
+            "PROVENA-003-T05"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R10",
+          "severity": "high",
+          "risk": "The Python SDK can remain effectively repo-local if its `pyproject.toml` still lacks a coherent build backend, README linkage, or external-facing package identity.",
+          "whyItMatters": "This epic is about embeddable SDK distribution. A Python package that only works for repo insiders does not satisfy external-consumer productization.",
+          "mitigatedBy": [
+            "PROVENA-004-T01",
+            "PROVENA-004-T02",
+            "PROVENA-004-T03"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R11",
+          "severity": "high",
+          "risk": "Python distribution artifacts can build or install incorrectly if the published package name, import package name, dependency set, or build metadata drift apart.",
+          "whyItMatters": "A package that looks correct in-source but fails after `pip install` is not a publish-ready SDK for other teams.",
+          "mitigatedBy": [
+            "PROVENA-004-T02",
+            "PROVENA-004-T04"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R12",
+          "severity": "medium",
+          "risk": "Python usage docs can stay too thin or drift from the actual client surface, leading external teams to misconfigure `PROVENA_BASE_URL`, auth headers, or the smoke workflow.",
+          "whyItMatters": "Productization fails if the first integrating Python backend engineer still has to reverse-engineer install and verification steps from source.",
+          "mitigatedBy": [
+            "PROVENA-004-T03",
+            "PROVENA-004-T05"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R13",
+          "severity": "medium",
+          "risk": "Python packaging and doc changes can silently break the existing smoke path even when metadata review looks correct.",
+          "whyItMatters": "The epic should improve distribution without regressing the current end-to-end signal that the Python SDK can write to and search a live Provena instance.",
+          "mitigatedBy": [
+            "PROVENA-004-T04",
+            "PROVENA-004-T05"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R14",
+          "severity": "high",
+          "risk": "The Go SDK can remain effectively repo-insider-only if docs omit the monorepo subdirectory module path, import package name, or a discoverable external-consumption entrypoint.",
+          "whyItMatters": "This epic only succeeds if external backend teams can find the Go SDK and understand how to import it without reverse-engineering `go.mod` or the example source.",
+          "mitigatedBy": [
+            "PROVENA-005-T01",
+            "PROVENA-005-T02",
+            "PROVENA-005-T03"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R15",
+          "severity": "high",
+          "risk": "Go guidance can overpromise a release workflow or hide current module-versioning limitations, causing `go get`, `go mod tidy`, or CI resolution failures only after another service adopts the SDK.",
+          "whyItMatters": "A Go SDK that looks documented but still leaves consumers guessing about pseudo-versions, `replace`, or tags is not a production-ready external integration surface.",
+          "mitigatedBy": [
+            "PROVENA-005-T03",
+            "PROVENA-005-T04"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R16",
+          "severity": "medium",
+          "risk": "Doc-only Go SDK productization changes can drift from the actual client surface or silently break the existing smoke example, leaving external teams with guidance that only works inside the monorepo.",
+          "whyItMatters": "The productization epic should expand embeddable usage without regressing the current Go path that already proves the SDK can reach a live Provena instance.",
+          "mitigatedBy": [
+            "PROVENA-005-T02",
+            "PROVENA-005-T04",
+            "PROVENA-005-T05"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R17",
+          "severity": "high",
+          "risk": "A release checklist can become a false source of truth and cause incomplete releases if it omits or misstates the shipped image build contexts, SDK publication boundaries, or the OpenAPI export artifact.",
+          "whyItMatters": "This epic is about making Provena self-hostable and embeddable. A release manager needs one accurate checklist that matches the real product surfaces instead of guessing which artifacts are supposed to ship.",
+          "mitigatedBy": [
+            "PROVENA-011-T02",
+            "PROVENA-011-T03",
+            "PROVENA-011-T05"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R18",
+          "severity": "medium",
+          "risk": "Release docs can stop at artifact publication and skip standardized regression or post-release runtime checks, letting broken SDKs, schemas, or service rollouts reach consumers before anyone notices.",
+          "whyItMatters": "Productization is not only packaging; it also requires a repeatable release gate and operational handoff so other teams can trust new Provena releases.",
+          "mitigatedBy": [
+            "PROVENA-011-T06",
+            "PROVENA-011-T07"
+          ]
+        }
+      ]
+    },
+    {
+      "epicId": "EPIC-CONNECTED",
+      "epicTitle": "Connected Memory Plane",
+      "regressionRisks": [
+        {
+          "id": "EPIC-CONNECTED-R1",
+          "severity": "high",
+          "risk": "A connector execution abstraction can drift from Provena's existing connector, source, principal-mapping, permission-grant, and sync-job models, forcing future connectors to invent incompatible shapes.",
+          "whyItMatters": "Connected mode only becomes reusable if scheduler paths and concrete connectors can emit data that the current Provena store and integration APIs already understand.",
+          "mitigatedBy": [
+            "PROVENA-006-T01",
+            "PROVENA-006-T02",
+            "PROVENA-006-T03",
+            "PROVENA-006-T05"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R2",
+          "severity": "high",
+          "risk": "Worker logic can end up buried in a route handler or connector-specific stub, leaving no reusable seam for the upcoming scheduler and Slack-connector stories.",
+          "whyItMatters": "The connected-memory roadmap depends on a shared execution layer that sits above persistence and below scheduling or system-specific adapters.",
+          "mitigatedBy": [
+            "PROVENA-006-T01",
+            "PROVENA-006-T04"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R3",
+          "severity": "high",
+          "risk": "Adding a worker contract can silently regress the current integration-plane round trip, tenant isolation, or coverage rollups if the new execution path no longer matches the existing store and API assumptions.",
+          "whyItMatters": "Connected mode already exposes admin APIs for connectors, sources, principal mappings, permissions, sync jobs, and coverage; those foundations must remain intact while execution becomes reusable.",
+          "mitigatedBy": [
+            "PROVENA-006-T05",
+            "PROVENA-006-T06"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R4",
+          "severity": "medium",
+          "risk": "A contract that only handles one sync dimension such as sources without principals or permissions will force later connected-mode work to fork the abstraction instead of reusing it.",
+          "whyItMatters": "Scheduler-driven sync and the first concrete connector both need a single contract that can cover source inventory plus identity or ACL outputs according to connector policy.",
+          "mitigatedBy": [
+            "PROVENA-006-T02",
+            "PROVENA-006-T03",
+            "PROVENA-006-T04"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R5",
+          "severity": "high",
+          "risk": "A fixed-cadence scheduler can create duplicate or overlapping sync jobs for the same connector if repeated ticks ignore due windows or running-job state.",
+          "whyItMatters": "Connected-mode freshness only becomes operationally trustworthy if the sync-job ledger reflects real cadence progress instead of inflated job counts and avoidable backpressure.",
+          "mitigatedBy": [
+            "PROVENA-007-T02",
+            "PROVENA-007-T04",
+            "PROVENA-007-T07"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R6",
+          "severity": "high",
+          "risk": "A scheduler path can bypass the shared worker and ledger contract, reintroducing direct ad hoc sync-job writes with weak tenant or connector scoping.",
+          "whyItMatters": "This epic only scales if scheduled sync, future connector stubs, and existing admin APIs all converge on the same connected-mode execution and readback model.",
+          "mitigatedBy": [
+            "PROVENA-007-T01",
+            "PROVENA-007-T02",
+            "PROVENA-007-T03"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R7",
+          "severity": "medium",
+          "risk": "Operator docs can drift from the shipped topology and leave teams unclear about where scheduled sync runs, how cadence is configured, or how it relates to the existing sync-job route.",
+          "whyItMatters": "Connected mode is meant to be embeddable and self-hostable; scheduler behavior that exists only in code still leaves operations engineers guessing about freshness ownership.",
+          "mitigatedBy": [
+            "PROVENA-007-T05"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R8",
+          "severity": "high",
+          "risk": "Scheduler changes can silently regress connected-mode routing, admin protections, or the polyglot verification path even if unit coverage around due calculation passes.",
+          "whyItMatters": "The connected-memory plane still depends on gateway, store, queue, lifecycle, and coverage behavior remaining coherent while scheduler-driven sync is added.",
+          "mitigatedBy": [
+            "PROVENA-007-T03",
+            "PROVENA-007-T06",
+            "PROVENA-007-T07"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R9",
+          "severity": "high",
+          "risk": "A Slack-specific connector can remain a test-local helper or unregistered provider stub, leaving runtime `slack` connectors to fall back to generic scheduler behavior instead of concrete connector execution.",
+          "whyItMatters": "This story is the first proof that Provena can host a real connector inside the integration plane. If runtime routing still never reaches a shipped Slack worker, connected mode remains abstract for operators.",
+          "mitigatedBy": [
+            "PROVENA-008-T01",
+            "PROVENA-008-T02",
+            "PROVENA-008-T05"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R10",
+          "severity": "high",
+          "risk": "The first concrete Slack stub can write generic or malformed source inventory and sync-job records, corrupting provider-specific readback, coverage totals, and future connector expectations.",
+          "whyItMatters": "Future connectors will copy the first shipped stub. The Slack path has to prove that provider-specific source shapes still satisfy Provena's existing storage, ledger, and coverage contracts.",
+          "mitigatedBy": [
+            "PROVENA-008-T03",
+            "PROVENA-008-T04",
+            "PROVENA-008-T05",
+            "PROVENA-008-T06"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R11",
+          "severity": "high",
+          "risk": "Permission-aware retrieval can still leak connected memories if search and direct-read eligibility continue to ignore `source_permission_grants` tied to cited sources.",
+          "whyItMatters": "This epic promises governed connected context. If principals can retrieve memories derived from sources they are not granted, Provena breaks its enterprise isolation story at the point agents consume context.",
+          "mitigatedBy": [
+            "PROVENA-009-T01",
+            "PROVENA-009-T02",
+            "PROVENA-009-T05"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R12",
+          "severity": "high",
+          "risk": "Grant enforcement can be joined too broadly or too aggressively across tenants, groups, colliding source ids, mixed-source memories, and legacy unconnected memories, causing either cross-tenant leakage or false denials.",
+          "whyItMatters": "Connected mode must narrow eligibility for governed sources without hiding unrelated tenant data or breaking the existing standalone retrieval contract for local memories.",
+          "mitigatedBy": [
+            "PROVENA-009-T03",
+            "PROVENA-009-T04",
+            "PROVENA-009-T06"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R13",
+          "severity": "high",
+          "risk": "Adding permission checks only to primary search hits can still leak unauthorized context through `GET /v1/memories/{id}`, related memory expansion, or the gateway-based polyglot verification path.",
+          "whyItMatters": "Retrieval in Provena spans direct fetch, search results, related-memory expansion, and the shared gateway smoke. Inconsistent enforcement leaves exploitable gaps and weakens release confidence.",
+          "mitigatedBy": [
+            "PROVENA-009-T01",
+            "PROVENA-009-T05",
+            "PROVENA-009-T07",
+            "PROVENA-009-T08"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R14",
+          "severity": "high",
+          "risk": "Coverage can continue to understate enterprise-context freshness if `/v1/integrations/coverage` still exposes only raw counts and `sources_stale`, forcing operators to infer SLA breaches instead of seeing an explicit freshness-breach signal.",
+          "whyItMatters": "This epic promises governed connected context that stays fresh enough for downstream agents. If operators cannot spot overdue sources directly in coverage, stale enterprise context can degrade retrieval before anyone notices.",
+          "mitigatedBy": [
+            "PROVENA-010-T01",
+            "PROVENA-010-T02",
+            "PROVENA-010-T03"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R15",
+          "severity": "high",
+          "risk": "Freshness-breach aggregation can be computed from the wrong timestamps or bleed across tenants, producing false alarms, missed overdue sources, or 500s when connectors and sources have partial freshness metadata.",
+          "whyItMatters": "Connected mode depends on tenant-safe operational trust. Incorrect freshness math would either hide real sync decay or create noisy breach signals that make the coverage endpoint unreliable for operations teams.",
+          "mitigatedBy": [
+            "PROVENA-010-T03",
+            "PROVENA-010-T04"
+          ]
+        },
+        {
+          "id": "EPIC-CONNECTED-R16",
+          "severity": "medium",
+          "risk": "The API can add freshness-breach signaling without exporting the new `/v1/integrations/coverage` schema, leaving external operators, gateways, and SDK consumers on a stale contract.",
+          "whyItMatters": "Provena is meant to be self-hostable and embeddable. Contract drift between runtime responses and `openapi.json` breaks downstream validation, code generation, and operator confidence exactly where connected-mode coverage is supposed to help.",
+          "mitigatedBy": [
+            "PROVENA-010-T05",
+            "PROVENA-010-T06"
+          ]
+        }
+      ]
+    }
+  ],
+  "features": [
+    {
+      "featureId": "FEATURE-DEPLOYMENT",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "Deployment and production defaults",
+      "storyIds": [
+        "PROVENA-001",
+        "PROVENA-002"
+      ],
+      "regressionCoverage": [
+        {
+          "id": "FEATURE-DEPLOYMENT-RC1",
+          "area": "Compose schema compatibility",
+          "goal": "Ensure the shipped compose file validates cleanly on current Docker Compose without obsolete schema warnings.",
+          "tests": [
+            "PROVENA-001-T01",
+            "PROVENA-001-T02"
+          ],
+          "commands": [
+            "docker compose config -q",
+            "docker compose config --services"
+          ]
+        },
+        {
+          "id": "FEATURE-DEPLOYMENT-RC2",
+          "area": "Auth posture documentation",
+          "goal": "Make the local-development auth bypass explicit and prevent operators from copying it into production.",
+          "tests": [
+            "PROVENA-001-T03",
+            "PROVENA-001-T04"
+          ],
+          "commands": []
+        },
+        {
+          "id": "FEATURE-DEPLOYMENT-RC3",
+          "area": "Deployment lifecycle smoke",
+          "goal": "Confirm compose edits still boot the expected service set and preserve health behavior.",
+          "tests": [
+            "PROVENA-001-T05"
+          ],
+          "commands": [
+            "docker compose up --build -d",
+            "docker compose ps",
+            "docker compose down"
+          ]
+        },
+        {
+          "id": "FEATURE-DEPLOYMENT-RC4",
+          "area": "Routing, lifecycle, and SDK regressions",
+          "goal": "Keep the end-to-end verification path green after deployment-facing changes.",
+          "tests": [
+            "PROVENA-001-T06",
+            "PROVENA-001-T07"
+          ],
+          "commands": [
+            "python scripts/run_e2e.py"
+          ]
+        },
+        {
+          "id": "FEATURE-DEPLOYMENT-RC5",
+          "area": "Deployment guide discoverability and lifecycle coverage",
+          "goal": "Ensure self-hosters can find a dedicated deployment guide and use it to start, verify, and stop both supported hosting modes.",
+          "tests": [
+            "PROVENA-002-T01",
+            "PROVENA-002-T04"
+          ],
+          "commands": []
+        },
+        {
+          "id": "FEATURE-DEPLOYMENT-RC6",
+          "area": "Mode-specific operator guidance",
+          "goal": "Keep standalone and polyglot instructions aligned with the shipped entrypoints, topology, and environment-variable requirements.",
+          "tests": [
+            "PROVENA-002-T02",
+            "PROVENA-002-T03",
+            "PROVENA-002-T07"
+          ],
+          "commands": []
+        },
+        {
+          "id": "FEATURE-DEPLOYMENT-RC7",
+          "area": "External HTTP and OpenAPI consumption",
+          "goal": "Make sure another project can discover Provena's callable contract, auth expectations, and schema export path from the deployment docs alone.",
+          "tests": [
+            "PROVENA-002-T05",
+            "PROVENA-002-T06"
+          ],
+          "commands": [
+            "python scripts/export_openapi.py"
+          ]
+        }
+      ]
+    },
+    {
+      "featureId": "FEATURE-SDK-DISTRIBUTION",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "External SDK consumption",
+      "storyIds": [
+        "PROVENA-003",
+        "PROVENA-004",
+        "PROVENA-005"
+      ],
+      "regressionCoverage": [
+        {
+          "id": "FEATURE-SDK-DISTRIBUTION-RC1",
+          "area": "Publishable package identity",
+          "goal": "Ensure the TypeScript SDK manifest stops behaving like a repo-private workspace package and presents coherent external-facing metadata.",
+          "tests": [
+            "PROVENA-003-T01",
+            "PROVENA-003-T02"
+          ],
+          "commands": []
+        },
+        {
+          "id": "FEATURE-SDK-DISTRIBUTION-RC2",
+          "area": "Pack and scratch-install contract",
+          "goal": "Confirm an external Node or TypeScript consumer can install the packaged SDK and resolve it by package name outside this repository.",
+          "tests": [
+            "PROVENA-003-T03"
+          ],
+          "commands": [
+            "npx -y -p typescript tsc -p .",
+            "npm pack"
+          ]
+        },
+        {
+          "id": "FEATURE-SDK-DISTRIBUTION-RC3",
+          "area": "Build and runtime smoke continuity",
+          "goal": "Preserve the existing TypeScript build and runtime smoke workflow while productizing the manifest.",
+          "tests": [
+            "PROVENA-003-T04",
+            "PROVENA-003-T05"
+          ],
+          "commands": [
+            "npx -y -p typescript tsc -p .",
+            "node tests/smoke.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-SDK-DISTRIBUTION-RC4",
+          "area": "Python package identity and consumer guidance",
+          "goal": "Ensure the Python SDK exposes coherent external-facing metadata and concise usage docs that match the real install, import, and runtime contract.",
+          "tests": [
+            "PROVENA-004-T01",
+            "PROVENA-004-T02",
+            "PROVENA-004-T03"
+          ],
+          "commands": []
+        },
+        {
+          "id": "FEATURE-SDK-DISTRIBUTION-RC5",
+          "area": "Python build and scratch-install contract",
+          "goal": "Confirm an external Python consumer can build and install the packaged SDK outside this repository and import `provena_sdk` successfully.",
+          "tests": [
+            "PROVENA-004-T04"
+          ],
+          "commands": [
+            "python -m build",
+            "python -m pip install dist/*.whl"
+          ]
+        },
+        {
+          "id": "FEATURE-SDK-DISTRIBUTION-RC6",
+          "area": "Python smoke continuity",
+          "goal": "Preserve the existing Python SDK smoke workflow while metadata and docs are being productized.",
+          "tests": [
+            "PROVENA-004-T05"
+          ],
+          "commands": [
+            "python tests/smoke.py"
+          ]
+        },
+        {
+          "id": "FEATURE-SDK-DISTRIBUTION-RC7",
+          "area": "Go module-path and consumer guidance",
+          "goal": "Ensure the Go SDK exposes discoverable external guidance with the exact module path, package import, runtime inputs, and truthful caveats about current external-consumption limits.",
+          "tests": [
+            "PROVENA-005-T01",
+            "PROVENA-005-T02",
+            "PROVENA-005-T03"
+          ],
+          "commands": []
+        },
+        {
+          "id": "FEATURE-SDK-DISTRIBUTION-RC8",
+          "area": "Go scratch-consumer compilation contract",
+          "goal": "Confirm a scratch Go service can follow the documented workflow, import the SDK by its real module path, and compile outside this repository.",
+          "tests": [
+            "PROVENA-005-T04"
+          ],
+          "commands": [
+            "go mod init provena-go-scratch",
+            "go run ."
+          ]
+        },
+        {
+          "id": "FEATURE-SDK-DISTRIBUTION-RC9",
+          "area": "Go smoke continuity",
+          "goal": "Preserve the existing Go SDK smoke workflow while external-consumption guidance is being added.",
+          "tests": [
+            "PROVENA-005-T05"
+          ],
+          "commands": [
+            "go run ./examples/smoke"
+          ]
+        }
+      ]
+    },
+    {
+      "featureId": "FEATURE-CONNECTOR-EXECUTION",
+      "epicId": "EPIC-CONNECTED",
+      "featureTitle": "Connector execution and scheduling",
+      "storyIds": [
+        "PROVENA-006",
+        "PROVENA-007",
+        "PROVENA-008"
+      ],
+      "regressionCoverage": [
+        {
+          "id": "FEATURE-CONNECTOR-EXECUTION-RC1",
+          "area": "Reusable worker contract boundary",
+          "goal": "Ensure Provena gains a shared connector-execution seam above the store and below future scheduler or connector-specific adapters instead of hiding execution inside routes or a one-off stub.",
+          "tests": [
+            "PROVENA-006-T01",
+            "PROVENA-006-T04"
+          ],
+          "commands": []
+        },
+        {
+          "id": "FEATURE-CONNECTOR-EXECUTION-RC2",
+          "area": "Source inventory enumeration contract",
+          "goal": "Keep worker outputs compatible with the existing source inventory models and persistence methods so connector execution can write enumerated sources without custom shaping.",
+          "tests": [
+            "PROVENA-006-T02",
+            "PROVENA-006-T05"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-CONNECTOR-EXECUTION-RC3",
+          "area": "Principal and permission sync contract",
+          "goal": "Ensure the worker contract can emit principal mappings and source permission grants, and that connector feature flags do not force downstream stories to invent parallel abstractions.",
+          "tests": [
+            "PROVENA-006-T03",
+            "PROVENA-006-T05"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-CONNECTOR-EXECUTION-RC4",
+          "area": "Sync-job execution compatibility",
+          "goal": "Ensure a worker run carries enough status, cursor, and stats information to update the existing sync-job ledger so scheduler-driven execution can reuse the same contract.",
+          "tests": [
+            "PROVENA-006-T04",
+            "PROVENA-006-T05"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-CONNECTOR-EXECUTION-RC5",
+          "area": "Admin API, readback, and coverage regression continuity",
+          "goal": "Adding the internal execution layer must not break the current integration-plane round trip, readback routes and filters, admin access checks, or coverage summary behavior.",
+          "tests": [
+            "PROVENA-006-T05",
+            "PROVENA-006-T06"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-CONNECTOR-EXECUTION-RC6",
+          "area": "Cadence-triggered sync-job creation",
+          "goal": "Ensure a due connector can create a sync-job record from a scheduled path instead of only through a manual sync-job POST, while still reusing Provena's shared execution and ledger contract.",
+          "tests": [
+            "PROVENA-007-T01",
+            "PROVENA-007-T02"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-CONNECTOR-EXECUTION-RC7",
+          "area": "Cadence guards, duplicate suppression, and readback continuity",
+          "goal": "Ensure non-due or ineligible connectors are skipped, duplicate or overlapping jobs are suppressed, and scheduled jobs remain visible through the existing sync-job and coverage surfaces.",
+          "tests": [
+            "PROVENA-007-T03",
+            "PROVENA-007-T04"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-CONNECTOR-EXECUTION-RC8",
+          "area": "Lifecycle documentation and operator guidance",
+          "goal": "Document how scheduled sync creation fits Provena's connected-mode lifecycle, operator configuration, and any new route or background process without inventing an unsupported deployment shape.",
+          "tests": [
+            "PROVENA-007-T05"
+          ],
+          "commands": []
+        },
+        {
+          "id": "FEATURE-CONNECTOR-EXECUTION-RC9",
+          "area": "Scheduler regression gates and routing safety",
+          "goal": "Keep dedicated scheduler coverage, admin or tenant protections, and the global polyglot verification path green after the scheduler path lands.",
+          "tests": [
+            "PROVENA-007-T06",
+            "PROVENA-007-T07"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q",
+            "python scripts/run_e2e.py"
+          ]
+        },
+        {
+          "id": "FEATURE-CONNECTOR-EXECUTION-RC10",
+          "area": "Concrete Slack provider wiring",
+          "goal": "Ensure a shipped Slack worker exists in shared application code, is bound to provider `slack`, and is used by runtime connector execution instead of an inline test class or the generic scheduled-only worker.",
+          "tests": [
+            "PROVENA-008-T01",
+            "PROVENA-008-T02"
+          ],
+          "commands": []
+        },
+        {
+          "id": "FEATURE-CONNECTOR-EXECUTION-RC11",
+          "area": "Slack source inventory and sync-job ledger persistence",
+          "goal": "Ensure the first concrete Slack stub writes Slack-like source inventory plus a sync-job ledger entry through the existing connected-mode storage and readback surfaces.",
+          "tests": [
+            "PROVENA-008-T03",
+            "PROVENA-008-T04"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-CONNECTOR-EXECUTION-RC12",
+          "area": "Slack stub regression continuity",
+          "goal": "Keep scheduler or provider reuse, coverage readback, tenant or admin protections, and the existing connector-worker and scheduler regression suite green after the Slack stub lands.",
+          "tests": [
+            "PROVENA-008-T05",
+            "PROVENA-008-T06"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        }
+      ]
+    },
+    {
+      "featureId": "FEATURE-PERMISSIONS-FRESHNESS",
+      "epicId": "EPIC-CONNECTED",
+      "featureTitle": "Permission and freshness aware retrieval",
+      "storyIds": [
+        "PROVENA-009",
+        "PROVENA-010"
+      ],
+      "regressionCoverage": [
+        {
+          "id": "FEATURE-PERMISSIONS-FRESHNESS-RC1",
+          "area": "Shared retrieval eligibility seam",
+          "goal": "Ensure connected source grants are evaluated in Provena's shared memory read path so `/v1/memories/search`, direct fetch, and related-memory expansion make the same eligibility decision for a requesting principal.",
+          "tests": [
+            "PROVENA-009-T01",
+            "PROVENA-009-T05"
+          ],
+          "commands": []
+        },
+        {
+          "id": "FEATURE-PERMISSIONS-FRESHNESS-RC2",
+          "area": "Direct principal grant filtering",
+          "goal": "Ensure a memory tied to a connected source is returned only when the requesting principal has a matching source grant, and is omitted for other principals even when query, scope, and ranking inputs otherwise match.",
+          "tests": [
+            "PROVENA-009-T02"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-PERMISSIONS-FRESHNESS-RC3",
+          "area": "Group and higher-permission grant compatibility",
+          "goal": "Ensure group-based grants and permission levels above `view` still make source-backed memories eligible when `X-Provena-Groups` matches the requesting principal context.",
+          "tests": [
+            "PROVENA-009-T03"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-PERMISSIONS-FRESHNESS-RC4",
+          "area": "ACL, mixed-source, and legacy retrieval safety",
+          "goal": "Ensure source grants narrow connected retrieval without widening beyond existing memory ACLs, without leaking partially unauthorized related context, and without hiding memories that are not tied to connected sources.",
+          "tests": [
+            "PROVENA-009-T04",
+            "PROVENA-009-T05"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-PERMISSIONS-FRESHNESS-RC5",
+          "area": "Tenant and source-join isolation",
+          "goal": "Ensure grant lookups stay scoped to the correct tenant and cited source identity so foreign grants or colliding source ids cannot unlock memories outside the intended connector context.",
+          "tests": [
+            "PROVENA-009-T06"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-PERMISSIONS-FRESHNESS-RC6",
+          "area": "API and polyglot regression continuity",
+          "goal": "Require dedicated API coverage for permission-aware retrieval and keep the gateway-based polyglot verification path green once connected grants affect search eligibility.",
+          "tests": [
+            "PROVENA-009-T07",
+            "PROVENA-009-T08"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q",
+            "python scripts/run_e2e.py"
+          ]
+        },
+        {
+          "id": "FEATURE-PERMISSIONS-FRESHNESS-RC7",
+          "area": "Coverage freshness-breach contract",
+          "goal": "Ensure `/v1/integrations/coverage` keeps its existing totals while adding an explicit freshness-SLA breach signal that operators do not have to infer from `sources_stale` or `last_synced_at` alone.",
+          "tests": [
+            "PROVENA-010-T01",
+            "PROVENA-010-T02"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-PERMISSIONS-FRESHNESS-RC8",
+          "area": "Stale-versus-breached classification and tenant-safe freshness math",
+          "goal": "Ensure stale-only fixtures and true SLA-breach fixtures remain distinguishable, and that breach aggregation stays tenant-scoped and null-safe when freshness metadata is incomplete.",
+          "tests": [
+            "PROVENA-010-T03",
+            "PROVENA-010-T04"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-PERMISSIONS-FRESHNESS-RC9",
+          "area": "Coverage API and OpenAPI continuity",
+          "goal": "Require dedicated coverage-endpoint regression tests and keep the exported `IntegrationCoverageSummary` schema aligned with the runtime freshness-breach contract.",
+          "tests": [
+            "PROVENA-010-T05",
+            "PROVENA-010-T06"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q",
+            "python scripts/export_openapi.py"
+          ]
+        }
+      ]
+    },
+    {
+      "featureId": "FEATURE-RELEASE-OPS",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "Release readiness",
+      "storyIds": [
+        "PROVENA-011"
+      ],
+      "regressionCoverage": [
+        {
+          "id": "FEATURE-RELEASE-OPS-RC1",
+          "area": "Checklist discoverability and scope",
+          "goal": "Ensure the release checklist exists inside `services/provena`, is easy for a release manager to find, and explicitly frames images, SDK packaging, OpenAPI export, and verification as one release workflow.",
+          "tests": [
+            "PROVENA-011-T01"
+          ],
+          "commands": []
+        },
+        {
+          "id": "FEATURE-RELEASE-OPS-RC2",
+          "area": "Container image release surface",
+          "goal": "Keep the image-publication instructions aligned with the actual Provena Docker build contexts and the polyglot service topology instead of inventing or omitting release artifacts.",
+          "tests": [
+            "PROVENA-011-T02"
+          ],
+          "commands": []
+        },
+        {
+          "id": "FEATURE-RELEASE-OPS-RC3",
+          "area": "SDK packaging matrix and scope honesty",
+          "goal": "Ensure the checklist tells release managers exactly which SDKs are publishable versus smoke-only or docs-only today, and maps each item to a real packaging or verification flow.",
+          "tests": [
+            "PROVENA-011-T03",
+            "PROVENA-011-T04"
+          ],
+          "commands": [
+            "npx -y -p typescript tsc -p .",
+            "npm pack",
+            "python -m build",
+            "go run ./examples/smoke",
+            "cargo run --example smoke"
+          ]
+        },
+        {
+          "id": "FEATURE-RELEASE-OPS-RC4",
+          "area": "OpenAPI and release-gate verification continuity",
+          "goal": "Require the checklist to keep the exported `openapi.json` workflow explicit and to standardize the release verification commands that prove images, SDK surfaces, and cross-service behavior still work together.",
+          "tests": [
+            "PROVENA-011-T05",
+            "PROVENA-011-T06"
+          ],
+          "commands": [
+            "python scripts/export_openapi.py",
+            "python scripts/run_e2e.py",
+            "docker compose config -q"
+          ]
+        },
+        {
+          "id": "FEATURE-RELEASE-OPS-RC5",
+          "area": "Post-release operational handoff",
+          "goal": "Ensure the release checklist does not end at artifact publication and instead tells operators what runtime dashboards, health endpoints, or Sentry-style queries to watch immediately after a release.",
+          "tests": [
+            "PROVENA-011-T07"
+          ],
+          "commands": []
+        }
+      ]
+    }
+  ],
+  "stories": [
+    {
+      "storyId": "PROVENA-001",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureId": "FEATURE-DEPLOYMENT",
+      "title": "Remove the obsolete Compose version key and document the production auth toggle",
+      "persona": "Platform engineer evaluating Provena for self-hosting",
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-001"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "After deployment, check gateway and lifecycle startup-error trends once Sentry credentials exist for the environment.",
+          "After auth docs land, watch for a spike in unauthorized or invalid API key errors during the first production rollout that enables auth.",
+          "After compose changes roll out, review crash-loop or healthcheck failure signals for gateway, lifecycle, queue, and MCP processes."
+        ]
+      },
+      "executionNotes": [
+        "[2026-04-15T08:02:34Z] PROVENA-001-T01/T02 passed: `docker compose config -q` exited 0 without an obsolete version warning, and `docker compose config --services` rendered orchestration, store, intelligence, lifecycle, gateway, mcp, and queue.",
+        "[2026-04-15T08:02:34Z] PROVENA-001-T03/T04 passed: services/provena/README.md marks `PROVENA_AUTH_ENABLED=false` as local-development-only, and its production guidance matches the gateway/auth code by requiring `PROVENA_AUTH_ENABLED=true` with provisioned `PROVENA_API_KEYS`.",
+        "[2026-04-15T08:02:34Z] PROVENA-001-T06/T07 passed: `python scripts/run_e2e.py` completed via a direct Python 3.12 interpreter after redirecting TEMP/TMP and npm cache into the workspace to bypass host Windows permission restrictions; standalone and polyglot suites passed, Python/TypeScript/Go SDK smokes passed, and Rust SDK smoke emitted the expected Windows skip warning.",
+        "[2026-04-15T08:02:34Z] PROVENA-001-T05 blocked: `docker compose up --build -d` failed immediately with `failed to connect to the docker API ... dockerDesktopLinuxEngine`; compose boot smoke remains pending, and port 8000 was already in use by python PID 42292 on this host.",
+        "[2026-04-15T08:02:34Z] Sentry runtime verification remains pending because no Sentry credentials are available in this environment.",
+        "[2026-04-15T08:26:01Z] PROVENA-001-T01/T02 revalidated: `docker compose config -q` still exits 0 without the obsolete version warning, and `docker compose config --services` still renders `store`, `orchestration`, `intelligence`, `lifecycle`, `gateway`, `mcp`, and `queue` exactly once.",
+        "[2026-04-15T08:26:01Z] PROVENA-001-T05 reblocked after retry with nondefault `*_HOST_PORT` overrides (`15051`, `18000`, `18080`, `18081`, `18090`, `18091`, `18092`): both `docker info` and `docker compose up --build -d` still failed immediately on the missing `dockerDesktopLinuxEngine` pipe, so host-port contention is no longer the gating issue.",
+        "[2026-04-15T08:26:01Z] PROVENA-001-T06/T07 revalidated: `python scripts/run_e2e.py` stayed green via `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe` with workspace-scoped `TEMP`/`TMP`, `PROVENA_E2E_TMP_DIR`, and `npm_config_cache`; standalone and polyglot suites passed, Python/TypeScript/Go SDK smokes passed, and Rust SDK smoke kept the expected Windows skip warning.",
+        "[2026-04-15T08:47:23Z] PROVENA-001-T01/T02 revalidated: `docker compose config -q` exited 0 again without the obsolete version warning, and `docker compose config --services` still rendered `store`, `orchestration`, `intelligence`, `lifecycle`, `gateway`, `mcp`, and `queue` exactly once.",
+        "[2026-04-15T08:47:23Z] PROVENA-001-T03/T04 revalidated: services/provena/README.md still marks `PROVENA_AUTH_ENABLED=false` as local-development-only, warns that disabled auth injects an anonymous super-admin context, requires `PROVENA_AUTH_ENABLED=true` plus provisioned `PROVENA_API_KEYS` for production, and this guidance still matches `control-plane/cmd/gateway/main.go` plus `control-plane/internal/auth/auth.go`.",
+        "[2026-04-15T08:47:23Z] PROVENA-001-T05 blocked again: `docker info`, `docker compose up --build -d` (with nondefault `*_HOST_PORT` overrides), `docker compose ps`, and `docker compose down` all failed on the missing `dockerDesktopLinuxEngine` pipe; default port 8000 remains occupied by python PID 42292 but is no longer the gating issue.",
+        "[2026-04-15T08:47:23Z] PROVENA-001-T06/T07 revalidated: `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/run_e2e.py` stayed green with workspace-scoped `TEMP`/`TMP`, `PROVENA_E2E_TMP_DIR`, and `npm_config_cache`; standalone and polyglot suites passed, OpenAPI export succeeded, Python/TypeScript/Go SDK smokes passed, and Rust SDK smoke kept the expected Windows skip warning.",
+        "[2026-04-15T08:47:23Z] Sentry runtime verification remains pending because no Sentry credentials are available in this environment."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-001-T01",
+          "title": "Compose validation is warning-free after removing the obsolete version key",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Docker Compose v2 is installed.",
+            "Run from services/provena."
+          ],
+          "steps": [
+            "Run `docker compose config -q`.",
+            "Capture both stdout and stderr."
+          ],
+          "expectedResults": [
+            "The command exits with code 0.",
+            "No obsolete Compose version warning is emitted."
+          ],
+          "commands": [
+            "docker compose config -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-001-T02",
+          "title": "Compose expansion still contains the expected Provena services",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Docker Compose v2 is installed.",
+            "Run from services/provena."
+          ],
+          "steps": [
+            "Run `docker compose config --services`.",
+            "Verify the rendered service list contains orchestration, gateway, mcp, queue, lifecycle, intelligence, and store."
+          ],
+          "expectedResults": [
+            "All expected services are present exactly once.",
+            "The compose cleanup does not rename, drop, or duplicate a service."
+          ],
+          "commands": [
+            "docker compose config --services"
+          ],
+          "covers": [
+            "feature regression: service graph stability"
+          ]
+        },
+        {
+          "id": "PROVENA-001-T03",
+          "title": "Operator docs label `PROVENA_AUTH_ENABLED=false` as local-development-only behavior",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Review the README or deployment doc modified by the story."
+          ],
+          "steps": [
+            "Find every mention of `PROVENA_AUTH_ENABLED=false` in the edited docs.",
+            "Verify the wording explicitly says the setting is for local development only.",
+            "Verify the same section warns against using disabled auth in standalone or polyglot production deployments."
+          ],
+          "expectedResults": [
+            "The local-only warning is adjacent to the setting instead of buried elsewhere.",
+            "A reader cannot reasonably interpret disabled auth as the recommended production default."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-001-T04",
+          "title": "Production auth guidance is consistent with the current gateway auth model",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Compare the edited docs to `services/provena/control-plane/cmd/gateway/main.go` and `services/provena/control-plane/internal/auth/auth.go`."
+          ],
+          "steps": [
+            "Verify the docs do not claim production auth is enabled by default.",
+            "Verify the docs do not imply that setting `PROVENA_AUTH_ENABLED=true` alone is sufficient.",
+            "Verify the docs point operators toward API key or secret configuration for authenticated deployments when production auth is mentioned."
+          ],
+          "expectedResults": [
+            "The docs reflect that local compose currently disables auth explicitly.",
+            "Production guidance does not over-promise or omit the need for credential provisioning."
+          ],
+          "commands": [],
+          "covers": [
+            "problemStatement",
+            "featureDescription"
+          ]
+        },
+        {
+          "id": "PROVENA-001-T05",
+          "title": "Compose boot smoke keeps the packaged service stack startable",
+          "level": "lifecycle",
+          "automation": "manual-command",
+          "preconditions": [
+            "Docker daemon is running.",
+            "Ports 50051, 8000, 8080, 8081, 8090, 8091, and 8092 are available on the host."
+          ],
+          "steps": [
+            "Run `docker compose up --build -d` from `services/provena`.",
+            "Run `docker compose ps` and inspect service state.",
+            "Confirm services with health checks report healthy and the MCP container remains running.",
+            "Run `docker compose down` after the smoke check."
+          ],
+          "expectedResults": [
+            "The stack starts without compose parsing failures.",
+            "Gateway, queue, lifecycle, intelligence, store, and orchestration become healthy.",
+            "The MCP service starts and stays running."
+          ],
+          "commands": [
+            "docker compose up --build -d",
+            "docker compose ps",
+            "docker compose down"
+          ],
+          "covers": [
+            "feature regression: packaged deployment boot path"
+          ]
+        },
+        {
+          "id": "PROVENA-001-T06",
+          "title": "End-to-end verification remains green for standalone and polyglot paths",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Local Go, Rust, Python, and Node toolchains are available.",
+            "Run from services/provena."
+          ],
+          "steps": [
+            "Run `python scripts/run_e2e.py`.",
+            "Observe the standalone suite output.",
+            "Observe the polyglot suite output."
+          ],
+          "expectedResults": [
+            "The standalone suite completes successfully.",
+            "The polyglot suite completes successfully.",
+            "No routing or lifecycle regressions surface in the packaged verification path."
+          ],
+          "commands": [
+            "python scripts/run_e2e.py"
+          ],
+          "covers": [
+            "expectedBehaviors[2]"
+          ]
+        },
+        {
+          "id": "PROVENA-001-T07",
+          "title": "SDK smoke coverage remains part of deployment regression testing",
+          "level": "sdk",
+          "automation": "covered-by-e2e",
+          "preconditions": [
+            "`PROVENA-001-T06` is executed."
+          ],
+          "steps": [
+            "From the `run_e2e.py` output, verify the Python, TypeScript, Go, and Rust smoke segments still run.",
+            "Confirm the smoke commands still target the appropriate Provena base URL for standalone and polyglot execution."
+          ],
+          "expectedResults": [
+            "Deployment-facing changes do not break the external-consumption smoke path.",
+            "Python, TypeScript, Go, and Rust SDK smoke checks remain exercised by the regression suite."
+          ],
+          "commands": [
+            "python scripts/run_e2e.py"
+          ],
+          "covers": [
+            "feature regression: SDK verification continuity"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-002",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureId": "FEATURE-DEPLOYMENT",
+      "title": "Add a Provena deployment guide for standalone and polyglot hosting",
+      "persona": "Startup engineer integrating Provena into an existing product",
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-002"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "After the deployment guide lands, watch first-deploy startup errors for the documented services and entrypoints (`store`, `gateway`, `intelligence`, `queue`, `lifecycle`, and `mcp`) so the written boot path matches reality.",
+          "Watch for unauthorized, forbidden, or invalid API key spikes on `/v1/memories` and `/v1/integrations/*` after operators follow the new standalone or polyglot auth guidance.",
+          "Watch for 404, 422, or 5xx bursts from newly onboarded external clients on the documented base URLs and schema-driven routes after the guide starts steering integrations."
+        ]
+      },
+      "executionNotes": [
+        "[2026-04-15T09:37:11Z] PROVENA-002-T01 passed: `services/provena/DEPLOYMENT.md` exists under `services/provena`, its heading explicitly targets standalone and polyglot deployment usage, and `services/provena/README.md` links to it near the top-level operator docs.",
+        "[2026-04-15T09:37:11Z] PROVENA-002-T02/T04 passed: the standalone section matches `services/provena/app/main.py` and `services/provena/scripts/run_e2e.py` by documenting `PROVENA_DB_PATH`, `python -m uvicorn app.main:app --host 0.0.0.0 --port 8092`, `/healthz`, OpenAPI export, and a clean shutdown path for the single-process API.",
+        "[2026-04-15T09:37:11Z] PROVENA-002-T03/T05/T07 passed: the polyglot section matches `services/provena/docker-compose.yml`, `services/provena/ARCHITECTURE.md`, and `services/provena/control-plane/cmd/gateway/main.go` by naming `gateway`, `store`, `intelligence`, `orchestration`, `queue`, `lifecycle`, and `mcp`; distinguishing external gateway URLs from internal compose-network URLs; documenting production auth via an operator-authored override with `PROVENA_AUTH_ENABLED=true` plus `PROVENA_API_KEYS`; documenting `*_HOST_PORT` overrides; and keeping connected mode on the gateway/store HTTP surfaces while treating MCP as optional rather than the main product-integration surface.",
+        "[2026-04-15T09:37:11Z] PROVENA-002-T06 passed: `python scripts/export_openapi.py` is still blocked on this Windows host by the generic launcher access-control policy, but `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/export_openapi.py` exited 0, rewrote `services/provena/openapi.json`, and preserved OpenAPI `3.1.0` with title `Provena` plus `/healthz`, `/v1/memories`, and `/v1/integrations/coverage`.",
+        "[2026-04-15T09:37:11Z] Sentry runtime verification remains pending because no Sentry credentials are available in this environment."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-002-T01",
+          "title": "Dedicated deployment guide exists under services/provena and is discoverable from the README",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Review the doc files modified by the story."
+          ],
+          "steps": [
+            "Confirm a deployment or hosting guide file exists under `services/provena` instead of living only inside loop automation docs.",
+            "Verify `services/provena/README.md` links to the guide from a section an operator would read before deployment.",
+            "Verify the guide name or heading clearly signals standalone and polyglot deployment usage."
+          ],
+          "expectedResults": [
+            "A dedicated deployment guide exists under `services/provena`.",
+            "An operator can discover the guide from the README without searching the repo manually."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-002-T02",
+          "title": "Standalone guidance explains the current standalone entrypoint, env vars, and health verification",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Compare the guide to `services/provena/app/main.py`, `services/provena/scripts/run_e2e.py`, and `services/provena/openapi.json`."
+          ],
+          "steps": [
+            "Verify the guide clearly states which shipped entrypoint constitutes standalone Provena today.",
+            "Verify it lists the minimum standalone boot configuration, including the persisted database path and the base URL or port that external clients should reach.",
+            "Verify it includes concrete start, stop, and health-check steps for standalone mode."
+          ],
+          "expectedResults": [
+            "Standalone instructions match the runtime that Provena actually ships today instead of a hypothetical future topology.",
+            "A reader can boot, verify, and stop standalone mode without inferring missing env vars or ports."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-002-T03",
+          "title": "Polyglot guidance matches the shipped multi-service topology and required env vars",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Compare the guide to `services/provena/docker-compose.yml` and `services/provena/ARCHITECTURE.md`."
+          ],
+          "steps": [
+            "Verify the guide identifies the external polyglot entrypoint and the supporting services behind it: `store`, `orchestration`, `intelligence`, `gateway`, `queue`, `lifecycle`, and `mcp`.",
+            "Verify it documents the env vars operators must supply or override for a real polyglot deployment, including production auth settings and `*_HOST_PORT` overrides for shared hosts.",
+            "Verify it distinguishes external base URLs from the internal service-to-service URLs used inside the compose network."
+          ],
+          "expectedResults": [
+            "The guide does not omit a required service or direct operators to an internal-only endpoint.",
+            "Polyglot env-var guidance matches the shipped topology and auth posture."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-002-T04",
+          "title": "Lifecycle commands cover start, stop, and post-start verification for both hosting modes",
+          "level": "lifecycle",
+          "automation": "manual",
+          "preconditions": [
+            "Review the new deployment guide."
+          ],
+          "steps": [
+            "Extract the documented start and stop commands for standalone mode.",
+            "Extract the documented start and stop commands for polyglot mode.",
+            "Verify the guide includes at least one post-start verification command or endpoint per mode such as `/healthz`, `docker compose ps`, or another shipped readiness check."
+          ],
+          "expectedResults": [
+            "Each hosting mode has an actionable boot path and shutdown path.",
+            "Operators are not told only how to start Provena; they can also verify and cleanly stop it."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "featureDescription"
+          ]
+        },
+        {
+          "id": "PROVENA-002-T05",
+          "title": "External-consumer guidance explains base URLs, auth expectations, and HTTP/OpenAPI discovery",
+          "level": "api",
+          "automation": "manual",
+          "preconditions": [
+            "Compare the guide to `services/provena/openapi.json`, `services/provena/scripts/export_openapi.py`, and the auth guidance already present in `services/provena/README.md`."
+          ],
+          "steps": [
+            "Verify the guide tells another project which base URL to call in standalone mode versus polyglot mode.",
+            "Verify it explains the relevant auth expectations for local-only versus production deployments instead of implying that every mode behaves the same.",
+            "Verify it points consumers to the exported OpenAPI schema and or the `python scripts/export_openapi.py` command instead of forcing them to inspect source code."
+          ],
+          "expectedResults": [
+            "External teams can discover the callable HTTP contract from docs alone.",
+            "Base URL, auth, and schema guidance are explicit enough for raw HTTP or SDK-based integrations to begin."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "expectedBehaviors[2]"
+          ]
+        },
+        {
+          "id": "PROVENA-002-T06",
+          "title": "OpenAPI export regenerates the schema artifact referenced by the deployment guide",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Run from `services/provena`."
+          ],
+          "steps": [
+            "Run `python scripts/export_openapi.py`.",
+            "Confirm `services/provena/openapi.json` is rewritten.",
+            "Inspect the generated schema for the shipped service title and representative deployment-facing paths."
+          ],
+          "expectedResults": [
+            "The command exits with code 0 and writes `services/provena/openapi.json`.",
+            "The exported schema remains OpenAPI 3.1 with title `Provena`.",
+            "The generated paths include `/healthz`, `/v1/memories`, and `/v1/integrations/coverage`."
+          ],
+          "commands": [
+            "python scripts/export_openapi.py"
+          ],
+          "covers": [
+            "verificationCommands[0]",
+            "acceptanceCriteria[2]"
+          ]
+        },
+        {
+          "id": "PROVENA-002-T07",
+          "title": "Deployment guide keeps standalone, polyglot, connected, and MCP terminology consistent",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Compare the guide to `services/provena/README.md`, `services/provena/ARCHITECTURE.md`, and `services/provena/scripts/run_e2e.py`."
+          ],
+          "steps": [
+            "Verify the guide distinguishes standalone and polyglot hosting instead of merging them into one ambiguous runtime mode.",
+            "Verify any mention of connected mode explains that connected-mode admin APIs currently land through the gateway or store surfaces rather than a separate connector binary.",
+            "Verify any mention of MCP mode does not replace the HTTP and OpenAPI guidance that external product integrations need."
+          ],
+          "expectedResults": [
+            "The new guide does not create a conflicting source of truth for Provena mode definitions.",
+            "An operator can tell which mode to deploy and which surface their external project should call."
+          ],
+          "commands": [],
+          "covers": [
+            "problemStatement",
+            "feature regression: mode-definition consistency"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-003",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureId": "FEATURE-SDK-DISTRIBUTION",
+      "title": "Make the TypeScript SDK publishable instead of repo-private",
+      "persona": "Frontend or Node developer integrating Provena into another project",
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-003"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "No Provena-owned Sentry check exists for npm metadata changes on this host; once release telemetry exists, monitor the integrating service for module-resolution or startup failures after consuming the packaged SDK.",
+          "If package metadata or headers drift during release, watch Provena `/healthz`, `/v1/memories`, and `/v1/memories/search` 4xx or 5xx trends from SDK-driven traffic after rollout.",
+          "After publishing, watch downstream frontend or Node build failures tied to the published package name or exported type declarations because those failures will surface in the integrating service rather than inside Provena itself."
+        ]
+      },
+      "executionNotes": [
+        "[2026-04-15T10:12:46Z] PROVENA-003-T01/T02 passed: `services/provena/sdk/typescript/package.json` now exposes `@altrixy/provena-sdk@0.1.0` with `private=false`, an external-facing description, `main`, `exports`, and `types` rooted in real `dist/` artifacts, and a `files` allowlist limited to built publish artifacts rather than `src/`.",
+        "[2026-04-15T10:12:46Z] PROVENA-003-T03 passed: `npx -y -p typescript tsc -p .` rebuilt `dist/index.js` and `dist/index.d.ts`, `npm pack` produced `altrixy-provena-sdk-0.1.0.tgz` containing `package.json`, `dist/index.js`, and `dist/index.d.ts`, and a scratch project under `services/provena/loop/tmp/provena-003/scratch` installed the tarball successfully and imported `@altrixy/provena-sdk` by package name with `PACKAGE_IMPORT_OK`.",
+        "[2026-04-15T10:12:46Z] PROVENA-003-T04/T05 passed: `npx -y -p typescript tsc -p .` exited 0, and a disposable standalone Provena instance launched via `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 18092` with an isolated `PROVENA_DB_PATH`; `node tests/smoke.mjs` then exited 0 against `http://127.0.0.1:18092` and logged `typescript-sdk-smoke: ok` after reaching `/healthz`, creating a memory, and finding it via search.",
+        "[2026-04-15T10:12:46Z] Sentry runtime verification remains pending because no Sentry credentials are available in this environment."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-003-T01",
+          "title": "Package manifest no longer blocks publication and presents an external-facing package identity",
+          "level": "sdk",
+          "automation": "manual",
+          "preconditions": [
+            "Run from `services/provena/sdk/typescript`.",
+            "Review the final `package.json` shipped by the story."
+          ],
+          "steps": [
+            "Open `package.json`.",
+            "Verify `private` is removed or explicitly set to `false`.",
+            "Verify `name`, `version`, and `description` are present and read as an external package rather than an internal workspace-only module.",
+            "Verify the package name is the identifier external consumers are expected to install."
+          ],
+          "expectedResults": [
+            "The manifest no longer marks the package as private.",
+            "The package exposes a stable install name, semver version, and non-empty description suitable for publication.",
+            "No field still frames the SDK as repo-private or internal-only."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-003-T02",
+          "title": "Publish metadata points at built artifacts instead of repo-internal paths",
+          "level": "sdk",
+          "automation": "manual",
+          "preconditions": [
+            "Compare `package.json` against `tsconfig.json`, `src/index.ts`, and the generated `dist/` directory."
+          ],
+          "steps": [
+            "Verify `exports`, `types`, and any added `main` or `module` fields point at files under `dist/`.",
+            "Verify the `files` whitelist covers the intended runtime artifacts and any top-level publication docs added by the story.",
+            "Verify the manifest does not point consumers at `src/`, repo-relative paths, or unbuilt TypeScript sources."
+          ],
+          "expectedResults": [
+            "The external package entrypoints line up with real files produced by the SDK build.",
+            "The publish allowlist is coherent and does not omit required runtime or declaration artifacts.",
+            "Repo-internal paths are not exposed as the install contract."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "problemStatement"
+          ]
+        },
+        {
+          "id": "PROVENA-003-T03",
+          "title": "A packed tarball installs cleanly in a scratch project and resolves package-name imports",
+          "level": "sdk",
+          "automation": "manual-command",
+          "preconditions": [
+            "Node and npm are available.",
+            "A writable scratch directory exists outside `services/provena/sdk/typescript`.",
+            "Run the packaging commands from `services/provena/sdk/typescript`."
+          ],
+          "steps": [
+            "Run `npx -y -p typescript tsc -p .` to regenerate `dist/` from the current sources.",
+            "Run `npm pack` and capture the generated tarball name.",
+            "In a scratch directory, run `npm init -y` and install the tarball.",
+            "Create a minimal consumer snippet that imports `ProvenaClient` from the published package name rather than `../dist/index.js`.",
+            "Run a lightweight Node or TypeScript resolution check against the installed package."
+          ],
+          "expectedResults": [
+            "The tarball is created successfully and contains the files promised by the manifest.",
+            "A scratch consumer can import the SDK by package name without relying on repo-relative paths.",
+            "The installed package exposes both runtime JavaScript and declaration files to the consumer."
+          ],
+          "commands": [
+            "npx -y -p typescript tsc -p .",
+            "npm pack"
+          ],
+          "covers": [
+            "featureDescription",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-003-T04",
+          "title": "The repository TypeScript build still passes after publication metadata changes",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Run from `services/provena/sdk/typescript`."
+          ],
+          "steps": [
+            "Run `npx -y -p typescript tsc -p .`.",
+            "Inspect the exit code and the regenerated `dist/` artifacts."
+          ],
+          "expectedResults": [
+            "The command exits with code 0.",
+            "`dist/index.js` and `dist/index.d.ts` regenerate without type or module-resolution errors."
+          ],
+          "commands": [
+            "npx -y -p typescript tsc -p ."
+          ],
+          "covers": [
+            "verificationCommands[0]",
+            "feature regression: TypeScript build continuity"
+          ]
+        },
+        {
+          "id": "PROVENA-003-T05",
+          "title": "The existing TypeScript smoke still passes against a running Provena instance",
+          "level": "sdk",
+          "automation": "command",
+          "preconditions": [
+            "Run from `services/provena/sdk/typescript`.",
+            "`PROVENA_BASE_URL` points at a reachable standalone or polyglot Provena deployment.",
+            "The SDK has already been built so `dist/index.js` exists."
+          ],
+          "steps": [
+            "Run `node tests/smoke.mjs`.",
+            "Confirm the smoke script reaches `/healthz`, creates a memory, and finds that memory via search."
+          ],
+          "expectedResults": [
+            "The command exits with code 0 and logs `typescript-sdk-smoke: ok`.",
+            "The smoke continues to prove the SDK can talk to a live Provena instance after the metadata changes."
+          ],
+          "commands": [
+            "node tests/smoke.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "verificationCommands[1]",
+            "expectedBehaviors[2]"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-004",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureId": "FEATURE-SDK-DISTRIBUTION",
+      "title": "Add publish-ready metadata and usage docs for the Python SDK",
+      "persona": "Python backend engineer integrating Provena",
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-004"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "No Provena-owned Sentry query is available on this host; once release telemetry exists, monitor integrating services for package build, install, or import failures after adopting the published Python SDK.",
+          "After the docs start steering external consumers, watch Provena `/healthz`, `/v1/memories`, and `/v1/memories/search` 4xx or 5xx trends coming from Python SDK traffic so base URL, auth, or payload guidance drift is visible quickly.",
+          "If authenticated deployments begin using the Python SDK, watch for unauthorized or forbidden spikes that indicate the README examples or API key guidance drifted from the gateway auth contract."
+        ]
+      },
+      "executionNotes": [
+        "[2026-04-15T11:12:21Z] PROVENA-004-T01/T02 passed: `services/provena/sdk/python/pyproject.toml` now exposes `altrixy-provena-sdk@0.1.0` with a real setuptools build backend, `README.md` linkage, Python `>=3.11`, and explicit `httpx` dependency metadata, while `services/provena/sdk/python/README.md`, `provena_sdk/__init__.py`, and `provena_sdk/client.py` keep the external install name and `from provena_sdk import ProvenaClient` import contract coherent for consumers.",
+        "[2026-04-15T11:12:21Z] PROVENA-004-T03 passed: `services/provena/sdk/python/README.md` now gives a concrete `pip install altrixy-provena-sdk` command, a `ProvenaClient` quickstart, standalone (`http://127.0.0.1:8092`) versus polyglot (`http://127.0.0.1:8080`) base URLs, optional `PROVENA_API_KEY` guidance, and installed-consumer smoke commands via `python -m provena_sdk.smoke` or `provena-sdk-smoke`; `services/provena/sdk/python/tests/smoke.py` delegates to the same shipped module so repo-local and installed-consumer verification stay aligned.",
+        "[2026-04-15T11:12:21Z] PROVENA-004-T04 passed with a host-specific fallback: `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m build` and `python -m pip install dist/*.whl` both remain blocked on this Windows host by temp-directory ACLs, but `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe setup.py sdist bdist_wheel` rebuilt the artifacts, the extracted wheel under `output/provena-004-tester/wheel-extract` contained `provena_sdk/__init__.py`, `provena_sdk/client.py`, `provena_sdk/smoke.py`, and `altrixy_provena_sdk-0.1.0.dist-info/entry_points.txt`, and importing `ProvenaClient` from that extracted consumer path succeeded.",
+        "[2026-04-15T11:12:21Z] PROVENA-004-T05 passed: a disposable standalone Provena instance launched via `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 18092` with an isolated `PROVENA_DB_PATH` because the default local SQLite path carried a stale schema; `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe tests/smoke.py` and `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m provena_sdk.smoke` from the extracted wheel both exited 0 against `http://127.0.0.1:18092` and logged `python-sdk-smoke: ok` after reaching `/healthz`, creating a memory, and finding it via search.",
+        "[2026-04-15T11:12:21Z] Sentry runtime verification remains pending because no Sentry credentials are available in this environment."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-004-T01",
+          "title": "Pyproject exposes an external-facing package identity and runtime contract",
+          "level": "sdk",
+          "automation": "manual",
+          "preconditions": [
+            "Run from `services/provena/sdk/python`.",
+            "Review the final `pyproject.toml` shipped by the story."
+          ],
+          "steps": [
+            "Open `pyproject.toml`.",
+            "Verify `[project]` includes a stable package name, semver version, non-empty description, supported Python range, and explicit runtime dependencies.",
+            "Verify the metadata reads as an external SDK rather than a repo-private helper module."
+          ],
+          "expectedResults": [
+            "The manifest presents a coherent install identity for external consumers.",
+            "The Python runtime floor and dependency contract are explicit instead of implicit."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-004-T02",
+          "title": "Build metadata, README linkage, and import package name are coherent for external installation",
+          "level": "sdk",
+          "automation": "manual",
+          "preconditions": [
+            "Compare `pyproject.toml` against `services/provena/sdk/python/provena_sdk/__init__.py`, `services/provena/sdk/python/provena_sdk/client.py`, and the README or usage doc added by the story."
+          ],
+          "steps": [
+            "Verify a `[build-system]` section exists and points at a real build backend suitable for generating distribution artifacts.",
+            "Verify any `readme` reference in `pyproject.toml` points at a real documentation file shipped with the SDK.",
+            "Verify the docs distinguish the install package name from the Python import path by using `pip install ...` for the package name and `from provena_sdk import ProvenaClient` for the import path.",
+            "Verify the manifest and docs do not point consumers at repo-relative modules or omit the existing `httpx` runtime dependency."
+          ],
+          "expectedResults": [
+            "The packaging metadata is coherent enough to build and publish outside the repo.",
+            "An external consumer can tell what to install and what to import without inspecting source code."
+          ],
+          "commands": [],
+          "covers": [
+            "problemStatement",
+            "acceptanceCriteria[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-004-T03",
+          "title": "Usage docs cover installation, import, base URL and auth inputs, and smoke verification",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Review the README or usage section added for `services/provena/sdk/python`."
+          ],
+          "steps": [
+            "Verify the doc includes a concrete installation command for the published package.",
+            "Verify it shows a minimal import and client-construction example using `ProvenaClient`.",
+            "Verify it explains the required `PROVENA_BASE_URL` input for smoke usage and mentions the optional API key path if authenticated deployments are discussed.",
+            "Verify it gives a concise smoke or quickstart command that aligns with `services/provena/sdk/python/tests/smoke.py`."
+          ],
+          "expectedResults": [
+            "A Python backend engineer can install the SDK and understand how to point it at standalone or polyglot Provena without reverse-engineering the test harness.",
+            "The usage guide is concise but complete enough for installation and smoke validation."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-004-T04",
+          "title": "Built distribution installs cleanly in a scratch environment and exposes `provena_sdk`",
+          "level": "sdk",
+          "automation": "manual-command",
+          "preconditions": [
+            "Python build tooling is available.",
+            "A writable scratch virtual environment exists outside `services/provena/sdk/python`.",
+            "Run from `services/provena/sdk/python`.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m build` to create fresh wheel and or sdist artifacts.",
+            "Create a scratch virtual environment outside the SDK directory and install the built wheel into it.",
+            "Run a minimal import check such as `python -c \"from provena_sdk import ProvenaClient; print(ProvenaClient.__name__)\"` from the scratch environment."
+          ],
+          "expectedResults": [
+            "Distribution artifacts are generated successfully from the shipped metadata.",
+            "A scratch environment can install the SDK without repo-relative path tricks.",
+            "Importing `provena_sdk` succeeds after installation."
+          ],
+          "commands": [
+            "python -m build",
+            "python -m pip install dist/*.whl"
+          ],
+          "covers": [
+            "featureDescription",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-004-T05",
+          "title": "The existing Python smoke still passes against a running Provena instance",
+          "level": "sdk",
+          "automation": "command",
+          "preconditions": [
+            "Run from `services/provena/sdk/python`.",
+            "`PROVENA_BASE_URL` points at a reachable standalone or polyglot Provena deployment.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe` for the same command if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python tests/smoke.py`.",
+            "Confirm the smoke script reaches `/healthz`, creates a memory, and finds that memory via search."
+          ],
+          "expectedResults": [
+            "The command exits with code 0 and logs `python-sdk-smoke: ok`.",
+            "The smoke continues to prove the Python SDK can talk to a live Provena instance after the packaging and documentation changes."
+          ],
+          "commands": [
+            "python tests/smoke.py"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "verificationCommands[0]",
+            "expectedBehaviors[2]"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-005",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureId": "FEATURE-SDK-DISTRIBUTION",
+      "title": "Add external-consumption guidance for the Go SDK",
+      "persona": "Go service engineer embedding Provena into backend systems",
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-005"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "No Provena-owned Sentry query is available on this host; once release telemetry exists, monitor integrating Go services for module-resolution, dependency-fetch, or startup failures after they adopt the documented module path.",
+          "After the docs start steering authenticated Go consumers, watch Provena `/healthz`, `/v1/memories`, and `/v1/memories/search` 4xx or 5xx trends from Go SDK traffic so base URL or API key guidance drift is visible quickly.",
+          "If the docs keep a monorepo caveat such as pseudo-version pinning or `replace`, watch downstream CI and deploy failures after rollout because those issues will surface in the integrating service rather than inside Provena."
+        ]
+      },
+      "executionNotes": [
+        "[2026-04-15T11:40:36Z] TESTER-EXECUTION green: T01-T03 passed on doc review because `services/provena/sdk/go/README.md` is linked from `services/provena/README.md`, targets an external Go service engineer, matches the real module path and client surface from `go.mod`/`client.go`, and honestly preserves the monorepo subdirectory plus no-tag pseudo-version and local `replace` caveats (`git tag -l` remained empty). T04 passed in `output/provena-005-tester/scratch` with `go1.26.1` using the documented `go mod init`, `go mod edit -replace`, `go get`, and `go run .` flow; the scratch consumer compiled outside `sdk/go` and printed `*provena.Client`. T05 passed when `go run ./examples/smoke` logged `go-sdk-smoke: ok` against a disposable standalone Provena instance on `http://127.0.0.1:18092` launched via the direct Python 3.12 interpreter with an isolated `PROVENA_DB_PATH`. Workspace-scoped `GOCACHE`, `GOTMPDIR`, `GOPATH`, `GOMODCACHE`, `TEMP`, and `TMP` were required on this Windows host because the default Go build and temp paths are access-controlled. Sentry runtime verification remains pending because credentials are unavailable."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-005-T01",
+          "title": "Go SDK guidance is discoverable to an external integrator",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Review the final Go SDK guidance added under `services/provena/sdk/go` and any cross-link added from `services/provena/README.md` or `services/provena/DEPLOYMENT.md`."
+          ],
+          "steps": [
+            "Verify there is a dedicated README or an equivalent Go-specific usage section for external consumers.",
+            "Verify the guidance is reachable from the shipped Provena docs without requiring the reader to inspect `client.go` or `examples/smoke/main.go` first.",
+            "Verify the doc clearly frames the audience as an external Go service engineer instead of a repo-local contributor."
+          ],
+          "expectedResults": [
+            "An external integrator can find the Go SDK guidance from the shipped documentation set.",
+            "The Go SDK instructions are not buried inside generic deployment notes or source-only comments."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-005-T02",
+          "title": "The documented Go quickstart matches the shipped client surface",
+          "level": "sdk",
+          "automation": "manual",
+          "preconditions": [
+            "Compare the final Go SDK docs against `services/provena/sdk/go/go.mod`, `client.go`, and `examples/smoke/main.go`."
+          ],
+          "steps": [
+            "Verify the docs use the exact module path from `go.mod`: `github.com/ayushozha/portfolio-generator/services/provena/sdk/go`.",
+            "Verify the import example refers to package `provena` consistently with the shipped code.",
+            "Verify the quickstart only references real constructors or methods from `client.go`, such as `NewClient`, `NewClientWithAPIKey`, `SetAPIKey`, `Health`, `CreateMemory`, or `SearchMemories`.",
+            "Verify the docs explain required runtime inputs such as `PROVENA_BASE_URL`, and if authenticated deployments are discussed, optional API key usage aligns with `NewClientWithAPIKey` or `SetAPIKey` instead of inventing a different API surface."
+          ],
+          "expectedResults": [
+            "The docs do not promise APIs, install names, or auth mechanics that the current Go SDK does not expose.",
+            "A Go consumer can map the documented quickstart directly onto the shipped client code."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-005-T03",
+          "title": "Module-path limitations and versioning caveats are documented honestly",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Compare the final docs against `services/provena/sdk/go/go.mod` and the current repo release state.",
+            "At planning time `git tag -l` returns no Go SDK release tags; if implementation introduces a tagging or release change, validate against that final state instead."
+          ],
+          "steps": [
+            "Verify the docs call out that the Go SDK currently lives at a monorepo subdirectory module path instead of a short vanity module.",
+            "If standalone Go SDK semver tags are still absent at verification time, verify the docs explain the resulting limitation and the expected consumer workflow, such as a commit pseudo-version or a `replace` directive against a checked-out repo.",
+            "If implementation adds a supported tag or release workflow, verify the docs describe that real workflow exactly and remove stale caveat language.",
+            "Verify the docs do not imply a publishable module path, short import path, or release process that the repository cannot actually satisfy."
+          ],
+          "expectedResults": [
+            "Module path expectations and current limitations are explicit instead of implicit.",
+            "The docs are truthful about whether external consumers should use a pseudo-version, a local `replace`, or a released tag."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]",
+            "problemStatement"
+          ]
+        },
+        {
+          "id": "PROVENA-005-T04",
+          "title": "A scratch Go consumer can compile using the documented external-consumption workflow",
+          "level": "sdk",
+          "automation": "manual-command",
+          "preconditions": [
+            "Go 1.26+ is available.",
+            "A writable scratch directory exists outside `services/provena/sdk/go`.",
+            "Follow the exact workflow documented by the story. If the docs still describe a monorepo limitation, apply the documented workaround in the scratch module instead of guessing."
+          ],
+          "steps": [
+            "Create a scratch module such as `go mod init provena-go-scratch`.",
+            "Add the Provena Go SDK using the documented module path and versioning workflow.",
+            "Write a minimal consumer that imports `github.com/ayushozha/portfolio-generator/services/provena/sdk/go`, constructs a `provena.Client`, and compiles.",
+            "Run `go run .` or `go test` from the scratch module."
+          ],
+          "expectedResults": [
+            "The documented workflow is actionable enough for a scratch consumer to compile outside the SDK directory.",
+            "The import path, package name, and any documented `replace` or version-pinning guidance are coherent."
+          ],
+          "commands": [
+            "go mod init provena-go-scratch",
+            "go run ."
+          ],
+          "covers": [
+            "featureDescription",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-005-T05",
+          "title": "The existing Go smoke still passes against a running Provena instance",
+          "level": "sdk",
+          "automation": "command",
+          "preconditions": [
+            "Run from `services/provena/sdk/go`.",
+            "`PROVENA_BASE_URL` points at a reachable standalone or polyglot Provena deployment.",
+            "On this Windows host, a disposable standalone server can be launched with `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 18092` if a local smoke target is needed."
+          ],
+          "steps": [
+            "Run `go run ./examples/smoke`.",
+            "Confirm the smoke reaches `/healthz`, creates a memory, and finds that memory via search."
+          ],
+          "expectedResults": [
+            "The command exits with code 0 and logs `go-sdk-smoke: ok`.",
+            "The existing Go SDK regression path stays green after the documentation update."
+          ],
+          "commands": [
+            "go run ./examples/smoke"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "verificationCommands[0]",
+            "expectedBehaviors[2]"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-006",
+      "epicId": "EPIC-CONNECTED",
+      "featureId": "FEATURE-CONNECTOR-EXECUTION",
+      "title": "Implement a connector worker interface for connected-mode sync execution",
+      "persona": "Platform engineer building enterprise connectors on top of Provena",
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-006"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "No Provena-owned Sentry query is available on this host; once runtime telemetry exists, watch for connector worker exceptions, timeout spikes, or repeated execution retries after the first worker-backed sync path lands.",
+          "Watch `/v1/integrations/connectors/*/sync-jobs` failure or stuck-running patterns after the worker contract starts driving sync execution so scheduler follow-on work inherits a trustworthy ledger.",
+          "Watch `/v1/integrations/coverage` plus connector admin endpoints for 4xx or 5xx increases that would signal worker outputs drifting from the stored source, principal-mapping, or permission-grant contracts."
+        ]
+      },
+      "executionNotes": [
+        "[2026-04-15T12:04:54Z] TESTER-EXECUTION green: T01-T06 passed. Manual review confirmed `services/provena/app/connector_worker.py` adds shared `ConnectorWorker`, `ConnectorRunContext`, `ConnectorRunResult`, and `ConnectorExecutionService` types aligned with the existing `ConnectorSourceBatch`, `PrincipalMappingBatch`, `SourcePermissionBatch`, and `SyncJob` models, with optional sync dimensions controlled by connector flags and the executor exposed on `app.state` for follow-on scheduler or connector implementations. `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` exited 0 with `11 passed`, and `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -vv -k \"connector_worker or integration_plane\"` passed while collecting the two direct worker tests plus the pre-existing integration-plane regression cases. The generic `python` launcher remains blocked on this Windows host and pytest emitted a non-blocking `.pytest_cache` ACL warning. Sentry runtime verification remains pending because credentials are unavailable."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-006-T01",
+          "title": "A reusable connector worker contract exists in shared Provena code instead of a route handler or one-off stub",
+          "level": "unit",
+          "automation": "manual",
+          "preconditions": [
+            "Review the final files added for the story alongside `services/provena/app/models.py`, `services/provena/app/main.py`, and `services/provena/app/store.py`.",
+            "The current baseline has admin persistence APIs for connectors, sources, principal mappings, permissions, and sync jobs but no reusable execution abstraction."
+          ],
+          "steps": [
+            "Identify the new worker interface, protocol, abstract base class, or equivalent contract added under `services/provena`.",
+            "Verify it lives in shared application code that future scheduler paths and concrete connectors can import without depending on FastAPI request objects, route handlers, or a specific connector implementation.",
+            "Verify the contract takes typed connector context and any per-run state explicitly instead of relying on raw HTTP payload dicts or direct admin API calls as the only execution mechanism.",
+            "Verify the contract exposes typed execution outputs rather than opaque unstructured JSON."
+          ],
+          "expectedResults": [
+            "There is a reusable connector worker contract inside `services/provena`.",
+            "The contract creates a clear seam above persistence and below future scheduler or connector-specific code.",
+            "Connected-mode sync no longer depends only on direct admin API writes as its execution contract."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]",
+            "problemStatement"
+          ]
+        },
+        {
+          "id": "PROVENA-006-T02",
+          "title": "The worker contract can enumerate source inventory outputs using Provena's existing source models",
+          "level": "unit",
+          "automation": "manual-command",
+          "preconditions": [
+            "Compare the final worker contract to `ConnectorSourceRecord` and `ConnectorSourceBatch` in `services/provena/app/models.py`.",
+            "The story includes dedicated automated coverage collected by `python -m pytest tests/test_main.py -q`."
+          ],
+          "steps": [
+            "Inspect the worker contract's source-enumeration method or result field.",
+            "Verify the output shape is compatible with `ConnectorSourceRecord` or a typed result envelope that contains those records, including connector and tenant identity plus remote source metadata and sync status.",
+            "Run `python -m pytest tests/test_main.py -q` and verify the worker-specific assertions cover source enumeration explicitly rather than only a broad API smoke path."
+          ],
+          "expectedResults": [
+            "The worker contract can enumerate source inventory results using the shipped Provena source models.",
+            "Worker output can be handed to the existing source-persistence path without connector-specific reshaping."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-006-T03",
+          "title": "The worker contract can enumerate principal-sync and permission-sync outputs while respecting connector sync flags",
+          "level": "unit",
+          "automation": "manual-command",
+          "preconditions": [
+            "Compare the final worker contract to `PrincipalMapping`, `PrincipalMappingBatch`, `SourcePermissionGrant`, and `SourcePermissionBatch` in `services/provena/app/models.py`.",
+            "Compare the behavior to `ConnectorConfig.principal_sync_enabled` and `ConnectorConfig.acl_sync_enabled`."
+          ],
+          "steps": [
+            "Inspect the worker contract's identity and permission output surface.",
+            "Verify it can emit principal mappings and source permission grants through the existing Provena models or a typed result envelope that contains them.",
+            "Verify dedicated automated coverage exercises at least one case where principal sync or ACL sync is disabled so the contract can omit that dimension intentionally without breaking source enumeration."
+          ],
+          "expectedResults": [
+            "The contract can enumerate principal or permission sync results using Provena's existing connected-mode models.",
+            "Connector policy flags control optional sync dimensions without forcing downstream stories to invent a second abstraction."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-006-T04",
+          "title": "A worker run preserves the execution metadata needed by the existing sync-job ledger",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Compare the final execution helper or result envelope to `SyncJob` and `save_sync_job` in `services/provena/app/models.py` and `services/provena/app/store.py`.",
+            "The contract should remain reusable by the upcoming scheduler story rather than hiding run state inside a connector-specific implementation."
+          ],
+          "steps": [
+            "Inspect how a worker run reports its job type, status, cursor or checkpoint, stats, and failure details.",
+            "Verify those fields map cleanly onto the existing `SyncJob` model instead of requiring a second job schema.",
+            "Verify the automated coverage includes at least one successful or failed run path that asserts the execution metadata is coherent enough to record in the existing sync-job ledger."
+          ],
+          "expectedResults": [
+            "A worker-backed run exposes enough metadata for the current sync-job ledger to represent it.",
+            "The contract is schedulable without inventing a separate execution-status model for follow-on stories."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "featureDescription",
+            "feature regression: sync-job ledger compatibility"
+          ]
+        },
+        {
+          "id": "PROVENA-006-T05",
+          "title": "Worker outputs flow through the existing store and integration-plane surfaces without breaking coverage rollups",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "The final implementation includes a fake or stub worker path that automated tests can execute without external connector credentials."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Inspect the worker-integration assertions to confirm enumerated sources, principal mappings, permission grants, and sync-job metadata can be persisted through the existing store or API surfaces.",
+            "Verify the same test path reads the worker-driven data back through the current integration-plane list routes and filters, such as connector listing by provider, source listing, principal-mapping listing, and permission listing with a representative `source_id` filter where applicable.",
+            "Verify the same test path confirms `integration_coverage` remains coherent after worker-driven writes by checking representative totals, stale or error counts, or missing-foundation behavior."
+          ],
+          "expectedResults": [
+            "Worker outputs can be persisted through Provena's current connected-mode storage paths without connector-specific branching in the route layer.",
+            "Worker-driven writes remain queryable through the existing integration-plane read routes and representative filters.",
+            "Coverage summaries remain coherent after worker-driven writes."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "featureDescription",
+            "feature regression: coverage summary continuity"
+          ]
+        },
+        {
+          "id": "PROVENA-006-T06",
+          "title": "Dedicated contract coverage exists and the existing integration-plane regression suite stays green",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify at least one collected test explicitly targets the new worker contract or execution helper rather than only the existing integration-plane round trip.",
+            "Verify the pre-existing connector admin API, access-control, and coverage regression tests still pass alongside the new worker coverage."
+          ],
+          "expectedResults": [
+            "At least one test covers the new connector worker contract directly.",
+            "The verification command exits with code 0.",
+            "Existing integration-plane regression coverage remains green after the worker contract lands."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "verificationCommands[0]",
+            "expectedBehaviors[2]"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-007",
+      "epicId": "EPIC-CONNECTED",
+      "featureId": "FEATURE-CONNECTOR-EXECUTION",
+      "title": "Add a scheduler path that records sync jobs on a fixed cadence",
+      "persona": "Operations engineer monitoring connected-mode freshness",
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-007"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "No Provena-owned Sentry query is available on this host; once runtime telemetry exists, watch for scheduler-loop exceptions, cadence evaluation errors, or skipped-due-connector spikes after scheduled sync creation lands.",
+          "Watch `/v1/integrations/connectors/*/sync-jobs` for duplicate or overlapping jobs, especially repeated entries for the same connector within one cadence window or jobs that stay `running` after repeated scheduler ticks.",
+          "Watch queue backlog plus `/v1/integrations/coverage` freshness signals for drift after scheduler changes so automatic sync creation does not hide stale connectors behind noisy ledger churn."
+        ]
+      },
+      "executionNotes": [
+        "[2026-04-15T12:33:43Z] TESTER-EXECUTION green: T01-T07 passed. Manual review confirmed `services/provena/app/connector_scheduler.py` and `scripts/run_scheduler_tick.py` add an internal fixed-cadence scheduler above `ConnectorExecutionService` with no second public sync-write route, while `README.md`, `ARCHITECTURE.md`, and `DEPLOYMENT.md` explain cadence metadata plus standalone versus polyglot lifecycle placement. `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` exited 0 with `13 passed`, and `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -vv -k \\\"scheduler or integration_plane\\\"` passed while collecting the two dedicated scheduler tests plus the pre-existing integration-plane regressions. `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/run_e2e.py` then exited 0 after redirecting `NPM_CONFIG_CACHE`, `GOCACHE`, `GOMODCACHE`, `GOPATH`, `GOTMPDIR`, `TEMP`, `TMP`, and `PROVENA_E2E_TMP_DIR` into the workspace; standalone and polyglot suites, Python/TypeScript/Go SDK smokes, and OpenAPI export stayed green, with the expected Windows Rust SDK smoke skip warning. Sentry runtime verification remains pending because credentials are unavailable."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-007-T01",
+          "title": "A shared scheduler path can initiate connector sync-job creation without manual sync-job POSTs",
+          "level": "integration",
+          "automation": "manual",
+          "preconditions": [
+            "Review the final scheduler-related files alongside `services/provena/app/connector_worker.py`, `services/provena/app/main.py`, `services/provena/app/store.py`, and `services/provena/ARCHITECTURE.md`.",
+            "Baseline before this story: sync jobs can be persisted through direct admin POSTs and a reusable worker executor exists, but no cadence-driven path creates jobs."
+          ],
+          "steps": [
+            "Identify the new scheduler service, helper, loop, or equivalent entrypoint added under `services/provena`.",
+            "Verify it can initiate sync-job creation without requiring a human to call `POST /v1/integrations/connectors/{connector_id}/sync-jobs` directly.",
+            "Verify it reuses `ConnectorExecutionService`, `ConnectorRunContext`, or an equivalent typed execution seam instead of bypassing the worker contract with raw store writes or a proxy-only sync-job insert.",
+            "If implementation exposes a new HTTP route for scheduler triggering or status, verify it is only an operational entrypoint above the scheduler and not a second ad hoc sync-job write contract."
+          ],
+          "expectedResults": [
+            "There is a schedulable path inside `services/provena` that can create sync jobs without manual API triggering.",
+            "The scheduler sits above the existing connector execution contract instead of bypassing it.",
+            "No unauthenticated or tenant-agnostic sync-job creation bypass is introduced."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]",
+            "problemStatement"
+          ]
+        },
+        {
+          "id": "PROVENA-007-T02",
+          "title": "A due connector on a fixed cadence records a sync job through the existing ledger contract",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "The final implementation includes a deterministic scheduler seam or fake clock fixture so due-versus-not-due behavior can be asserted without waiting in real time.",
+            "At least one fake or stub connector worker is available for automated scheduler coverage without external credentials."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Inspect the scheduler-specific assertions to confirm a connector that is due according to the final cadence configuration causes a new sync-job record to be created.",
+            "Verify the created job uses the existing `SyncJob` model or route surface and carries coherent connector and tenant identity, job type, status, timestamps, cursor or checkpoint, and representative stats.",
+            "Verify the scheduled path does not require a direct `POST /v1/integrations/connectors/{connector_id}/sync-jobs` call inside the test setup to create the ledger entry under test."
+          ],
+          "expectedResults": [
+            "A due connector produces a sync-job ledger entry from the scheduled path.",
+            "The persisted job shape remains compatible with existing sync-job storage and readback surfaces.",
+            "Scheduled sync creation is proven by dedicated automated coverage rather than documentation alone."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]",
+            "verificationCommands[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-007-T03",
+          "title": "Scheduler-created jobs stay queryable through existing sync-job and coverage surfaces",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "The final automated scheduler coverage persists at least one scheduled job against a test connector."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify the scheduler-created job can be read back through the existing `GET /v1/integrations/connectors/{connector_id}/sync-jobs` surface or the store-backed equivalent used by the tests.",
+            "Verify connected-mode readback remains coherent alongside scheduled jobs, including representative connector and coverage responses such as `GET /v1/integrations/coverage`.",
+            "Verify the scheduler path does not break provider, connector, or tenant scoping assumptions already established by the integration plane."
+          ],
+          "expectedResults": [
+            "Scheduled jobs appear in the existing sync-job ledger read surfaces instead of a separate shadow store.",
+            "Coverage and related connected-mode readbacks stay coherent after scheduled job creation.",
+            "Tenant and connector scoping remain aligned with the established integration-plane contract."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "feature regression: sync-job readback continuity",
+            "feature regression: coverage summary continuity"
+          ]
+        },
+        {
+          "id": "PROVENA-007-T04",
+          "title": "Cadence guards skip ineligible connectors and suppress duplicate or overlapping job creation",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "The final implementation exposes a fixed cadence configuration or due-calculation rule that automated tests can control.",
+            "Scheduler coverage can invoke the scheduling path more than once against the same connector or cadence window."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify at least one test covers a connector that is not yet due and confirms no new sync job is created.",
+            "Verify at least one test covers a second scheduler tick against the same connector and confirms the implementation suppresses duplicate or overlapping jobs when a job is already running or the cadence window has not advanced.",
+            "Verify inactive or disabled connectors, or connectors missing required scheduling configuration, are skipped intentionally instead of producing bogus job records."
+          ],
+          "expectedResults": [
+            "The scheduler only creates jobs for eligible, due connectors.",
+            "Duplicate or overlapping sync-job creation is prevented for the same connector or cadence window.",
+            "The cadence path does not create avoidable queue or ledger churn that would hide real freshness state."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "expectedBehaviors[0]",
+            "feature regression: duplicate suppression",
+            "sentryChecks[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-007-T05",
+          "title": "Connected-mode documentation explains the scheduler path and its lifecycle placement",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Compare the final docs against `services/provena/README.md`, `services/provena/ARCHITECTURE.md`, and any new scheduler-specific documentation or section added by the story."
+          ],
+          "steps": [
+            "Verify the docs explain where scheduled sync creation runs in standalone versus polyglot deployments, or explicitly state if it is internal-only and how operators trigger or observe it.",
+            "Verify the docs describe the fixed cadence configuration or operator-facing schedule inputs without inventing a deployment shape that Provena does not ship today.",
+            "Verify the docs explain how the scheduled path relates to the existing connector registry, sync-job ledger, and coverage reporting lifecycle.",
+            "If a manual trigger, health, or status route is introduced for operators, verify the docs show the expected auth and tenant context for using it."
+          ],
+          "expectedResults": [
+            "The scheduling path is documented with enough detail for an operator to understand how it fits the connected-mode lifecycle.",
+            "The doc set stays consistent with the shipped topology and admin API vocabulary.",
+            "Operators are not left guessing whether scheduled jobs replace or complement the existing direct sync-job route."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]",
+            "featureDescription"
+          ]
+        },
+        {
+          "id": "PROVENA-007-T06",
+          "title": "Dedicated scheduler coverage exists and any new routing surface keeps admin and tenant protections",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify at least one collected test explicitly targets scheduler behavior or cadence evaluation rather than only the pre-existing worker or integration-plane round trip.",
+            "If engineering adds a new HTTP route for scheduler triggering or status, verify the same test file or manual review confirms it preserves admin-only access and tenant matching consistent with the existing integration-plane controls; otherwise verify no new public route was added and the scheduler remains internal.",
+            "Verify the pre-existing connector admin, readback, and coverage regressions still pass alongside the new scheduler coverage."
+          ],
+          "expectedResults": [
+            "Dedicated scheduler coverage exists.",
+            "Any new routing surface does not create an auth or tenant-isolation bypass.",
+            "`python -m pytest tests/test_main.py -q` exits with code 0 after scheduler changes."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "verificationCommands[0]",
+            "feature regression: routing and access-control continuity"
+          ]
+        },
+        {
+          "id": "PROVENA-007-T07",
+          "title": "Polyglot end-to-end verification remains green after scheduler changes",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "On this Windows host, prefer `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/run_e2e.py` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python scripts/run_e2e.py`.",
+            "Verify the standalone and polyglot suites still boot and reach healthy status.",
+            "Verify the existing connected-mode round trip in the polyglot suite still registers connectors, sources, mappings, permissions, sync jobs, and coverage without regression after the scheduler additions.",
+            "If the final end-to-end harness exercises the new scheduler path directly, verify scheduled sync creation does not break queue, lifecycle, or MCP verification; otherwise treat this command as the required global regression gate for the feature."
+          ],
+          "expectedResults": [
+            "The verification command exits with code 0.",
+            "Polyglot end-to-end verification remains green after scheduler changes.",
+            "Scheduler additions do not break existing connected-mode, queue, lifecycle, or SDK smoke coverage."
+          ],
+          "commands": [
+            "python scripts/run_e2e.py"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "expectedBehaviors[2]",
+            "verificationCommands[1]"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-008",
+      "epicId": "EPIC-CONNECTED",
+      "featureId": "FEATURE-CONNECTOR-EXECUTION",
+      "title": "Add a first Slack connector stub that writes source inventory and sync jobs",
+      "persona": "Enterprise product engineer evaluating real connector behavior",
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-008"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "No Provena-owned Sentry query is available on this host; once runtime telemetry exists, watch for Slack worker import or provider-routing failures so the first concrete connector does not silently fall back to generic scheduled-only behavior.",
+          "Watch `/v1/integrations/connectors/*/sync-jobs` for repeated failed or stuck Slack jobs, especially runs that report success but never write source inventory or that keep emitting the generic `scheduled_only` placeholder stats for `slack` connectors.",
+          "Watch `/v1/integrations/connectors/*/sources` writes and `/v1/integrations/coverage` for malformed Slack source shapes, zero-source successful runs, or error and stale spikes after the Slack stub starts persisting inventory."
+        ]
+      },
+      "executionNotes": [
+        "[2026-04-15T12:56:19Z] TESTER-EXECUTION green: T01-T06 passed. Manual review confirmed `services/provena/app/slack_connector.py` ships a concrete `SlackConnectorStubWorker`, `services/provena/app/main.py` registers it for `ConnectorProvider.SLACK` at startup, and the Slack path reuses `ConnectorExecutionService` plus scheduler provider routing without adding a new public sync-write route. `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` exited 0 with `13 passed`, and `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -vv -k \"slack or scheduler or connector_worker or integration_plane\"` passed while collecting the dedicated Slack, scheduler, worker-contract, and integration-plane regressions. The shipped Slack tests persisted channel-shaped source inventory, coherent sync-job ledger entries with concrete `provider=slack` stats and Slack cursors, scheduler reuse through `ConnectorSchedulerService.worker_for()`, and no `scheduled_only` placeholder leakage for Slack runs. The generic `python` launcher remains blocked on this Windows host; the existing `.pytest_cache` ACL warning and `RequestsDependencyWarning` remained non-blocking. Sentry runtime verification remains pending because credentials are unavailable."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-008-T01",
+          "title": "A shipped Slack connector stub exists in shared Provena code and is wired to the `slack` provider",
+          "level": "unit",
+          "automation": "manual",
+          "preconditions": [
+            "Review the final connector-specific files alongside `services/provena/app/connector_worker.py`, `services/provena/app/connector_scheduler.py`, `services/provena/app/main.py`, and `services/provena/app/models.py`.",
+            "Baseline before this story: the repo only has provider-agnostic worker and scheduler abstractions plus inline Slack test doubles inside `services/provena/tests/test_main.py`, not a shipped Slack worker module."
+          ],
+          "steps": [
+            "Identify the new Slack-specific worker or stub module added under `services/provena/app` or an equivalent shared application location; it must not live only inside `services/provena/tests`.",
+            "Verify the implementation targets `ConnectorProvider.SLACK` or the `slack` provider value explicitly instead of remaining a generic placeholder.",
+            "Verify app startup, a connector registry, or another shipped runtime seam wires the Slack stub into connector execution or scheduler provider routing, rather than leaving `slack` connectors to fall back to the generic scheduled-only worker.",
+            "Verify no new public ad hoc sync-write route is introduced just to make the stub run."
+          ],
+          "expectedResults": [
+            "A concrete Slack stub exists in shipped Provena application code.",
+            "Runtime provider routing can resolve a `slack` connector to the shipped stub.",
+            "The first concrete connector lives inside the existing integration plane instead of a test-only or route-only bypass."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]",
+            "problemStatement"
+          ]
+        },
+        {
+          "id": "PROVENA-008-T02",
+          "title": "The Slack stub reuses the shared connector execution contract instead of raw store writes or an inline test worker",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Compare the final Slack-specific code to `ConnectorRunContext`, `ConnectorRunResult`, and `ConnectorExecutionService` in `services/provena/app/connector_worker.py`.",
+            "Run from `services/provena`.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify the shipped Slack stub implements `ConnectorWorker` or an equivalent typed contract and returns `ConnectorRunResult` with source and job metadata instead of writing directly to store tables.",
+            "Verify the automated Slack coverage imports the shipped Slack stub module or class rather than defining a one-off `SlackStubWorker` inline inside the test body.",
+            "Verify the Slack execution path still flows through `ConnectorExecutionService.execute()` so scope validation, persistence, and coverage rollups remain centralized."
+          ],
+          "expectedResults": [
+            "The Slack stub uses Provena's shared connector execution seam.",
+            "The automated coverage exercises the shipped Slack stub, not only a local test double.",
+            "Concrete connector behavior reuses existing validation and persistence logic."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]",
+            "feature regression: execution seam reuse"
+          ]
+        },
+        {
+          "id": "PROVENA-008-T03",
+          "title": "Slack stub execution writes concrete Slack source inventory through the existing source APIs",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "The final implementation exposes deterministic Slack stub behavior that automated tests can execute without real Slack credentials or network access.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify a saved connector with `provider: \"slack\"` and a representative `remote_workspace_id` can execute the shipped Slack stub.",
+            "Verify the stub emits at least one `ConnectorSourceRecord` with matching connector and tenant scope plus Slack-flavored source data, such as a channel or conversation `source_type`, a Slack remote source id, display name, and a representative path like `/channels/...`.",
+            "Verify the written sources are readable through `GET /v1/integrations/connectors/{connector_id}/sources` and that connector readback or list filters can still isolate the `slack` provider."
+          ],
+          "expectedResults": [
+            "The first concrete connector writes real source inventory through the existing batch-write and readback surfaces.",
+            "Emitted source records are scoped to the correct connector and tenant and look like Slack inventory instead of generic placeholders.",
+            "No external Slack dependency is required for automated coverage."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-008-T04",
+          "title": "Slack stub execution records a sync-job ledger entry with coherent Slack run metadata",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "Dedicated Slack stub coverage persists at least one successful run without external connector credentials.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify Slack stub execution produces a persisted `SyncJob` for the same connector and tenant as the written sources.",
+            "Verify job status, job type, cursor or checkpoint, and `stats` show concrete Slack execution details or result counts instead of only the generic `scheduled_only` placeholder path.",
+            "Verify source writes and sync-job writes stay coherent in the existing readback surfaces, including `GET /v1/integrations/connectors/{connector_id}/sync-jobs` and `GET /v1/integrations/coverage`."
+          ],
+          "expectedResults": [
+            "Slack execution creates a sync-job ledger entry through the existing sync-job model.",
+            "The job metadata is concrete enough to distinguish a real Slack stub run from the default queued-only scheduler placeholder.",
+            "Coverage rollups remain coherent after the stub writes sources and a sync job."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[2]",
+            "sentryChecks[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-008-T05",
+          "title": "Slack provider routing remains reusable by the scheduler path and does not introduce admin or tenant bypasses",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "If the final implementation uses the scheduler path to exercise the Slack stub, a deterministic tick fixture exists; otherwise the final design still exposes the shipped stub through a reusable registration seam for `ConnectorSchedulerService`.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify at least one test proves a `slack` connector can be selected by provider routing without duplicating connector logic in the scheduler or route layer.",
+            "If scheduler coverage invokes the Slack stub, verify the resulting scheduled outcome uses the shipped Slack stub rather than the generic `ScheduledSyncJobWorker`; otherwise verify manual review shows the same shipped stub can be registered with `ConnectorSchedulerService` for future cadence-driven execution.",
+            "Verify no new public route, admin bypass, or tenant-mismatch bypass appears in the Slack-specific path."
+          ],
+          "expectedResults": [
+            "The Slack stub is reusable by the existing provider-routing and scheduler seam.",
+            "Slack-specific execution does not fork the routing or auth model.",
+            "Connected-mode scheduling remains able to adopt the first concrete connector without reworking the execution contract."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "feature regression: scheduler/provider reuse",
+            "feature regression: routing and access-control continuity"
+          ]
+        },
+        {
+          "id": "PROVENA-008-T06",
+          "title": "Dedicated Slack stub coverage exists and the connected-mode regression suite stays green",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify at least one collected or reviewed test explicitly targets the shipped Slack stub module or its provider wiring, not only the pre-existing generic worker or scheduler tests.",
+            "Verify the pre-existing connector worker, scheduler, admin access, and integration coverage regression tests still pass alongside the new Slack coverage."
+          ],
+          "expectedResults": [
+            "Dedicated automated coverage exists for the first concrete Slack connector stub.",
+            "`python -m pytest tests/test_main.py -q` exits with code 0.",
+            "Adding the Slack stub does not regress earlier connected-mode coverage."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "verificationCommands[0]",
+            "expectedBehaviors[3]"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-009",
+      "epicId": "EPIC-CONNECTED",
+      "featureId": "FEATURE-PERMISSIONS-FRESHNESS",
+      "title": "Enforce source permission grants during retrieval eligibility",
+      "persona": "Security-conscious enterprise admin",
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-009"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "No Provena-owned Sentry query is available on this host; once runtime telemetry exists, watch `/v1/memories/search` and `GET /v1/memories/{id}` for new authorization-denied or unexpected not-found spikes after permission-aware retrieval ships.",
+          "Watch for retrieval leakage symptoms after connector syncs: successful search or direct-read responses for principals that have no matching `source_permission_grants`, especially in tenants with active Slack or future connected providers.",
+          "Watch for over-filtering symptoms after grant updates, such as sudden drops in search-result counts or context recall for entitled principals immediately after `source_permission_grants_saved` or connector sync-job completion."
+        ]
+      },
+      "executionNotes": [
+        "[2026-04-15T13:38:04Z] Tester execution validated T01-T08. Manual review confirmed the shared source-grant seam in `app/store.py`, `app/main.py`, `intelligence/app/main.py`, and `intelligence/app/read_pipeline.py`; `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -vv -k \"connected_source or search_includes_related_memories\"` passed all five permission-focused retrieval cases; `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` reported `17 passed`; and `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/run_e2e.py` stayed green with workspace-local npm, Go, and temp caches while the auth-enabled gateway proof kept blocked connected memories out of search and direct get. Sentry runtime verification remains pending because credentials are unavailable."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-009-T01",
+          "title": "Permission-aware eligibility is wired into the shared read path instead of a search-only special case",
+          "level": "unit",
+          "automation": "manual",
+          "preconditions": [
+            "Review the final retrieval changes alongside `services/provena/app/main.py`, `services/provena/app/store.py`, `services/provena/app/models.py`, and any new helper module introduced for retrieval eligibility.",
+            "Baseline before this story: `/v1/memories/search` and `GET /v1/memories/{memory_id}` only enforce `MemoryRecord.acl` through `ProvenaStore._can_access`, while connected `source_permission_grants` are stored and counted but do not yet gate retrieval."
+          ],
+          "steps": [
+            "Verify `/v1/memories/search` and `GET /v1/memories/{memory_id}` both reach the same source-grant eligibility check, rather than duplicating logic in only one route handler.",
+            "Verify related-memory expansion still reuses the same path through `get_memory()` or an equivalent shared helper so unauthorized linked memories cannot leak through `related_memories`.",
+            "Verify the final implementation uses request principal context from `X-Provena-Principal-Id` and `X-Provena-Groups`, plus cited `source_references` or `memory_sources` and saved `source_permission_grants`, instead of copying grants into a second ad hoc ACL surface or adding a new public sync-write route."
+          ],
+          "expectedResults": [
+            "One shared retrieval seam governs primary search hits, direct reads, and related-memory expansion.",
+            "Connected source grants are part of retrieval eligibility for source-backed memories.",
+            "The change does not depend on a new route-only bypass or a duplicate permission model outside the existing connected-memory plane."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "problemStatement",
+            "feature regression: shared retrieval seam"
+          ]
+        },
+        {
+          "id": "PROVENA-009-T02",
+          "title": "Direct user grants control whether source-backed memories appear in search results",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "The final automated coverage seeds at least one connector, source inventory, and two otherwise-searchable memories in the same tenant and scope whose `source_references` point at distinct connected source ids.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify one source-backed memory has a matching `SourcePermissionGrant` for `principal_type=user`, `principal_id=pm-1`, while the comparison memory has no matching grant for that principal.",
+            "If the final implementation resolves user grants through `PrincipalMapping` records instead of matching the local principal id directly, verify the fixture includes that mapping and still grants retrieval for request principal `pm-1` through the documented resolution path.",
+            "Verify search as a non-admin requesting principal with `X-Provena-Principal-Id: pm-1` returns the granted memory and omits the ungranted one.",
+            "Verify the same query as another principal without the matching grant does not receive the protected memory, even if query, scope, and ranking inputs would otherwise match.",
+            "Verify a non-admin request that omits both `X-Provena-Principal-Id` and `X-Provena-Groups` does not fall back to an allow-all path for connected source-backed memories."
+          ],
+          "expectedResults": [
+            "A direct user grant makes the matching source-backed memory eligible for retrieval.",
+            "A missing or mismatched user grant keeps the connected memory out of search results.",
+            "The chosen local-versus-remote principal matching semantics are explicit and covered by the automated fixture.",
+            "Missing principal context does not bypass connected source-grant enforcement for non-admin retrieval.",
+            "Eligibility wins over scoring: unauthorized memories never appear solely because they rank highly."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-009-T03",
+          "title": "Group grants and higher-than-view permission levels still satisfy retrieval eligibility",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "The final automated coverage persists at least one source grant with `principal_type=group` and a non-`view` permission level such as `edit` or `owner`.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify a requesting principal with `X-Provena-Groups` containing the granted group can retrieve the connected memory even when there is no direct user grant for that principal.",
+            "Verify the same principal without the granted group membership, or with only unrelated groups, does not receive the memory.",
+            "Verify the retrieval logic treats `comment`, `edit`, or `owner` as at-least-readable access for eligibility instead of only allowing the exact `view` value."
+          ],
+          "expectedResults": [
+            "Group-based grants are honored through `X-Provena-Groups`.",
+            "Higher permission levels that imply read access still make a source-backed memory eligible.",
+            "Removing the matching group context removes eligibility again."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "feature regression: group grant compatibility"
+          ]
+        },
+        {
+          "id": "PROVENA-009-T04",
+          "title": "Source grants narrow connected retrieval without widening beyond memory ACLs or hiding unconnected memories",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "The final test fixture can create both ACL-restricted connected memories and ordinary memories that have no connected `source_references`.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify a principal that has a matching source grant but is excluded by the memory's explicit ACL still cannot retrieve that memory through search or direct get.",
+            "Verify a comparable memory with no connected `source_references` remains retrievable for an otherwise-entitled principal under the pre-existing scope and ACL rules.",
+            "Verify the same retrieval test still passes when the tenant also has connected grants present, proving the new enforcement does not accidentally over-filter all memories."
+          ],
+          "expectedResults": [
+            "Source grants do not widen access beyond Provena's existing memory ACL model.",
+            "Local or legacy memories without connected source references remain visible when the requesting principal already passed the old access rules.",
+            "The new permission gate narrows connected retrieval instead of replacing the original ACL and scope logic."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "feature regression: ACL continuity",
+            "feature regression: legacy memory continuity"
+          ]
+        },
+        {
+          "id": "PROVENA-009-T05",
+          "title": "Mixed-source, direct-read, and related-memory paths do not leak partially unauthorized context",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "The final automated coverage can create a memory that cites multiple connected sources and can create at least one relation between memories.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify a memory that cites both an allowed connected source and a second disallowed or ungranted connected source does not become eligible for a principal that lacks access to the full cited context.",
+            "Verify `GET /v1/memories/{memory_id}` for a protected connected memory returns the same deny/not-found behavior as search for an unauthorized principal.",
+            "Verify `related_memories` on an otherwise-allowed search result omits any linked memory whose connected source grants fail for the requesting principal."
+          ],
+          "expectedResults": [
+            "Partially granted source sets do not leak a mixed-source memory.",
+            "Direct reads and search share the same deny behavior for protected connected memories.",
+            "Related-memory expansion does not bypass the new permission-aware eligibility rules."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "feature regression: related-memory leakage prevention"
+          ]
+        },
+        {
+          "id": "PROVENA-009-T06",
+          "title": "Tenant and source-join boundaries prevent foreign grants or colliding source ids from unlocking memories",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "The final coverage can seed at least two tenants or otherwise create a grant record that should not apply to the requesting tenant's memory.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify a grant saved under another tenant cannot make a memory in the current tenant eligible, even when the same principal id and source id string are reused.",
+            "If the final implementation supports connector-local source ids, verify a grant tied to the wrong connector cannot unlock a memory that cites a source id from a different connector context.",
+            "Verify the automated assertions make the tenant-scoped or connector-scoped join rule explicit so future connector stories cannot accidentally weaken it."
+          ],
+          "expectedResults": [
+            "Source grant eligibility stays tenant-scoped and cannot be satisfied by foreign-tenant data.",
+            "Source-identity joins are precise enough to avoid accidental authorization from colliding ids.",
+            "Connected retrieval does not introduce a cross-tenant leakage seam."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "feature regression: tenant and source isolation"
+          ]
+        },
+        {
+          "id": "PROVENA-009-T07",
+          "title": "Dedicated API coverage exists for permission-aware retrieval and keeps the current regression suite green",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify at least one collected test explicitly targets permission-aware retrieval, using request principal headers and connected source grants rather than only the existing integration-plane write routes.",
+            "Verify the same test file still keeps the pre-existing search, related-memory, integration-plane, scheduler, and Slack connector regressions green after the permission gate lands."
+          ],
+          "expectedResults": [
+            "Dedicated automated API coverage exists for the new retrieval-eligibility behavior.",
+            "`python -m pytest tests/test_main.py -q` exits with code 0.",
+            "The permission-aware retrieval change does not regress the current Provena API suite."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "verificationCommands[0]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-009-T08",
+          "title": "Polyglot end-to-end verification remains green and proves gateway retrieval honors source grants",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "On this Windows host, prefer `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/run_e2e.py` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python scripts/run_e2e.py`.",
+            "Verify the polyglot portion of the harness seeds connected source inventory, source permission grants, and at least one memory whose `source_references` point at those connected source ids.",
+            "Verify the gateway-to-intelligence-to-store search path forwards request principal and group context all the way into the final retrieval-eligibility check instead of dropping that context after the gateway.",
+            "Verify the harness performs a granted and denied retrieval through the gateway using request principal headers, proving the new eligibility behavior outside the in-process FastAPI test client.",
+            "Verify the rest of the standalone and polyglot regression path stays green, including queue, lifecycle, SDK smoke, coverage, and any existing connected-mode checks."
+          ],
+          "expectedResults": [
+            "The verification command exits with code 0.",
+            "Gateway-based polyglot retrieval honors source permission grants for the requesting principal.",
+            "Permission-aware retrieval does not break the existing end-to-end verification path."
+          ],
+          "commands": [
+            "python scripts/run_e2e.py"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "verificationCommands[1]",
+            "expectedBehaviors[2]"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-010",
+      "epicId": "EPIC-CONNECTED",
+      "featureId": "FEATURE-PERMISSIONS-FRESHNESS",
+      "title": "Expose freshness SLA breaches in integration coverage",
+      "persona": "Operations lead responsible for context freshness",
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-010"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "No Provena-owned Sentry query is available on this host; once runtime telemetry exists, watch `/v1/integrations/coverage` for new 5xx or latency spikes after the freshness-breach contract ships.",
+          "Watch for abrupt spikes in the new freshness-breach signal immediately after scheduler ticks or connector sync jobs, especially for Slack-backed tenants, because that pattern could indicate deadline-calculation regressions as easily as real source decay.",
+          "Watch for false-negative symptoms after rollout: tenants whose connector `last_synced_at` or `sources_stale` age keeps rising while the new coverage freshness-breach signal stays flat or empty."
+        ]
+      },
+      "executionNotes": [
+        "[2026-04-15T14:01:50Z] TESTER-EXECUTION green: T01-T06 passed. Manual review confirmed `/v1/integrations/coverage` still returns the shared `IntegrationCoverageSummary` from `app/models.py`, `app/main.py`, and `app/store.py`, with `sources_past_freshness_sla` computed in the existing aggregation from source `stale_after` first and connector `last_synced_at + freshness_sla_seconds` as the fallback. `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -vv -k \"integration_coverage\"` passed both dedicated freshness tests, proving stale-only versus overdue-SLA behavior plus tenant-scoped and null-safe handling; `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` then exited 0 with `19 passed`, keeping the broader API regressions green. `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/export_openapi.py` exited 0 and `services/provena/openapi.json` still exposes `/v1/integrations/coverage` through `IntegrationCoverageSummary`, including the machine-readable `sources_past_freshness_sla` field. The generic `python` launcher remains blocked on this Windows host, pytest emitted the existing non-blocking `.pytest_cache` ACL warning plus a `RequestsDependencyWarning`, and Sentry runtime verification remains pending because credentials are unavailable."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-010-T01",
+          "title": "Coverage adds an explicit freshness-SLA breach signal at the shared summary seam",
+          "level": "unit",
+          "automation": "manual",
+          "preconditions": [
+            "Review the final coverage changes alongside `services/provena/app/models.py`, `services/provena/app/store.py`, `services/provena/app/main.py`, and `services/provena/openapi.json` if the export is checked in.",
+            "Baseline before this story: `IntegrationCoverageSummary` only exposes connector/source totals, stale/error counts, `last_synced_at`, and `missing_foundations`, while connector and source records already carry freshness metadata through `freshness_sla_seconds`, `last_synced_at`, and `stale_after`."
+          ],
+          "steps": [
+            "Verify `GET /v1/integrations/coverage` still returns the shared summary model from `app/models.py` instead of a route-local dict or one-off response shape.",
+            "Verify the model now includes at least one explicit field or structured subsection dedicated to freshness SLA breach state, distinct from the pre-existing `sources_stale`, `sources_error`, and `missing_foundations` fields.",
+            "Verify the store-side aggregation derives the breach signal from existing connector or source freshness metadata rather than a second manually maintained admin-write surface or a new public route.",
+            "Verify the same shared aggregation contract is what feeds the exported OpenAPI schema, so standalone runtime responses and `openapi.json` cannot drift."
+          ],
+          "expectedResults": [
+            "The shared coverage summary exposes an explicit freshness-breach signal.",
+            "The new signal is not just a renamed copy of `sources_stale`.",
+            "Freshness breach evaluation is implemented in the existing shared coverage seam rather than a route-only workaround."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "problemStatement",
+            "feature regression: shared coverage summary seam"
+          ]
+        },
+        {
+          "id": "PROVENA-010-T02",
+          "title": "A stale-only fixture remains visible without falsely tripping the new breach signal",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "The final automated coverage seeds at least one source that exercises pre-existing staleness reporting without crossing the new SLA-breach threshold, so the test can prove stale-only behavior and breach behavior are not aliases. This may be a source with `status=stale` but a future breach deadline, or an equivalent fixture that keeps the new breach signal negative while `sources_stale` stays non-zero.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify the coverage response for the stale-only fixture still reports the source through the existing staleness fields such as `sources_stale`.",
+            "Verify the new freshness-breach field or subsection remains false, zero, or empty for that fixture.",
+            "Verify existing counts such as `sources_total`, `sources_error`, `missing_foundations`, and `last_synced_at` remain coherent after the new signal is added."
+          ],
+          "expectedResults": [
+            "A stale-only condition remains visible to operators.",
+            "The new freshness-breach signal does not falsely trip for the stale-only fixture.",
+            "The pre-existing coverage summary fields remain backward-compatible."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-010-T03",
+          "title": "Sources past their declared freshness SLA trip the breach signal even when status alone would not prove it",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "The final automated coverage seeds at least one connector or source whose declared freshness deadline has passed, ideally with a fixture that would have appeared healthy or merely indexed before the new aggregation so the test proves the breach signal is computed from freshness metadata instead of copied from `status` alone.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify the overdue connector or source causes the new freshness-breach signal to become positive for that tenant's coverage response.",
+            "If the final contract exposes breach counts, connector ids, source ids, or breach timestamps, verify those values match the seeded overdue fixture cardinality and identity.",
+            "Verify the pre-existing `sources_stale` and `sources_error` fields keep their own semantics and do not have to equal the new breach signal."
+          ],
+          "expectedResults": [
+            "A source past its declared freshness SLA is surfaced explicitly in coverage.",
+            "The breach signal is computed from freshness metadata instead of relying only on source status labels.",
+            "Operators can distinguish true SLA breaches from other stale or error conditions."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-010-T04",
+          "title": "Freshness-breach aggregation stays tenant-scoped and null-safe",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "The final automated coverage can seed at least two tenants or connector contexts plus at least one source that lacks enough freshness metadata to evaluate a breach cleanly, such as a null `last_synced_at` or `stale_after`.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify an overdue source in another tenant or connector context does not affect the current tenant's coverage response.",
+            "Verify a source with incomplete freshness metadata does not crash the endpoint and is handled according to the documented contract, instead of defaulting to an unearned breach.",
+            "Verify `missing_foundations` remains focused on connector, inventory, mapping, and grant prerequisites rather than being overloaded with freshness-breach state."
+          ],
+          "expectedResults": [
+            "Freshness-breach aggregation is tenant-safe.",
+            "Incomplete freshness metadata does not produce 500s or false-positive breaches.",
+            "The new breach signal does not corrupt the existing coverage summary semantics."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "feature regression: tenant-safe freshness math",
+            "feature regression: null freshness handling"
+          ]
+        },
+        {
+          "id": "PROVENA-010-T05",
+          "title": "Dedicated coverage-endpoint freshness tests exist and keep the current API regression suite green",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "On this Windows host, use `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python -m pytest tests/test_main.py -q`.",
+            "Verify at least one collected test explicitly targets `/v1/integrations/coverage` freshness behavior with both a stale-only fixture and an overdue-SLA fixture, rather than relying only on the pre-existing coverage summary assertions.",
+            "Verify the same test file still keeps the connector worker, scheduler, Slack connector, permission-aware retrieval, and integration-plane regression cases green after the coverage contract expands."
+          ],
+          "expectedResults": [
+            "Dedicated automated API coverage exists for the freshness-breach behavior.",
+            "`python -m pytest tests/test_main.py -q` exits with code 0.",
+            "The new coverage contract does not regress the current Provena API suite."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "verificationCommands[0]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-010-T06",
+          "title": "OpenAPI export reflects the coverage freshness-breach contract",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "On this Windows host, prefer `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/export_openapi.py` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python scripts/export_openapi.py`.",
+            "Verify `services/provena/openapi.json` still exposes `/v1/integrations/coverage` through `IntegrationCoverageSummary` or a clearly named successor schema instead of an undocumented ad hoc shape.",
+            "Verify the exported schema includes the new freshness-breach field or subsection with machine-readable type information and optionality, not only prose documentation or example payloads.",
+            "Verify the exported schema still includes the pre-existing coverage fields so external consumers gain the new signal without losing current totals and status counts."
+          ],
+          "expectedResults": [
+            "The OpenAPI export command exits with code 0.",
+            "The exported schema reflects the new coverage freshness-breach contract.",
+            "OpenAPI stays aligned with the runtime summary shape used by `/v1/integrations/coverage`."
+          ],
+          "commands": [
+            "python scripts/export_openapi.py"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "verificationCommands[1]",
+            "expectedBehaviors[2]"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-011",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureId": "FEATURE-RELEASE-OPS",
+      "title": "Add a Provena release checklist for images, SDKs, and OpenAPI",
+      "persona": "Release manager preparing a Provena release",
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-011"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "No Provena-owned Sentry query is available on this host; once release telemetry exists, watch startup failures plus new 5xx or timeout spikes across the freshly published `gateway`, `store`, `intelligence`, `queue`, `lifecycle`, `mcp`, and `orchestration` services immediately after an image rollout.",
+          "Watch `/healthz`, `/v1/cold-start`, `/v1/memories`, and `/v1/integrations/coverage` for error or latency regressions after a release that republishes SDKs or refreshes `openapi.json`, because those surfaces are where new consumers will hit schema or auth drift first.",
+          "Watch for downstream client breakage after SDK-facing release steps change, especially auth, validation, or schema-mismatch spikes from TypeScript or Python SDK traffic and any CI or startup failures triggered by Go or Rust consumer upgrades."
+        ]
+      },
+      "executionNotes": [
+        "[2026-04-15T14:30:43Z] TESTER-EXECUTION green: T01-T07 passed. Manual review confirmed `services/provena/RELEASE_CHECKLIST.md` is discoverable from `README.md` and `DEPLOYMENT.md`, matches the shipped image inventory from `docker-compose.yml` plus the four Dockerfiles, gives an honest TypeScript and Python publishable matrix with Go and Rust kept smoke-only, and documents concrete post-release watchpoints without inventing unavailable Sentry data. `docker compose config -q`, the direct Python 3.12 `scripts/export_openapi.py` path, `npx -y -p typescript tsc -p .`, `npm pack`, and the direct Python 3.12 `scripts/run_e2e.py` gate all passed; `python -m build` reproduced the documented Windows temp-directory ACL failure, after which `setup.py sdist bdist_wheel` passed and the Python sdist and wheel plus the TypeScript tarball contained the expected packaged artifacts. The generic `python` launcher remains blocked on this Windows host, `setup.py` emitted its expected deprecation warning, the Rust SDK smoke kept the expected Windows skip inside `run_e2e.py`, and Sentry runtime verification remains pending because credentials are unavailable."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-011-T01",
+          "title": "A release checklist exists inside `services/provena` and is easy for a release manager to find",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Review the final checklist artifact added under `services/provena` and any link or navigation update in `services/provena/README.md` or `services/provena/DEPLOYMENT.md`."
+          ],
+          "steps": [
+            "Verify a dedicated release checklist doc or clearly named checklist section exists inside `services/provena` rather than only in loop notes or commit messages.",
+            "Verify the checklist is discoverable from the shipped Provena docs, or is placed in an obvious top-level location that a release manager would inspect first.",
+            "Verify the checklist scope explicitly calls out image publication, SDK packaging, OpenAPI export, and verification expectations as part of one release workflow."
+          ],
+          "expectedResults": [
+            "A release checklist exists inside the Provena product boundary.",
+            "A release manager can find it without reverse-engineering implementation files or loop state.",
+            "The checklist scope matches the PM story instead of covering only one artifact type."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-011-T02",
+          "title": "Image publication steps match the shipped Docker build contexts and service topology",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Compare the final checklist against `services/provena/docker-compose.yml`, `services/provena/Dockerfile.store`, `services/provena/intelligence/Dockerfile`, `services/provena/orchestration/Dockerfile`, and `services/provena/control-plane/Dockerfile`."
+          ],
+          "steps": [
+            "Verify the checklist names the real image release surface for Provena instead of inventing nonexistent Dockerfiles or skipping a shipped build context.",
+            "Verify the control-plane release instructions are honest about the single `control-plane/Dockerfile` plus `CMD` variants for `gateway`, `mcp`, `queue`, and `lifecycle`, instead of implying a different per-service build setup than the repo actually ships.",
+            "Verify the checklist keeps standalone and polyglot image boundaries coherent with the current topology from `docker-compose.yml`."
+          ],
+          "expectedResults": [
+            "The image section covers the actual Provena release artifacts.",
+            "Release guidance for control-plane images matches the shipped multi-command Dockerfile and polyglot service graph.",
+            "The checklist does not omit or fabricate container release surfaces."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]",
+            "feature regression: container image inventory"
+          ]
+        },
+        {
+          "id": "PROVENA-011-T03",
+          "title": "The checklist gives a complete and honest SDK release matrix",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Compare the final checklist against `services/provena/sdk/typescript/package.json`, `services/provena/sdk/python/pyproject.toml`, `services/provena/sdk/go/README.md`, and `services/provena/sdk/rust/Cargo.toml`."
+          ],
+          "steps": [
+            "Verify the checklist explicitly accounts for each shipped SDK directory under `services/provena/sdk` instead of silently omitting one.",
+            "Verify the checklist identifies the publishable TypeScript and Python package surfaces using the real package names and artifact expectations from the repo.",
+            "Verify the checklist treats Go and Rust honestly according to current repo state, either by documenting their release or smoke workflow explicitly or by noting that they are not yet packaged like the publishable SDKs.",
+            "Verify the checklist does not promise a registry publication flow, versioning policy, or install path that the current repo cannot support."
+          ],
+          "expectedResults": [
+            "A release manager can tell which SDKs are publishable, smoke-only, or caveat-bound today.",
+            "The checklist does not overstate the maturity of Go or Rust distribution surfaces.",
+            "SDK release scope is explicit instead of implicit."
+          ],
+          "commands": [],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "problemStatement",
+            "feature regression: sdk surface honesty"
+          ]
+        },
+        {
+          "id": "PROVENA-011-T04",
+          "title": "SDK packaging and verification commands map to the current repo workflows",
+          "level": "sdk",
+          "automation": "manual-command",
+          "preconditions": [
+            "Review the final checklist alongside `services/provena/scripts/run_e2e.py`, `services/provena/sdk/python/README.md`, `services/provena/sdk/go/README.md`, `services/provena/sdk/typescript/package.json`, and `services/provena/sdk/rust/examples/smoke.rs`.",
+            "On this Windows host, the generic `python` launcher may be blocked by access-control policy and local Rust smoke may be skipped by toolchain policy, so verification should tolerate the same host caveats already documented elsewhere in the loop."
+          ],
+          "steps": [
+            "Verify the checklist includes concrete packaging or smoke commands for the SDK surfaces it claims are part of release readiness, such as TypeScript build or pack, Python build, Go smoke, Rust smoke, or the centralized `python scripts/run_e2e.py` gate.",
+            "Verify those commands map to real scripts, manifests, or examples already present in the repo, instead of inventing new release automation.",
+            "If the checklist centralizes SDK verification through `python scripts/run_e2e.py`, verify it still makes clear which SDK smokes that command exercises so a release manager understands the coverage."
+          ],
+          "expectedResults": [
+            "The SDK section is actionable and backed by real repo commands.",
+            "Release managers can follow the documented packaging or smoke flow without reverse-engineering each SDK directory.",
+            "The checklist does not reference nonexistent scripts or unshipped package automation."
+          ],
+          "commands": [
+            "npx -y -p typescript tsc -p .",
+            "npm pack",
+            "python -m build",
+            "go run ./examples/smoke",
+            "cargo run --example smoke"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]",
+            "feature regression: actionable SDK commands"
+          ]
+        },
+        {
+          "id": "PROVENA-011-T05",
+          "title": "OpenAPI export is an explicit release step tied to the shipped contract artifact",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Run from `services/provena`.",
+            "On this Windows host, prefer `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/export_openapi.py` if the generic `python` launcher is blocked by access-control policy."
+          ],
+          "steps": [
+            "Run `python scripts/export_openapi.py`.",
+            "Verify the checklist explicitly instructs release managers to export the schema through `scripts/export_openapi.py` and ties that step to the checked-in `services/provena/openapi.json` artifact.",
+            "Verify the checklist positions OpenAPI export as part of release readiness rather than an optional local convenience command."
+          ],
+          "expectedResults": [
+            "The release checklist includes the shipped OpenAPI export command.",
+            "The checklist points at the real `openapi.json` artifact produced by that command.",
+            "OpenAPI export is treated as a required release step."
+          ],
+          "commands": [
+            "python scripts/export_openapi.py"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "verificationCommands[0]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-011-T06",
+          "title": "Verification commands are standardized across release surfaces instead of left implicit",
+          "level": "integration",
+          "automation": "manual-command",
+          "preconditions": [
+            "Review the final checklist alongside `services/provena/Makefile`, `services/provena/README.md`, `services/provena/DEPLOYMENT.md`, and `services/provena/scripts/run_e2e.py`.",
+            "On this Windows host, `python scripts/run_e2e.py` may require the direct Python 3.12 interpreter plus workspace-local npm, Go, and temp caches, so host-specific execution caveats should be treated as environmental rather than checklist drift."
+          ],
+          "steps": [
+            "Verify the checklist names the standard verification commands a release manager should run, not just `python scripts/export_openapi.py` in isolation.",
+            "Verify the verification section includes the current cross-surface regression gate `python scripts/run_e2e.py` and an image or deployment validation step such as `docker compose config -q`, or another real shipped equivalent if implementation chooses a different phrasing.",
+            "Verify any additional per-SDK commands in the checklist still line up with the repo's existing smoke or build workflows."
+          ],
+          "expectedResults": [
+            "Release verification is explicit and repeatable instead of implicit.",
+            "The checklist preserves the current cross-service and SDK regression gate expectations.",
+            "The release manager is not left to infer how to validate image, SDK, and schema changes."
+          ],
+          "commands": [
+            "python scripts/run_e2e.py",
+            "docker compose config -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]",
+            "feature regression: standardized release verification"
+          ]
+        },
+        {
+          "id": "PROVENA-011-T07",
+          "title": "The checklist documents immediate post-release runtime checks without inventing unavailable Sentry data",
+          "level": "docs",
+          "automation": "manual",
+          "preconditions": [
+            "Compare the final checklist against the immediate runtime checks already documented in `services/provena/DEPLOYMENT.md` and the Sentry expectation from the PM story."
+          ],
+          "steps": [
+            "Verify the checklist tells operators what to watch immediately after a release, using supported surfaces such as `docker compose ps`, `/healthz`, `/v1/cold-start`, auth-failure trends, or API error spikes.",
+            "If the checklist mentions Sentry, verify it does so as a class of dashboards or queries to watch after release rather than inventing issue ids, project names, or concrete telemetry that is unavailable in this repo.",
+            "Verify the runtime checks cover the main release risks for this story: image rollout failures, SDK-consumer breakage, and schema or route regressions after `openapi.json` refresh."
+          ],
+          "expectedResults": [
+            "The release checklist includes concrete post-release watchpoints.",
+            "Runtime monitoring guidance is specific enough to use without inventing Sentry issue data.",
+            "The checklist closes the loop from artifact publication to operational verification."
+          ],
+          "commands": [],
+          "covers": [
+            "sentryChecks[0]",
+            "feature regression: post-release runtime handoff"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,808 @@
+{
+  "product": "Provena",
+  "mode": "codex-loop",
+  "branchName": "codex/provena-product-loop",
+  "objective": "Turn Provena into a production-ready, self-hostable, embeddable governed memory plane that can keep iterating through PM-authored stories and QA-authored test coverage until explicitly stopped.",
+  "updatedAt": "2026-04-15T18:28:18Z",
+  "sentry": {
+    "enabledIfEnvPresent": true,
+    "requiredEnv": "SENTRY_AUTH_TOKEN",
+    "purpose": "QA should use Sentry to define or validate post-change runtime checks when credentials are available."
+  },
+  "globalQualityGates": [
+    "python scripts/run_e2e.py"
+  ],
+  "epics": [
+    {
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "epicDescription": "Make Provena easy to host individually, distribute to other projects, and operate safely in production.",
+      "successMetrics": [
+        "A new project can self-host Provena with documented deployment paths.",
+        "SDK consumers can understand how to install and use Provena from outside this repo.",
+        "Production safety defaults are explicit."
+      ]
+    },
+    {
+      "epicId": "EPIC-CONNECTED",
+      "epicTitle": "Connected Memory Plane",
+      "epicDescription": "Expand Provena from a memory service into a connected enterprise context plane with sync, permissions, freshness, and governance.",
+      "successMetrics": [
+        "Connector execution paths exist beyond direct API writes.",
+        "Permission and freshness state influence retrieval and coverage.",
+        "Connected-mode work is represented by PM stories and QA coverage."
+      ]
+    }
+  ],
+  "features": [
+    {
+      "featureId": "FEATURE-DEPLOYMENT",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "Deployment and production defaults",
+      "featureDescription": "Provena should be hostable as a standalone or polyglot service with clear, production-safe configuration.",
+      "expectedBehaviors": [
+        "Operators can validate compose or service config without hidden assumptions.",
+        "Production auth expectations are documented.",
+        "Another team can follow the docs and understand the hosting modes."
+      ]
+    },
+    {
+      "featureId": "FEATURE-SDK-DISTRIBUTION",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "External SDK consumption",
+      "featureDescription": "External teams should be able to evaluate and consume Provena SDKs with minimal repo knowledge.",
+      "expectedBehaviors": [
+        "SDK packaging metadata is coherent.",
+        "Usage guidance is explicit.",
+        "Smoke checks continue to pass."
+      ]
+    },
+    {
+      "featureId": "FEATURE-CONNECTOR-EXECUTION",
+      "epicId": "EPIC-CONNECTED",
+      "featureTitle": "Connector execution and scheduling",
+      "featureDescription": "Connected mode should move beyond static admin APIs into reusable connector execution and scheduled sync behavior.",
+      "expectedBehaviors": [
+        "Connectors have an execution contract.",
+        "Sync jobs can be created by scheduling paths.",
+        "At least one connector-specific stub exists."
+      ]
+    },
+    {
+      "featureId": "FEATURE-PERMISSIONS-FRESHNESS",
+      "epicId": "EPIC-CONNECTED",
+      "featureTitle": "Permission and freshness aware retrieval",
+      "featureDescription": "Connected mode should affect what context is eligible and how coverage signals operational risk.",
+      "expectedBehaviors": [
+        "Source grants influence retrieval eligibility.",
+        "Freshness breaches are visible in coverage responses.",
+        "Sentry and QA planning identify post-change operational risks."
+      ]
+    },
+    {
+      "featureId": "FEATURE-RELEASE-OPS",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "Release readiness",
+      "featureDescription": "Provena should have a repeatable release checklist across images, SDKs, schemas, and verification.",
+      "expectedBehaviors": [
+        "Release steps are explicit.",
+        "OpenAPI and image concerns are included.",
+        "Verification commands are standardized."
+      ]
+    }
+  ],
+  "userStories": [
+    {
+      "id": "PROVENA-001",
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "featureId": "FEATURE-DEPLOYMENT",
+      "featureTitle": "Deployment and production defaults",
+      "title": "Remove the obsolete Compose version key and document the production auth toggle",
+      "priority": 1,
+      "status": "blocked",
+      "passes": true,
+      "attempts": 5,
+      "qaStatus": "pending",
+      "qaAttempts": 0,
+      "persona": "Platform engineer evaluating Provena for self-hosting",
+      "userStory": "As a platform engineer, I want the Provena compose stack and docs to reflect current Docker behavior and safe auth defaults so I can host it without guesswork.",
+      "problemStatement": "The compose file still uses an obsolete version key and local-development auth assumptions are easy to misread as production defaults.",
+      "featureDescription": "Clean up the compose file and make the auth toggle explicit in docs so standalone and polyglot operators understand what is safe locally versus in production.",
+      "expectedBehaviors": [
+        "Compose validation no longer emits the obsolete version warning.",
+        "Operators are warned that disabled auth is local-only behavior.",
+        "The existing end-to-end verification path remains green."
+      ],
+      "acceptanceCriteria": [
+        "services/provena/docker-compose.yml no longer emits the obsolete version warning.",
+        "README or deploy docs explain that PROVENA_AUTH_ENABLED=false is only for local development."
+      ],
+      "verificationCommands": [
+        "docker compose config -q",
+        "python scripts/run_e2e.py"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": false,
+        "integration": true,
+        "ui": false
+      },
+      "sentryChecks": [
+        "Verify no startup-error spike occurs after deployment config changes.",
+        "Watch gateway and lifecycle boot failures after config updates."
+      ],
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-001"
+      ],
+      "notes": "Recovered from interrupted engineer iteration. Fix cycles added compose host-port overrides, hardened Windows verifier temp paths, and now route Windows polyglot queue/MCP launches through `go run` when Application Control blocks temp-built executables.\nAutomatically blocked after 5 engineering attempts.",
+      "qaNotes": "",
+      "lastStartedAt": "2026-04-15T07:01:23Z",
+      "pmPrdAttempts": 0,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 5,
+      "pmReviewAttempts": 3,
+      "testerExecutionAttempts": 5,
+      "pmPrdNotes": "",
+      "testerPlanNotes": "Exhaustive QA planning recorded in services/provena/loop/qa_test_plan.json for compose validation, auth-toggle docs review, compose boot smoke, and end-to-end regression coverage. Sentry follow-up is marked pending because credentials are unavailable.",
+      "pmReviewNotes": "Revalidated PROVENA-001 against the PM story after the latest Windows `run_e2e.py` launcher hardening. `services/provena/docker-compose.yml` still omits the obsolete Compose `version` key, and this review reran `docker compose config -q` plus `docker compose config --services` successfully with the expected `orchestration`, `store`, `intelligence`, `queue`, `lifecycle`, `gateway`, and `mcp` services. `services/provena/README.md` still matches `services/provena/control-plane/cmd/gateway/main.go` and `services/provena/control-plane/internal/auth/auth.go` by marking `PROVENA_AUTH_ENABLED=false` as local-development-only, warning that disabled auth injects an anonymous super-admin context, requiring `PROVENA_AUTH_ENABLED=true` plus provisioned `PROVENA_API_KEYS` for production, and documenting the `*_HOST_PORT` overrides for shared hosts and CI. Independent end-to-end verification passed again under `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe` with workspace-scoped `TEMP`/`TMP`, `PROVENA_E2E_TMP_DIR`, and `npm_config_cache`; standalone and polyglot suites were green, Python/TypeScript/Go SDK smokes passed, and Rust SDK smoke emitted the expected Windows skip warning. The existing verification path remains green, so no additional engineering changes are requested. Tester execution should rerun the compose boot smoke once a Docker daemon exposing `dockerDesktopLinuxEngine` is available; Sentry follow-up remains pending because credentials are unavailable.",
+      "testerExecutionNotes": "Tester execution remains red because compose boot smoke T05 is still blocked by the local Docker environment. T01/T02 passed again via `docker compose config -q` and `docker compose config --services`; compose validation stayed warning-free and the rendered service graph still contains `store`, `orchestration`, `intelligence`, `lifecycle`, `gateway`, `mcp`, and `queue` exactly once. T03/T04 passed again because `services/provena/README.md` continues to mark `PROVENA_AUTH_ENABLED=false` as local-development-only, warns that disabled auth injects an anonymous super-admin context, requires `PROVENA_AUTH_ENABLED=true` plus provisioned `PROVENA_API_KEYS` for production, and documents `*_HOST_PORT` overrides; that guidance still matches `services/provena/control-plane/cmd/gateway/main.go` and `services/provena/control-plane/internal/auth/auth.go`. T06/T07 passed again when `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/run_e2e.py` was rerun with workspace-scoped `TEMP`/`TMP`, `PROVENA_E2E_TMP_DIR`, and `npm_config_cache`; standalone and polyglot suites completed, Python/TypeScript/Go SDK smokes passed, OpenAPI export succeeded, and Rust SDK smoke emitted the expected Windows skip warning. T05 remains blocked because `docker info`, `docker compose up --build -d`, `docker compose ps`, and `docker compose down` all fail on the missing `dockerDesktopLinuxEngine` pipe; the `up` retry still used nondefault `*_HOST_PORT` bindings, so the remaining gap is the unavailable Docker daemon rather than compose config or the occupied default port 8000 (python PID 42292). Sentry runtime verification is still pending because credentials are unavailable.\nAutomatically blocked after 5 tester execution attempts.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "blocked",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "blocked",
+      "fixRecommendations": [
+        "Start Docker Desktop or another Docker daemon that exposes the `dockerDesktopLinuxEngine` pipe, confirm `docker info` succeeds, and then rerun `docker compose up --build -d`, `docker compose ps`, and `docker compose down` from `services/provena` so T05 can verify the packaged stack boots cleanly.",
+        "If any default host ports are occupied when Docker is available, keep using the documented `*_HOST_PORT` overrides (for example `PROVENA_STORE_HOST_PORT=18000` and `PROVENA_GATEWAY_HOST_PORT=18080`) before rerunning the compose boot smoke."
+      ],
+      "lastTesterPlanStartedAt": "2026-04-15T07:17:36Z",
+      "lastEngineerStartedAt": "2026-04-15T08:38:21Z",
+      "lastPmReviewStartedAt": "2026-04-15T08:40:27Z",
+      "lastTesterExecutionStartedAt": "2026-04-15T08:44:22Z"
+    },
+    {
+      "id": "PROVENA-002",
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "featureId": "FEATURE-DEPLOYMENT",
+      "featureTitle": "Deployment and production defaults",
+      "title": "Add a Provena deployment guide for standalone and polyglot hosting",
+      "priority": 2,
+      "status": "passed",
+      "passes": true,
+      "attempts": 2,
+      "qaStatus": "pending",
+      "qaAttempts": 0,
+      "persona": "Startup engineer integrating Provena into an existing product",
+      "userStory": "As an integrating engineer, I want a clear deployment guide so I know how to run Provena in standalone or polyglot mode and consume it from another project.",
+      "problemStatement": "The current docs explain local commands but not a full hosted consumption path for another team.",
+      "featureDescription": "Produce a dedicated deployment guide that explains hosting modes, env vars, operational commands, and how external projects should call Provena.",
+      "expectedBehaviors": [
+        "A dedicated deployment guide exists under services/provena.",
+        "The guide covers standalone mode, polyglot mode, required env vars, and stop-start commands.",
+        "The guide explains how another project should consume Provena via HTTP or OpenAPI."
+      ],
+      "acceptanceCriteria": [
+        "A dedicated deployment guide exists under services/provena.",
+        "The guide covers standalone mode, polyglot mode, required env vars, and stop-start commands.",
+        "The guide explains how another project should consume Provena via HTTP/OpenAPI."
+      ],
+      "verificationCommands": [
+        "python scripts/export_openapi.py"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": false,
+        "integration": false,
+        "ui": false
+      },
+      "sentryChecks": [
+        "List the runtime checks operators should watch immediately after a fresh deployment."
+      ],
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-002"
+      ],
+      "notes": "",
+      "qaNotes": "",
+      "pmPrdAttempts": 0,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 2,
+      "pmReviewAttempts": 3,
+      "testerExecutionAttempts": 2,
+      "pmPrdNotes": "",
+      "testerPlanNotes": "Exhaustive QA planning recorded in services/provena/loop/qa_test_plan.json for deployment-guide discoverability, standalone versus polyglot instructions, lifecycle commands, and external HTTP/OpenAPI consumption guidance. Sentry follow-up is marked pending because credentials are unavailable.",
+      "pmReviewNotes": "Revalidated PROVENA-002 against the PM story after the deployment-guide fix cycle. `services/provena/DEPLOYMENT.md` now satisfies the hosted-operator and external-consumer path promised by the PRD: it is discoverable from `services/provena/README.md`, distinguishes standalone (`app.main:app` on `:8092`) from polyglot (`gateway` on `:8080` with `store`, `orchestration`, `intelligence`, `queue`, `lifecycle`, and `mcp` behind it), documents the required production auth inputs plus `*_HOST_PORT` overrides, and makes the production override explicitly operator-authored instead of implying a shipped `docker-compose.prod.yml`. The guide also explains how another project should call Provena via HTTP and OpenAPI with mode-specific base URLs, auth expectations, concrete curl examples, the `python scripts/export_openapi.py` contract path, and immediate post-deploy runtime checks. `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/export_openapi.py` passed again and rewrote `services/provena/openapi.json`; the exported schema still reports OpenAPI 3.1 `Provena` with `/healthz`, `/v1/memories`, and `/v1/integrations/coverage`. No additional engineering changes are requested. Tester execution can proceed, with the environment note that this Windows host still requires the direct Python 3.12 interpreter because the generic `python` launcher remains access-controlled. Sentry follow-up remains pending because credentials are unavailable.",
+      "testerExecutionNotes": "Tester execution is green. T01 passed because `services/provena/DEPLOYMENT.md` exists under `services/provena`, is linked from `services/provena/README.md`, and clearly frames standalone versus polyglot deployment usage. T02/T04 passed because the guide matches the shipped standalone entrypoint in `services/provena/app/main.py`, documents `PROVENA_DB_PATH`, the `uvicorn app.main:app` start command on `:8092`, concrete `/healthz` and OpenAPI verification, and a clean stop path. T03/T05/T07 passed because the polyglot section matches `services/provena/docker-compose.yml`, `services/provena/ARCHITECTURE.md`, and `services/provena/control-plane/cmd/gateway/main.go`: it names `gateway`, `store`, `intelligence`, `orchestration`, `queue`, `lifecycle`, and `mcp`, distinguishes external base URLs from internal compose URLs, requires operator-supplied production auth via `PROVENA_AUTH_ENABLED=true` plus `PROVENA_API_KEYS`, documents `*_HOST_PORT` overrides, keeps connected mode on the gateway/store HTTP surfaces, and keeps MCP optional instead of replacing HTTP/OpenAPI guidance. T06 passed when `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/export_openapi.py` rewrote `services/provena/openapi.json`; the exported schema remained OpenAPI 3.1 with title `Provena` and paths including `/healthz`, `/v1/memories`, and `/v1/integrations/coverage`. On this Windows host, the generic `python scripts/export_openapi.py` launcher path is still blocked by access-control policy, so tester execution used the direct Python 3.12 interpreter to validate the shipped export script. Sentry runtime verification remains pending because credentials are unavailable.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastTesterPlanStartedAt": "2026-04-15T08:49:59Z",
+      "lastEngineerStartedAt": "2026-04-15T09:12:48Z",
+      "lastPmReviewStartedAt": "2026-04-15T09:28:46Z",
+      "lastTesterExecutionStartedAt": "2026-04-15T09:34:01Z"
+    },
+    {
+      "id": "PROVENA-003",
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "featureId": "FEATURE-SDK-DISTRIBUTION",
+      "featureTitle": "External SDK consumption",
+      "title": "Make the TypeScript SDK publishable instead of repo-private",
+      "priority": 3,
+      "status": "passed",
+      "passes": true,
+      "attempts": 1,
+      "qaStatus": "pending",
+      "qaAttempts": 0,
+      "persona": "Frontend or Node developer integrating Provena into another project",
+      "userStory": "As a TypeScript consumer, I want package metadata that works outside this repo so I can install and evaluate the SDK cleanly.",
+      "problemStatement": "The TypeScript SDK is still marked private and does not present itself as an external package.",
+      "featureDescription": "Update the TypeScript SDK metadata to reflect external publication readiness while preserving the smoke workflow.",
+      "expectedBehaviors": [
+        "The package is no longer private.",
+        "External package metadata is coherent.",
+        "The current TypeScript smoke still passes."
+      ],
+      "acceptanceCriteria": [
+        "sdk/typescript/package.json is no longer private.",
+        "The package metadata is coherent for external publication.",
+        "The existing TypeScript smoke still passes."
+      ],
+      "verificationCommands": [
+        "npx -y -p typescript tsc -p .",
+        "node tests/smoke.mjs"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": false,
+        "integration": false,
+        "ui": false
+      },
+      "sentryChecks": [
+        "No direct Sentry check required; document that runtime failures would surface through the integrating service."
+      ],
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-003"
+      ],
+      "notes": "Run commands from services/provena/sdk/typescript.",
+      "qaNotes": "",
+      "pmPrdAttempts": 0,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 1,
+      "pmReviewAttempts": 1,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "",
+      "testerPlanNotes": "Exhaustive QA planning recorded in services/provena/loop/qa_test_plan.json for publishable manifest review, dist entrypoint validation, scratch-pack install coverage, and TypeScript build plus smoke regression coverage. Sentry follow-up is marked pending because credentials are unavailable.",
+      "pmReviewNotes": "Revalidated PROVENA-003 against the PM story and the shipped SDK artifacts. services/provena/sdk/typescript/package.json now satisfies the external-consumer packaging contract: private is false, the package publishes as @altrixy/provena-sdk@0.1.0, the description is external-facing, main, exports, and types all point at built dist artifacts, files only ships dist, publishConfig.access is public, and engines.node is >=18 which matches the SDK's global fetch usage. Independent verification passed with npx -y -p typescript tsc -p . after applying the existing workspace-scoped npm_config_cache workaround for this Windows host, npm pack (tarball contained dist/index.js, dist/index.d.ts, and package.json), a scratch npm install plus runtime import of @altrixy/provena-sdk by package name outside the repo, and node tests/smoke.mjs against a disposable standalone Provena instance on http://127.0.0.1:18092, which logged typescript-sdk-smoke: ok. The implementation matches the persona, user story, problem statement, feature description, expected behaviors, and acceptance criteria, so no additional engineering changes are requested. Tester execution can proceed. Runtime or package-resolution failures would surface in the integrating service rather than Provena-owned Sentry, and Sentry follow-up remains pending because credentials are unavailable.",
+      "testerExecutionNotes": "Tester execution is green. T01 passed because `services/provena/sdk/typescript/package.json` now presents an external package identity: `private` is `false`, the install name is `@altrixy/provena-sdk`, version `0.1.0` is set, and the description is external-facing rather than repo-private. T02 passed because `main`, `exports`, and `types` all point at real `dist/` artifacts, `files` only whitelists `dist`, and the manifest exposes no repo-internal `src/` or relative install contract. T03/T04 passed when `npx -y -p typescript tsc -p .` rebuilt `dist/index.js` and `dist/index.d.ts`, `npm pack` produced `altrixy-provena-sdk-0.1.0.tgz` containing only `dist/index.js`, `dist/index.d.ts`, and `package.json`, and a scratch project under `services/provena/loop/tmp/provena-003/scratch` installed the tarball successfully and imported `@altrixy/provena-sdk` by package name. T05 passed when a disposable standalone Provena instance was started via `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 18092` with an isolated `PROVENA_DB_PATH`, then `node tests/smoke.mjs` exited 0 against `http://127.0.0.1:18092` and logged `typescript-sdk-smoke: ok`. Sentry runtime verification remains pending because credentials are unavailable; post-release monitoring should stay on integrating-service module-resolution or startup failures plus Provena `/healthz`, `/v1/memories`, and `/v1/memories/search` error trends from SDK traffic.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastTesterPlanStartedAt": "2026-04-15T09:39:57Z",
+      "lastEngineerStartedAt": "2026-04-15T09:45:27Z",
+      "lastPmReviewStartedAt": "2026-04-15T09:54:14Z",
+      "lastTesterExecutionStartedAt": "2026-04-15T10:04:45Z"
+    },
+    {
+      "id": "PROVENA-004",
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "featureId": "FEATURE-SDK-DISTRIBUTION",
+      "featureTitle": "External SDK consumption",
+      "title": "Add publish-ready metadata and usage docs for the Python SDK",
+      "priority": 4,
+      "status": "passed",
+      "passes": true,
+      "attempts": 2,
+      "qaStatus": "pending",
+      "qaAttempts": 0,
+      "persona": "Python backend engineer integrating Provena",
+      "userStory": "As a Python consumer, I want packaging metadata and usage guidance so I can install the SDK and validate it against a running Provena instance.",
+      "problemStatement": "The Python SDK exists but external-consumer guidance is thin.",
+      "featureDescription": "Improve Python SDK packaging metadata and add concise usage documentation for external consumers.",
+      "expectedBehaviors": [
+        "Packaging metadata is suitable for external use.",
+        "A short usage guide exists.",
+        "The Python smoke still passes."
+      ],
+      "acceptanceCriteria": [
+        "sdk/python has packaging metadata suitable for external use.",
+        "A short README or usage section exists for installation and smoke usage.",
+        "The Python SDK smoke still passes."
+      ],
+      "verificationCommands": [
+        "python tests/smoke.py"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": false,
+        "integration": false,
+        "ui": false
+      },
+      "sentryChecks": [
+        "No direct Sentry query required; capture runtime failure risks for SDK consumers in the QA notes."
+      ],
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-004"
+      ],
+      "notes": "Run commands from services/provena/sdk/python with PROVENA_BASE_URL pointed at a running Provena instance when needed.",
+      "qaNotes": "",
+      "pmPrdAttempts": 0,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 2,
+      "pmReviewAttempts": 3,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "",
+      "testerPlanNotes": "Exhaustive QA planning recorded in services/provena/loop/qa_test_plan.json for Python packaging metadata, README install plus smoke guidance, build and scratch-install validation, and Python smoke regression coverage. Sentry follow-up is marked pending because credentials are unavailable.",
+      "pmReviewNotes": "Revalidated PROVENA-004 against the PM story after the installed-consumer smoke fix. `services/provena/sdk/python/pyproject.toml` now presents a coherent external package contract (`altrixy-provena-sdk`, `README.md` linkage, Python >=3.11, explicit `httpx` dependency, and a shipped `provena-sdk-smoke` console entrypoint), while `services/provena/sdk/python/README.md` now gives external consumers an install command, import example, standalone versus polyglot base URLs, optional `PROVENA_API_KEY` guidance, and an installed-consumer smoke path via `python -m provena_sdk.smoke` or `provena-sdk-smoke` instead of the repo-only `tests/smoke.py`. Independent verification passed with `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe setup.py sdist bdist_wheel`; the rebuilt wheel contains `provena_sdk/smoke.py` plus `altrixy_provena_sdk-0.1.0.dist-info/entry_points.txt`, `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe tests/smoke.py` logged `python-sdk-smoke: ok` against a disposable standalone Provena instance on `http://127.0.0.1:18092`, and `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m provena_sdk.smoke` from an extracted wheel logged the same success against that live instance. The story now matches the persona and acceptance criteria, so no additional engineering changes are requested; tester execution can proceed. Host note: this Windows machine still prefers the direct Python 3.12 interpreter and local scratch-install validation continues to rely on wheel extraction because `python -m build` and `pip install` temp-directory flows are access-controlled. Sentry follow-up remains pending because credentials are unavailable.",
+      "testerExecutionNotes": "Tester execution is green. T01/T02 passed because `services/provena/sdk/python/pyproject.toml` now exposes an external package identity (`altrixy-provena-sdk`), a real setuptools build backend, `README.md` linkage, Python `>=3.11`, and explicit `httpx` runtime dependency metadata that aligns with `services/provena/sdk/python/provena_sdk/__init__.py` and `client.py`. T03 passed because `services/provena/sdk/python/README.md` now gives external consumers a concrete `pip install altrixy-provena-sdk` command, a `from provena_sdk import ProvenaClient` quickstart, standalone versus polyglot base URLs, optional `PROVENA_API_KEY` guidance, and an installed-consumer smoke path via `python -m provena_sdk.smoke` or `provena-sdk-smoke` while `tests/smoke.py` delegates to the same shipped module. T04 passed with a host-specific fallback: `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m build` and `python -m pip install dist/*.whl` remain blocked on this Windows machine by temp-directory ACLs, but `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe setup.py sdist bdist_wheel` rebuilt the artifacts, the extracted wheel contained `provena_sdk/__init__.py`, `client.py`, `smoke.py`, and `altrixy_provena_sdk-0.1.0.dist-info/entry_points.txt`, and importing `ProvenaClient` from that extracted consumer path succeeded. T05 passed when a disposable standalone Provena instance launched via `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 18092` with an isolated `PROVENA_DB_PATH` because the default local SQLite path on this host carried a stale schema; both `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe tests/smoke.py` and `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m provena_sdk.smoke` from the extracted wheel exited 0 against `http://127.0.0.1:18092` and logged `python-sdk-smoke: ok`. Sentry runtime verification remains pending because credentials are unavailable; once telemetry exists, monitor integrating-service build/install/import failures plus Provena `/healthz`, `/v1/memories`, and `/v1/memories/search` auth or error spikes from Python SDK traffic.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastTesterPlanStartedAt": "2026-04-15T10:14:23Z",
+      "lastEngineerStartedAt": "2026-04-15T10:47:51Z",
+      "lastPmReviewStartedAt": "2026-04-15T11:04:23Z",
+      "lastTesterExecutionStartedAt": "2026-04-15T11:05:44Z"
+    },
+    {
+      "id": "PROVENA-005",
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "featureId": "FEATURE-SDK-DISTRIBUTION",
+      "featureTitle": "External SDK consumption",
+      "title": "Add external-consumption guidance for the Go SDK",
+      "priority": 5,
+      "status": "passed",
+      "passes": true,
+      "attempts": 1,
+      "qaStatus": "pending",
+      "qaAttempts": 0,
+      "persona": "Go service engineer embedding Provena into backend systems",
+      "userStory": "As a Go consumer, I want explicit usage guidance and module-path caveats so I know how to use the SDK externally.",
+      "problemStatement": "The Go SDK works inside the repo, but its external-consumption expectations are not documented clearly.",
+      "featureDescription": "Document how external Go consumers should use the SDK, including current module-path limitations and smoke expectations.",
+      "expectedBehaviors": [
+        "The Go SDK has explicit external usage guidance.",
+        "Module path expectations and limitations are documented clearly.",
+        "The existing Go smoke still passes."
+      ],
+      "acceptanceCriteria": [
+        "The Go SDK has explicit external usage guidance.",
+        "Module path expectations and limitations are documented clearly.",
+        "The existing Go smoke still passes."
+      ],
+      "verificationCommands": [
+        "go run ./examples/smoke"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": false,
+        "integration": false,
+        "ui": false
+      },
+      "sentryChecks": [
+        "No direct Sentry query required; define runtime failure watch points for integrating services."
+      ],
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-005"
+      ],
+      "notes": "Run commands from services/provena/sdk/go with PROVENA_BASE_URL set to a running Provena instance.",
+      "qaNotes": "",
+      "pmPrdAttempts": 0,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 1,
+      "pmReviewAttempts": 1,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "",
+      "testerPlanNotes": "Exhaustive QA planning recorded in services/provena/loop/qa_test_plan.json for Go SDK doc discoverability, module-path and versioning caveats, scratch-consumer compilation, and Go smoke regression coverage. Sentry follow-up is marked pending because credentials are unavailable.",
+      "pmReviewNotes": "Revalidated PROVENA-005 against the PM story. `services/provena/sdk/go/README.md` is now linked from `services/provena/README.md` and is framed for an external Go service engineer instead of a repo-local contributor. The guide documents the exact module path `github.com/ayushozha/portfolio-generator/services/provena/sdk/go`, the `provena` import name, standalone (`http://127.0.0.1:8092`) versus polyglot (`http://127.0.0.1:8080`) base URLs, authenticated-client usage via `NewClientWithAPIKey` and `SetAPIKey`, and the current monorepo subdirectory plus no-semver-tags limitations with truthful `go get ...@<commit-or-pseudo-version>` and local `replace` guidance. Independent verification passed with a scratch consumer under `services/provena/loop/tmp/provena-005-pm-review/scratch` using the documented `go mod init`, `go mod edit -replace`, `go get`, and `go run .` flow, and with `go run ./examples/smoke` against a disposable standalone Provena instance on `http://127.0.0.1:18092`, which logged `go-sdk-smoke: ok`. No additional engineering changes are requested; tester execution can proceed. On this Windows host, redirect `GOCACHE`, `GOTMPDIR`, `TEMP`, and `TMP` into the workspace if the default `%LocalAppData%\\\\go-build` path is access-controlled. Sentry follow-up remains pending because credentials are unavailable.",
+      "testerExecutionNotes": "Tester execution is green. T01 passed because `services/provena/sdk/go/README.md` is linked from `services/provena/README.md`, provides a dedicated Go-specific guide, and clearly targets an external Go service engineer instead of a repo-local contributor. T02 passed because the docs match the shipped SDK surface in `go.mod`, `client.go`, and `examples/smoke/main.go`: the module path is `github.com/ayushozha/portfolio-generator/services/provena/sdk/go`, the import package is `provena`, and the documented constructors and methods (`NewClient`, `NewClientWithAPIKey`, `SetAPIKey`, `Health`, `CreateMemory`, and `SearchMemories`) all exist. T03 passed because `git tag -l` still returned no Go SDK release tags and the guide truthfully keeps the monorepo-subdirectory and no-tag caveats with pseudo-version and local `replace` workflows instead of implying a shorter import path or semver release that does not exist. T04 passed with a fresh scratch consumer under `output/provena-005-tester/scratch`: `go version` reported `go1.26.1`, the documented `go mod init`, `go mod edit -replace`, `go get`, and `go run .` flow compiled outside `services/provena/sdk/go`, and the consumer printed `*provena.Client`. T05 passed when a disposable standalone Provena instance was started via `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 18092` with an isolated `PROVENA_DB_PATH`, then `go run ./examples/smoke` exited 0 against `http://127.0.0.1:18092` and logged `go-sdk-smoke: ok`. On this Windows host, the verification needed workspace-scoped `GOCACHE`, `GOTMPDIR`, `GOPATH`, `GOMODCACHE`, `TEMP`, and `TMP` because the default local build and temp paths are access-controlled. Sentry runtime verification remains pending because credentials are unavailable; once telemetry exists, monitor integrating-service module-resolution, dependency-fetch, or startup failures plus Provena `/healthz`, `/v1/memories`, and `/v1/memories/search` error trends from Go SDK traffic.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastTesterPlanStartedAt": "2026-04-15T11:14:09Z",
+      "lastEngineerStartedAt": "2026-04-15T11:20:33Z",
+      "lastPmReviewStartedAt": "2026-04-15T11:29:16Z",
+      "lastTesterExecutionStartedAt": "2026-04-15T11:36:09Z"
+    },
+    {
+      "id": "PROVENA-006",
+      "epicId": "EPIC-CONNECTED",
+      "epicTitle": "Connected Memory Plane",
+      "featureId": "FEATURE-CONNECTOR-EXECUTION",
+      "featureTitle": "Connector execution and scheduling",
+      "title": "Implement a connector worker interface for connected-mode sync execution",
+      "priority": 6,
+      "status": "passed",
+      "passes": true,
+      "attempts": 1,
+      "qaStatus": "pending",
+      "qaAttempts": 0,
+      "persona": "Platform engineer building enterprise connectors on top of Provena",
+      "userStory": "As a platform engineer, I want a reusable connector execution contract so connected-mode sync does not stay limited to direct admin API calls.",
+      "problemStatement": "Connected mode has storage and API primitives, but no reusable execution contract for real connectors.",
+      "featureDescription": "Add a connector worker interface or contract inside Provena that can enumerate sources and permission or principal-sync outputs.",
+      "expectedBehaviors": [
+        "A reusable connector worker interface exists.",
+        "The interface can enumerate source and identity-sync results.",
+        "At least one test covers the new contract."
+      ],
+      "acceptanceCriteria": [
+        "There is a reusable connector worker interface or contract inside services/provena.",
+        "The interface can enumerate sources and principal or permission sync results.",
+        "At least one test covers the new contract."
+      ],
+      "verificationCommands": [
+        "python -m pytest tests/test_main.py -q"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": true,
+        "integration": true,
+        "ui": false
+      },
+      "sentryChecks": [
+        "Watch connector execution failures and sync-job error spikes after this feature lands."
+      ],
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-006"
+      ],
+      "notes": "",
+      "qaNotes": "",
+      "pmPrdAttempts": 0,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 1,
+      "pmReviewAttempts": 1,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "",
+      "testerPlanNotes": "Exhaustive QA planning recorded in services/provena/loop/qa_test_plan.json for connector-worker contract placement, source plus principal or permission output shapes, sync-job execution compatibility, and existing integration-plane regression continuity. Sentry follow-up is marked pending because credentials are unavailable.",
+      "pmReviewNotes": "Revalidated PROVENA-006 against the PM story. `services/provena/app/connector_worker.py` now provides a shared `ConnectorWorker` protocol plus typed `ConnectorRunContext` and `ConnectorRunResult` envelopes, sync-job mapping, connector flag filtering, scope validation, and a store-backed `ConnectorExecutionService` that sits above persistence without depending on FastAPI request objects or direct admin API writes. `services/provena/app/main.py` exposes that executor on `app.state` for follow-on scheduler or connector-specific work, and `services/provena/tests/test_main.py` now includes direct contract coverage for disabled sync dimensions plus a worker-to-store/API round trip covering sources, principal mappings, permission grants, sync jobs, and integration coverage. Independent verification passed with `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q`, which reported `11 passed`; the generic `python` launcher remains blocked on this Windows host and pytest emitted a non-blocking `.pytest_cache` access warning. The feature matches the PM story and no additional engineering changes are requested. Tester execution can proceed. Sentry follow-up remains pending because credentials are unavailable.",
+      "testerExecutionNotes": "Tester execution is green. T01 passed on manual review because `services/provena/app/connector_worker.py` adds a reusable `ConnectorWorker` protocol plus typed `ConnectorRunContext`, `ConnectorRunResult`, and `ConnectorExecutionService` in shared app code, while `services/provena/app/main.py` exposes the executor on `app.state` without coupling future scheduler or connector-specific code to FastAPI request objects. T02 and T03 passed because `ConnectorRunResult` emits `ConnectorSourceBatch`, `PrincipalMappingBatch`, and `SourcePermissionBatch` backed by the existing `ConnectorSourceRecord`, `PrincipalMapping`, and `SourcePermissionGrant` models in `services/provena/app/models.py`, and `ConnectorExecutionService.execute()` respects `ConnectorConfig.principal_sync_enabled` plus `acl_sync_enabled`; `test_connector_worker_contract_respects_optional_sync_dimensions` verified disabled dimensions are dropped from writes while source enumeration, emitted-versus-written stats, sync-job metadata, and coverage totals remain coherent. T04 and T05 passed because `ConnectorRunResult.to_sync_job()` maps job type, status, cursor, stats, error details, and timestamps directly onto `SyncJob`, and `test_connector_worker_execution_flows_through_store_and_integration_routes` persisted worker-driven sources, principal mappings, permission grants, and sync jobs through the existing store-backed routes, then verified list endpoints, provider filters, source filters, and `integration_coverage` totals. T06 passed because `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` exited 0 with `11 passed`; a focused `-vv -k \"connector_worker or integration_plane\"` run also passed and showed the two direct worker tests alongside the pre-existing integration-plane regression cases. The generic `python` launcher remains blocked on this Windows host and pytest emitted a non-blocking `.pytest_cache` ACL warning. Sentry runtime verification remains pending because credentials are unavailable; once telemetry exists, monitor connector worker exceptions, stuck or failed sync-job patterns, and `/v1/integrations/coverage` or connector-admin 4xx and 5xx drift after worker-backed syncs.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastTesterPlanStartedAt": "2026-04-15T11:42:03Z",
+      "lastEngineerStartedAt": "2026-04-15T11:50:56Z",
+      "lastPmReviewStartedAt": "2026-04-15T11:59:22Z",
+      "lastTesterExecutionStartedAt": "2026-04-15T12:02:26Z"
+    },
+    {
+      "id": "PROVENA-007",
+      "epicId": "EPIC-CONNECTED",
+      "epicTitle": "Connected Memory Plane",
+      "featureId": "FEATURE-CONNECTOR-EXECUTION",
+      "featureTitle": "Connector execution and scheduling",
+      "title": "Add a scheduler path that records sync jobs on a fixed cadence",
+      "priority": 7,
+      "status": "passed",
+      "passes": true,
+      "attempts": 1,
+      "qaStatus": "pending",
+      "qaAttempts": 0,
+      "persona": "Operations engineer monitoring connected-mode freshness",
+      "userStory": "As an operations engineer, I want scheduled sync-job creation so Provena can track connector freshness without manual API triggering.",
+      "problemStatement": "Connected-mode sync jobs are currently only created by direct calls, which blocks realistic freshness workflows.",
+      "featureDescription": "Add a scheduled path for creating sync jobs on a cadence and document how it fits the connected-mode lifecycle.",
+      "expectedBehaviors": [
+        "Sync jobs can be created from a scheduled path.",
+        "The path is documented and tested.",
+        "Polyglot verification remains green."
+      ],
+      "acceptanceCriteria": [
+        "Connected-mode sync jobs can be created from a scheduled path instead of only direct API calls.",
+        "The scheduling path is documented and tested.",
+        "Polyglot end-to-end verification remains green."
+      ],
+      "verificationCommands": [
+        "python -m pytest tests/test_main.py -q",
+        "python scripts/run_e2e.py"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": true,
+        "integration": true,
+        "ui": false
+      },
+      "sentryChecks": [
+        "Watch scheduled sync failures, duplicate job creation, and queue backpressure after scheduler changes."
+      ],
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-007"
+      ],
+      "notes": "",
+      "qaNotes": "",
+      "pmPrdAttempts": 0,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 1,
+      "pmReviewAttempts": 1,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "",
+      "testerPlanNotes": "Exhaustive QA planning recorded in services/provena/loop/qa_test_plan.json for scheduled cadence triggering, due-versus-ineligible connector guards, duplicate suppression, sync-job readback plus coverage continuity, lifecycle documentation, and pytest plus polyglot regression verification. Sentry follow-up is marked pending because credentials are unavailable.",
+      "pmReviewNotes": "Revalidated PROVENA-007 against the PM story. `services/provena/app/connector_scheduler.py` now adds an internal fixed-cadence scheduler above `ConnectorExecutionService`: it reads per-connector `metadata.scheduler`, builds scheduled `ConnectorRunContext` payloads, uses a provider-specific or default worker, and skips inactive, disabled, missing-cadence, in-progress, and not-due connectors before writing the normal `SyncJob` ledger. `services/provena/app/main.py` exposes that scheduler on `app.state` without adding a second public sync-write route, `services/provena/scripts/run_scheduler_tick.py` gives operators an internal scheduler entrypoint for standalone or polyglot deployments, and `services/provena/app/store.py` now upserts connectors so refreshing `last_synced_at` does not cascade-delete connector-linked rows. `services/provena/tests/test_main.py` covers due scheduled creation, sync-job and coverage readback, `last_synced_at` refresh, and duplicate or ineligible suppression, while `services/provena/README.md`, `services/provena/ARCHITECTURE.md`, and `services/provena/DEPLOYMENT.md` explain cadence metadata plus how scheduled sync complements the existing direct sync-job POST in the connected-mode lifecycle. Independent verification passed with `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q`, which reported `13 passed`, and with `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/run_e2e.py`, which kept standalone and polyglot verification green with Python, TypeScript, and Go SDK smokes passing plus the expected Windows Rust smoke skip after redirecting npm, Go, and temp caches into the workspace. The implementation matches the persona, user story, problem statement, feature description, expected behaviors, and acceptance criteria, so no additional engineering changes are requested. Tester execution can proceed. On this Windows host, the generic `python` launcher remains blocked and pytest still emits a non-blocking `.pytest_cache` access warning. Sentry follow-up remains pending because credentials are unavailable.",
+      "testerExecutionNotes": "Tester execution is green. T01 passed on manual review because `services/provena/app/connector_scheduler.py` and `services/provena/scripts/run_scheduler_tick.py` add an internal fixed-cadence scheduler path above `ConnectorExecutionService`, while `services/provena/app/main.py` exposes it on `app.state` without introducing a second public sync-job write route. T02, T03, and T04 passed because `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` exited 0 with `13 passed`, and the scheduler-specific tests `test_connector_scheduler_creates_due_sync_job_and_keeps_readbacks_coherent` plus `test_connector_scheduler_skips_not_due_in_progress_and_ineligible_connectors` proved due cadence-driven job creation, sync-job and coverage readback continuity, `last_synced_at` refresh, and duplicate or ineligible suppression for running, paused, disabled, missing-cadence, and not-due connectors. T05 passed because `services/provena/README.md`, `services/provena/ARCHITECTURE.md`, and `services/provena/DEPLOYMENT.md` explain `metadata.scheduler`, standalone versus polyglot operator usage, and how scheduled ticks complement the existing direct sync-job POST route. T06 passed because `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -vv -k \\\"scheduler or integration_plane\\\"` passed while collecting the two dedicated scheduler tests plus the pre-existing integration-plane regressions, confirming no new auth or tenant-isolation bypass was introduced. T07 passed because `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/run_e2e.py` exited 0 after redirecting `NPM_CONFIG_CACHE`, `GOCACHE`, `GOMODCACHE`, `GOPATH`, `GOTMPDIR`, `TEMP`, `TMP`, and `PROVENA_E2E_TMP_DIR` into the workspace; standalone and polyglot suites, Python/TypeScript/Go SDK smokes, and OpenAPI export stayed green, with the expected Windows Rust SDK smoke skip warning. The generic `python` launcher remains blocked on this Windows host and pytest emitted a non-blocking `.pytest_cache` ACL warning. Sentry runtime verification remains pending because credentials are unavailable.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastTesterPlanStartedAt": "2026-04-15T12:06:22Z",
+      "lastEngineerStartedAt": "2026-04-15T12:12:39Z",
+      "lastPmReviewStartedAt": "2026-04-15T12:25:46Z",
+      "lastTesterExecutionStartedAt": "2026-04-15T12:30:12Z"
+    },
+    {
+      "id": "PROVENA-008",
+      "epicId": "EPIC-CONNECTED",
+      "epicTitle": "Connected Memory Plane",
+      "featureId": "FEATURE-CONNECTOR-EXECUTION",
+      "featureTitle": "Connector execution and scheduling",
+      "title": "Add a first Slack connector stub that writes source inventory and sync jobs",
+      "priority": 8,
+      "status": "passed",
+      "passes": true,
+      "attempts": 1,
+      "qaStatus": "pending",
+      "qaAttempts": 0,
+      "persona": "Enterprise product engineer evaluating real connector behavior",
+      "userStory": "As an enterprise product engineer, I want a Slack connector stub so Provena proves its connected-mode contract with a concrete source system.",
+      "problemStatement": "The connector plane is still abstract without at least one system-specific implementation stub.",
+      "featureDescription": "Add a Slack-specific connector stub that can populate source inventory and create a sync-job ledger entry.",
+      "expectedBehaviors": [
+        "A Slack-specific connector stub exists.",
+        "The stub can write connector sources.",
+        "The stub can write a sync-job entry.",
+        "The behavior is covered by tests."
+      ],
+      "acceptanceCriteria": [
+        "A Slack-specific connector stub exists inside the Provena integration plane.",
+        "The stub can write connector sources and a sync job ledger entry.",
+        "The behavior is covered by a test."
+      ],
+      "verificationCommands": [
+        "python -m pytest tests/test_main.py -q"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": true,
+        "integration": true,
+        "ui": false
+      },
+      "sentryChecks": [
+        "Watch Slack connector sync-job failures and bad source-shape writes once deployed."
+      ],
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-008"
+      ],
+      "notes": "",
+      "qaNotes": "",
+      "pmPrdAttempts": 0,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 1,
+      "pmReviewAttempts": 1,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "",
+      "testerPlanNotes": "Exhaustive QA planning recorded in services/provena/loop/qa_test_plan.json for shipped Slack worker placement, provider wiring, Slack source inventory shape and readback, sync-job ledger persistence, scheduler reuse, and connected-mode pytest regression continuity. Sentry follow-up is marked pending because credentials are unavailable.",
+      "pmReviewNotes": "Revalidated PROVENA-008 against the PM story. `services/provena/app/slack_connector.py` now provides a shipped Slack-specific stub that returns Slack-shaped source inventory, principal mappings, permissions, and concrete sync-job metadata through `ConnectorRunResult`, while `services/provena/app/main.py` registers it for `ConnectorProvider.SLACK` at startup so runtime provider routing and `ConnectorSchedulerService.worker_for()` resolve a real Slack worker instead of the generic scheduled-only placeholder. `services/provena/tests/test_main.py` now imports the shipped `SlackConnectorStubWorker` and covers both direct `ConnectorExecutionService.execute()` flow and scheduler reuse, asserting Slack channel inventory readback, sync-job persistence, coverage totals, and absence of the generic `scheduled_only` stats for Slack runs. Independent verification passed with `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q`, which reported `13 passed`; the only runtime noise was the existing non-blocking `.pytest_cache` ACL warning plus a requests dependency warning from the local Python environment. The implementation matches the persona, user story, problem statement, feature description, expected behaviors, and acceptance criteria, so no additional engineering changes are requested and tester execution can proceed. Sentry follow-up remains pending because credentials are unavailable.",
+      "testerExecutionNotes": "Tester execution is green. T01 and T02 passed on manual review because `services/provena/app/slack_connector.py` adds a shipped `SlackConnectorStubWorker` in shared app code, `services/provena/app/main.py` registers it for `ConnectorProvider.SLACK` during app startup, and the implementation returns `ConnectorRunResult` through the existing `ConnectorExecutionService` contract instead of writing directly to the store or introducing a new public sync-write route. T03 and T04 passed because the dedicated Slack execution tests persist two Slack channel sources plus principal mappings, permissions, and a succeeded sync job with concrete `provider=slack`, cursor `slack:T987:channels:v1`, and no `scheduled_only` placeholder, then read them back through the existing connector source, sync-job, and coverage endpoints. T05 passed because `test_shipped_slack_stub_is_registered_for_scheduler_routing_and_readbacks` proved `ConnectorSchedulerService.worker_for(ConnectorProvider.SLACK)` resolves the shipped Slack worker and a scheduled tick writes the same Slack-shaped inventory and ledger through the shared scheduler seam without any new auth or tenant bypass. T06 passed because `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` exited 0 with `13 passed`, and `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -vv -k \"slack or scheduler or connector_worker or integration_plane\"` passed while collecting the dedicated Slack, scheduler, worker-contract, and integration-plane regressions. The generic `python` launcher remains blocked on this Windows host, pytest emitted the existing non-blocking `.pytest_cache` ACL warning, and the local Python environment emitted a non-blocking `RequestsDependencyWarning`. Sentry runtime verification remains pending because credentials are unavailable.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastTesterPlanStartedAt": "2026-04-15T12:35:29Z",
+      "lastEngineerStartedAt": "2026-04-15T12:42:23Z",
+      "lastPmReviewStartedAt": "2026-04-15T12:50:30Z",
+      "lastTesterExecutionStartedAt": "2026-04-15T12:53:58Z"
+    },
+    {
+      "id": "PROVENA-009",
+      "epicId": "EPIC-CONNECTED",
+      "epicTitle": "Connected Memory Plane",
+      "featureId": "FEATURE-PERMISSIONS-FRESHNESS",
+      "featureTitle": "Permission and freshness aware retrieval",
+      "title": "Enforce source permission grants during retrieval eligibility",
+      "priority": 9,
+      "status": "passed",
+      "passes": true,
+      "attempts": 1,
+      "qaStatus": "pending",
+      "qaAttempts": 0,
+      "persona": "Security-conscious enterprise admin",
+      "userStory": "As an enterprise admin, I want source permission grants to affect retrieval eligibility so agents cannot surface context a principal should not see.",
+      "problemStatement": "Connected-mode grants exist in storage, but they do not yet influence retrieval eligibility strongly enough.",
+      "featureDescription": "Make source grants part of retrieval eligibility and back the change with API plus polyglot verification.",
+      "expectedBehaviors": [
+        "Source grants influence what results are eligible.",
+        "The behavior is covered by API tests.",
+        "Polyglot verification remains green."
+      ],
+      "acceptanceCriteria": [
+        "Source grants influence what retrieval results are eligible for a requesting principal.",
+        "The behavior is covered by API tests.",
+        "Polyglot end-to-end verification remains green."
+      ],
+      "verificationCommands": [
+        "python -m pytest tests/test_main.py -q",
+        "python scripts/run_e2e.py"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": true,
+        "integration": true,
+        "ui": false
+      },
+      "sentryChecks": [
+        "Watch for authorization-denied spikes and any unexpected retrieval leakage symptoms after rollout."
+      ],
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-009"
+      ],
+      "notes": "",
+      "qaNotes": "",
+      "pmPrdAttempts": 0,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 1,
+      "pmReviewAttempts": 1,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "",
+      "testerPlanNotes": "Exhaustive QA planning recorded in services/provena/loop/qa_test_plan.json for shared search/get eligibility wiring, direct and group grant filtering, ACL plus legacy-memory continuity, mixed-source and related-memory leakage guards, tenant-scoped permission joins, dedicated API coverage, and polyglot regression verification. Sentry follow-up is marked pending because credentials are unavailable.",
+      "pmReviewNotes": "Revalidated PROVENA-009 against the PM story. `services/provena/app/store.py` now enforces connected-source grants at the shared retrieval boundary: `search_memories()` uses `_can_read_memory()`, `GET /v1/memories/{memory_id}` calls `get_memory(..., enforce_source_grants=True)`, and `_related_memories()` also re-checks `enforce_source_grants=True`, so blocked connected memories do not leak through search, direct reads, or related-memory expansion. `_has_required_source_grants()` keeps the prior ACL contract intact, leaves legacy memories readable when they have no connected sources, requires a matching readable grant for every connected source attached to a memory, and resolves both direct principals and connector-scoped remote or group mappings without crossing tenant or connector boundaries. `services/provena/intelligence/app/main.py` and `services/provena/intelligence/app/read_pipeline.py` now forward tenant, role, principal, and group headers so gateway retrieval reaches the same eligibility checks instead of a weaker path. `services/provena/tests/test_main.py` covers direct-user grants, group grants, missing-principal denial, ACL and legacy continuity, mixed-source plus related-memory leakage guards, and connector or tenant-scoped mapping joins; `services/provena/scripts/run_e2e.py` adds an auth-enabled gateway proof that granted retrieval succeeds while blocked retrieval returns no search results and 404s on direct get. Independent verification passed with `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q`, which reported `17 passed`, and with `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/run_e2e.py` after redirecting npm, Go, and temp caches into workspace-local directories. The implementation matches the persona, user story, problem statement, feature description, expected behaviors, and acceptance criteria, so no additional engineering changes are requested and tester execution can proceed. Host note: the generic `python` launcher remains blocked on this Windows machine, pytest still emits the existing non-blocking `.pytest_cache` ACL warning plus a `RequestsDependencyWarning`, `run_e2e.py` rewrote `services/provena/openapi.json`, and the Rust SDK smoke remains the expected Windows skip. Sentry follow-up remains pending because credentials are unavailable.",
+      "testerExecutionNotes": "Tester execution is green. T01 passed on manual review because `services/provena/app/store.py` routes search through `_can_read_memory()`, `GET /v1/memories/{memory_id}` uses `get_memory(..., enforce_source_grants=True)`, and `_related_memories()` also re-checks `enforce_source_grants=True`, while `services/provena/app/main.py`, `services/provena/intelligence/app/main.py`, and `services/provena/intelligence/app/read_pipeline.py` preserve tenant, role, principal, and group headers through the gateway-to-store read path. T02-T06 passed because `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -vv -k \"connected_source or search_includes_related_memories\"` collected and passed the five permission-focused retrieval tests, proving direct-user grants, missing-principal denial, group `edit` grants, mixed-source plus related-memory leakage prevention, ACL and legacy continuity, and connector- plus tenant-scoped principal-mapping joins. T07 passed because `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` exited 0 with `17 passed`. T08 passed because `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/run_e2e.py` exited 0 after redirecting `NPM_CONFIG_CACHE`, `GOCACHE`, `GOMODCACHE`, `GOPATH`, `GOTMPDIR`, `TEMP`, `TMP`, and `PROVENA_E2E_TMP_DIR` into workspace-local directories; the auth-enabled gateway proof kept granted retrieval visible, denied retrieval absent from search, and blocked direct get at 404 while standalone and polyglot verification, SDK smokes, coverage, and MCP flow stayed green. The generic `python` launcher remains blocked on this Windows host, pytest still emits the existing non-blocking `.pytest_cache` ACL warning plus a `RequestsDependencyWarning`, `run_e2e.py` rewrote `services/provena/openapi.json`, and the Rust SDK smoke remains the expected Windows skip. Sentry runtime verification remains pending because credentials are unavailable.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastTesterPlanStartedAt": "2026-04-15T12:57:49Z",
+      "lastEngineerStartedAt": "2026-04-15T13:08:11Z",
+      "lastPmReviewStartedAt": "2026-04-15T13:26:53Z",
+      "lastTesterExecutionStartedAt": "2026-04-15T13:33:27Z"
+    },
+    {
+      "id": "PROVENA-010",
+      "epicId": "EPIC-CONNECTED",
+      "epicTitle": "Connected Memory Plane",
+      "featureId": "FEATURE-PERMISSIONS-FRESHNESS",
+      "featureTitle": "Permission and freshness aware retrieval",
+      "title": "Expose freshness SLA breaches in integration coverage",
+      "priority": 10,
+      "status": "passed",
+      "passes": true,
+      "attempts": 1,
+      "qaStatus": "pending",
+      "qaAttempts": 0,
+      "persona": "Operations lead responsible for context freshness",
+      "userStory": "As an operations lead, I want coverage responses to expose freshness SLA breaches so I can identify stale enterprise context before agents degrade.",
+      "problemStatement": "Coverage shows counts, but not whether sources are beyond their declared freshness SLA.",
+      "featureDescription": "Extend integration coverage to expose freshness SLA breach signals and ensure the contract is reflected in tests and OpenAPI.",
+      "expectedBehaviors": [
+        "Coverage responses include freshness breach signals.",
+        "Tests cover stale and breached cases.",
+        "OpenAPI reflects the new contract."
+      ],
+      "acceptanceCriteria": [
+        "Coverage responses include a signal for sources past freshness SLA.",
+        "Tests cover the stale and breached cases.",
+        "OpenAPI output reflects the contract."
+      ],
+      "verificationCommands": [
+        "python -m pytest tests/test_main.py -q",
+        "python scripts/export_openapi.py"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": true,
+        "integration": false,
+        "ui": false
+      },
+      "sentryChecks": [
+        "Watch stale-source spikes and coverage endpoint errors after rollout."
+      ],
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-010"
+      ],
+      "notes": "",
+      "qaNotes": "",
+      "pmPrdAttempts": 0,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 1,
+      "pmReviewAttempts": 1,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "",
+      "testerPlanNotes": "Exhaustive QA planning recorded in services/provena/loop/qa_test_plan.json for shared coverage-contract wiring, stale-only versus SLA-breached fixtures, tenant-safe freshness aggregation, dedicated `tests/test_main.py` coverage, and OpenAPI export alignment. Sentry follow-up is marked pending because credentials are unavailable.",
+      "pmReviewNotes": "Revalidated PROVENA-010 against the PM story. `services/provena/app/models.py` adds `sources_past_freshness_sla` to the shared `IntegrationCoverageSummary`, `services/provena/app/main.py` continues to serve `GET /v1/integrations/coverage` through that shared response model, and `services/provena/app/store.py` now computes the breach count inside the existing `integration_coverage()` seam with tenant-scoped source rows, source-level `stale_after` taking precedence when present, connector `last_synced_at + freshness_sla_seconds` as the fallback deadline, and null or invalid freshness metadata treated as non-breaching instead of crashing the endpoint. `services/provena/tests/test_main.py` now covers the stale-only versus breached distinction, overdue-SLA detection without relying on `status=stale`, and tenant-scoped plus null-safe aggregation, while `services/provena/openapi.json` exports the new `IntegrationCoverageSummary.sources_past_freshness_sla` field for `/v1/integrations/coverage`. Independent verification passed with `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q`, which reported `19 passed`, and `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/export_openapi.py`, which rewrote `services/provena/openapi.json` successfully. The implementation matches the persona, user story, problem statement, feature description, expected behaviors, and acceptance criteria, so no additional engineering changes are requested and tester execution can proceed. Host note: the generic `python` launcher remains blocked on this Windows machine, pytest still emits the existing non-blocking `.pytest_cache` ACL warning plus a `RequestsDependencyWarning`, and Sentry follow-up remains pending because credentials are unavailable.",
+      "testerExecutionNotes": "Tester execution is green. T01 passed on manual review because `services/provena/app/models.py`, `services/provena/app/main.py`, and `services/provena/app/store.py` keep `/v1/integrations/coverage` on the shared `IntegrationCoverageSummary` contract and compute `sources_past_freshness_sla` inside the existing `integration_coverage()` seam from source freshness metadata rather than a route-local workaround. T02-T04 passed because `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -vv -k \"integration_coverage\"` collected and passed the dedicated freshness tests: the stale-only fixture kept `sources_stale=1` with `sources_past_freshness_sla=0`, an overdue indexed source raised `sources_past_freshness_sla=1` without relying on `status=stale`, source-level `stale_after` took precedence over the connector-SLA fallback, and incomplete freshness metadata stayed non-breaching while tenant coverage remained isolated. T05 passed because `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_main.py -q` exited 0 with `19 passed`, keeping the broader connector worker, scheduler, Slack, permission-aware retrieval, and integration-plane regressions green. T06 passed because `C:\\Users\\ayush\\AppData\\Local\\Programs\\Python\\Python312\\python.exe scripts/export_openapi.py` exited 0 and `services/provena/openapi.json` still exposes `/v1/integrations/coverage` through `IntegrationCoverageSummary`, including the machine-readable `sources_past_freshness_sla` field alongside the existing coverage totals. The generic `python` launcher remains blocked on this Windows host, pytest emitted the existing non-blocking `.pytest_cache` ACL warning plus a `RequestsDependencyWarning`, and Sentry runtime verification remains pending because credentials are unavailable.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastTesterPlanStartedAt": "2026-04-15T13:40:00Z",
+      "lastEngineerStartedAt": "2026-04-15T13:46:39Z",
+      "lastPmReviewStartedAt": "2026-04-15T13:55:09Z",
+      "lastTesterExecutionStartedAt": "2026-04-15T13:58:32Z"
+    },
+    {
+      "id": "PROVENA-011",
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "featureId": "FEATURE-RELEASE-OPS",
+      "featureTitle": "Release readiness",
+      "title": "Add a Provena release checklist for images, SDKs, and OpenAPI",
+      "priority": 11,
+      "status": "passed",
+      "passes": true,
+      "attempts": 1,
+      "qaStatus": "pending",
+      "qaAttempts": 0,
+      "persona": "Release manager preparing a Provena release",
+      "userStory": "As a release manager, I want a concise Provena release checklist so images, SDKs, schemas, and verification happen consistently.",
+      "problemStatement": "Release work is currently implicit and spread across docs and commands.",
+      "featureDescription": "Add a checklist covering image publication, SDK packaging, OpenAPI export, and verification expectations.",
+      "expectedBehaviors": [
+        "A release checklist exists.",
+        "It covers images, SDK packaging, OpenAPI export, and verification commands."
+      ],
+      "acceptanceCriteria": [
+        "A release checklist exists inside services/provena.",
+        "It covers Docker images, SDK packaging, OpenAPI export, and verification commands."
+      ],
+      "verificationCommands": [
+        "python scripts/export_openapi.py"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": false,
+        "integration": false,
+        "ui": false
+      },
+      "sentryChecks": [
+        "Document which runtime dashboards or Sentry queries should be checked immediately after a release."
+      ],
+      "qaArtifacts": [
+        "services/provena/loop/qa_test_plan.json#PROVENA-011"
+      ],
+      "notes": "",
+      "qaNotes": "",
+      "pmPrdAttempts": 0,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 1,
+      "pmReviewAttempts": 1,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "",
+      "testerPlanNotes": "Exhaustive QA planning recorded in services/provena/loop/qa_test_plan.json for release-checklist discoverability, image publication inventory, SDK packaging scope and caveats, OpenAPI export alignment, standardized verification commands, and post-release runtime checks. Sentry follow-up is marked pending because credentials are unavailable.",
+      "pmReviewNotes": "Revalidated PROVENA-011 against the PM story. `services/provena/RELEASE_CHECKLIST.md` now gives the release manager a dedicated, discoverable checklist inside `services/provena`, and `services/provena/README.md` plus `services/provena/DEPLOYMENT.md` both link to it so the release surface is no longer implicit. The checklist covers the shipped Docker image inventory with build contexts and the single `control-plane/Dockerfile` CMD variants, distinguishes publishable TypeScript and Python SDKs from the current Go and Rust smoke-only surfaces, requires `python .\\\\scripts\\\\export_openapi.py`, standardizes the release verification gates (`docker compose config -q`, `python .\\\\scripts\\\\run_e2e.py`, `python .\\\\scripts\\\\export_openapi.py`), and documents immediate post-release runtime plus Sentry or dashboard checks. Independent verification passed with `docker compose config -q`, `C:\\\\Users\\\\ayush\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe scripts/export_openapi.py`, `npm pack` in `services/provena/sdk/typescript` (tarball contained `dist/index.js`, `dist/index.d.ts`, and `package.json`), and `C:\\\\Users\\\\ayush\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe setup.py sdist bdist_wheel` in `services/provena/sdk/python` (sdist and wheel included `provena_sdk/smoke.py` and the packaged entrypoint). The implementation matches the persona, user story, problem statement, feature description, expected behaviors, and acceptance criteria, so no additional engineering changes are requested. Tester execution can proceed. Host note: this Windows machine still blocks the generic `python` launcher and temp-heavy `python -m build` paths, so local verification continues to use the direct Python 3.12 interpreter and the documented `setup.py` fallback. Sentry follow-up remains pending because credentials are unavailable.",
+      "testerExecutionNotes": "Tester execution is green. T01-T03 passed on manual review because `services/provena/RELEASE_CHECKLIST.md` exists inside `services/provena`, is linked from `README.md` and `DEPLOYMENT.md`, matches the shipped image inventory from `docker-compose.yml` plus `Dockerfile.store`, `intelligence/Dockerfile`, `orchestration/Dockerfile`, and `control-plane/Dockerfile`, and honestly distinguishes publishable TypeScript and Python SDKs from the current Go and Rust smoke-only surfaces. T04 passed because the checklist's SDK commands map to the repo's real workflows: `services/provena/scripts/run_e2e.py` exercises the Python, TypeScript, Go, and Rust smokes, the TypeScript package builds and packs as `@altrixy/provena-sdk`, and the Python package keeps `python -m build` as the canonical step while documenting the host-specific `setup.py sdist bdist_wheel` fallback. T05 passed because the direct Python 3.12 interpreter ran `scripts/export_openapi.py` successfully and rewrote `services/provena/openapi.json`. T06 passed because `docker compose config -q` exited 0 and the direct Python 3.12 interpreter ran `scripts/run_e2e.py` successfully after redirecting npm, Go, and temp caches into `services/provena/.cache`; standalone and polyglot suites plus Python, TypeScript, and Go SDK smokes stayed green, while the Rust SDK smoke emitted the expected Windows skip warning. T07 passed because the checklist tells operators to watch boot status, `docker compose ps`, `/healthz`, `/v1/cold-start`, `/v1/memories`, and `/v1/integrations/coverage` without inventing unavailable Sentry data. Independent packaging verification also passed with `npx -y -p typescript tsc -p .`, `npm pack` (tarball contained `dist/index.js`, `dist/index.d.ts`, and `package.json`), and the direct Python 3.12 interpreter running `setup.py sdist bdist_wheel` after `python -m build` reproduced the documented Windows temp-directory ACL failure; the Python sdist and wheel included `provena_sdk/smoke.py`. The generic `python` launcher remains blocked on this Windows host, the Python fallback emitted the expected non-blocking `setup.py install` deprecation warning, and Sentry runtime verification remains pending because credentials are unavailable.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastTesterPlanStartedAt": "2026-04-15T14:03:20Z",
+      "lastEngineerStartedAt": "2026-04-15T14:12:34Z",
+      "lastPmReviewStartedAt": "2026-04-15T14:21:51Z",
+      "lastTesterExecutionStartedAt": "2026-04-15T14:26:05Z"
+    }
+  ]
+}

@@ -1,0 +1,278 @@
+syntax = "proto3";
+
+package provena.v1;
+
+option go_package = "github.com/altrixy/provena/control-plane/gen/provena/v1;provenav1";
+
+import "provena/v1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+// ---------------------------------------------------------------------------
+// WritePipelineService — Python gRPC server
+// Called by Go queue consumer after dequeuing batched writes.
+// ---------------------------------------------------------------------------
+
+service WritePipelineService {
+  // Full write pipeline: classify → dedupe → embed → entity resolve → store
+  rpc ProcessWrite (WriteRequest) returns (WriteResponse);
+
+  // LLM-driven compaction: merge related memories
+  rpc Compact (CompactRequest) returns (CompactResponse);
+
+  // Conflict resolution between contradicting memories
+  rpc ResolveConflicts (ConflictResolutionRequest) returns (ConflictResolutionResponse);
+
+  // Generate / refresh project overview snapshot
+  rpc GenerateOverview (OverviewRequest) returns (OverviewResponse);
+}
+
+// ---------------------------------------------------------------------------
+// ReadPipelineService — Python gRPC server
+// Called by Go API gateway for search/retrieval requests.
+// ---------------------------------------------------------------------------
+
+service ReadPipelineService {
+  // Full read pipeline: retrieve → rerank → contradiction check → cite → budget
+  rpc Search (ReadSearchRequest) returns (ReadSearchResponse);
+
+  // Hybrid retrieval only (vector + FTS), no reranking
+  rpc HybridRetrieve (HybridRetrieveRequest) returns (HybridRetrieveResponse);
+
+  // Rerank a set of candidates
+  rpc Rerank (RerankRequest) returns (RerankResponse);
+
+  // Check for contradictions among memories
+  rpc DetectContradictions (ContradictionRequest) returns (ContradictionResponse);
+
+  // Package citations for a set of memories
+  rpc PackageCitations (CitationRequest) returns (CitationResponse);
+}
+
+// ---------------------------------------------------------------------------
+// ModelRouterService — Python gRPC server
+// Called by other services to select the right LLM for a task.
+// ---------------------------------------------------------------------------
+
+service ModelRouterService {
+  rpc RouteModel (ModelRouteRequest) returns (ModelRouteResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Write pipeline messages
+// ---------------------------------------------------------------------------
+
+message WriteRequest {
+  MemoryKind kind                          = 1;
+  ScopeEnvelope scope                      = 2;
+  string content                           = 3;
+  string title                             = 4;
+  string summary                           = 5;
+  repeated string entity_keys              = 6;
+  repeated string tags                     = 7;
+  map<string, string> metadata             = 8;
+  float importance                         = 9;
+  float confidence                         = 10;
+  float strength                           = 11;
+  google.protobuf.Timestamp valid_from     = 12;
+  google.protobuf.Timestamp valid_to       = 13;
+  repeated SourceReference source_references = 14;
+  string supersedes_memory_id              = 15;
+  repeated string trigger_phrases          = 16;
+  repeated ACLEntry acl                    = 17;
+}
+
+message WriteResponse {
+  bool created                  = 1;
+  MemoryRecord memory           = 2;
+  PipelineTrace pipeline_trace  = 3;
+}
+
+message PipelineTrace {
+  string classified_kind         = 1;
+  bool   deduplicated            = 2;
+  string embedding_model_used    = 3;
+  int32  embedding_dimensions    = 4;
+  repeated string resolved_entities = 5;
+  repeated string detected_conflicts = 6;
+  bool   overview_updated        = 7;
+  int64  elapsed_ms              = 8;
+}
+
+// ---------------------------------------------------------------------------
+// Compaction
+// ---------------------------------------------------------------------------
+
+message CompactRequest {
+  ScopeEnvelope scope              = 1;
+  repeated string memory_ids       = 2;  // memories to compact together
+  ModelTier tier                   = 3;
+}
+
+message CompactResponse {
+  MemoryRecord compacted_memory = 1;
+  repeated string superseded_ids = 2;
+  TokenUsage token_usage         = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Conflict resolution
+// ---------------------------------------------------------------------------
+
+message ConflictResolutionRequest {
+  repeated MemoryRecord memories = 1;
+  ModelTier tier                  = 2;
+}
+
+message ConflictResolutionResponse {
+  repeated ConflictPair conflicts = 1;
+  TokenUsage token_usage          = 2;
+}
+
+message ConflictPair {
+  string memory_id_a   = 1;
+  string memory_id_b   = 2;
+  string description    = 3;
+  string resolution     = 4;   // "keep_a" | "keep_b" | "merge" | "flag"
+  float  confidence     = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Overview generation
+// ---------------------------------------------------------------------------
+
+message OverviewRequest {
+  ScopeEnvelope scope = 1;
+  ModelTier tier      = 2;
+}
+
+message OverviewResponse {
+  ProjectOverview overview = 1;
+  TokenUsage token_usage   = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Read pipeline messages
+// ---------------------------------------------------------------------------
+
+message ReadSearchRequest {
+  string query                    = 1;
+  ScopeEnvelope scope             = 2;
+  repeated MemoryKind kinds       = 3;
+  repeated string tags            = 4;
+  repeated string entity_keys     = 5;
+  bool include_relations          = 6;
+  bool include_deleted            = 7;
+  int32 limit                     = 8;
+  int32 max_tokens                = 9;   // context budget cap
+  ModelTier model_tier            = 10;
+}
+
+message ReadSearchResponse {
+  repeated SearchResult results   = 1;
+  TokenUsage token_usage          = 2;
+  int32 budget_remaining          = 3;
+}
+
+message SearchResult {
+  MemoryRecord memory                    = 1;
+  float score                            = 2;
+  repeated string reasons                = 3;
+  repeated RelatedMemoryResult related   = 4;
+  repeated Citation citations            = 5;
+  repeated string contradictions         = 6;
+}
+
+message RelatedMemoryResult {
+  RelationKind relation = 1;
+  MemoryRecord memory   = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Hybrid retrieval
+// ---------------------------------------------------------------------------
+
+message HybridRetrieveRequest {
+  string query                 = 1;
+  ScopeEnvelope scope          = 2;
+  int32 limit                  = 3;
+  float vector_weight          = 4;   // 0.0-1.0, rest goes to FTS
+}
+
+message HybridRetrieveResponse {
+  repeated ScoredMemory results = 1;
+}
+
+message ScoredMemory {
+  MemoryRecord memory = 1;
+  float vector_score  = 2;
+  float fts_score     = 3;
+  float combined      = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Reranking
+// ---------------------------------------------------------------------------
+
+message RerankRequest {
+  string query                      = 1;
+  repeated MemoryRecord candidates  = 2;
+  ModelTier tier                    = 3;
+}
+
+message RerankResponse {
+  repeated ScoredMemory results = 1;
+  TokenUsage token_usage        = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Contradiction detection
+// ---------------------------------------------------------------------------
+
+message ContradictionRequest {
+  repeated MemoryRecord memories = 1;
+  ModelTier tier                  = 2;
+}
+
+message ContradictionResponse {
+  repeated ContradictionPair contradictions = 1;
+  TokenUsage token_usage                    = 2;
+}
+
+message ContradictionPair {
+  string memory_id_a  = 1;
+  string memory_id_b  = 2;
+  string description   = 3;
+  float  severity      = 4;  // 0.0-1.0
+}
+
+// ---------------------------------------------------------------------------
+// Citation packaging
+// ---------------------------------------------------------------------------
+
+message CitationRequest {
+  repeated MemoryRecord memories = 1;
+}
+
+message CitationResponse {
+  repeated Citation citations = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Model routing
+// ---------------------------------------------------------------------------
+
+message ModelRouteRequest {
+  string task          = 1;  // "embed" | "rerank" | "classify" | "compact" | "summarize"
+  ModelTier tier       = 2;
+  int32 input_tokens   = 3;
+}
+
+message ModelRouteResponse {
+  string model_id     = 1;
+  string provider     = 2;
+  ModelTier tier       = 3;
+  int32 max_tokens     = 4;
+  double cost_per_1k_input  = 5;
+  double cost_per_1k_output = 6;
+  string reason        = 7;
+}

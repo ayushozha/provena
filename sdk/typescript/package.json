@@ -1,0 +1,40 @@
+{
+  "name": "@altrixy/provena-sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "private": false,
+  "description": "Publishable TypeScript SDK for integrating with the Provena governed memory plane.",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "provena",
+    "memory-plane",
+    "sdk",
+    "typescript"
+  ],
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test:smoke": "node tests/smoke.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

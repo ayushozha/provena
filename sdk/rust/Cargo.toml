@@ -1,0 +1,8 @@
+[package]
+name = "provena-sdk"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "provena_sdk"
+path = "src/lib.rs"

@@ -1,0 +1,175 @@
+syntax = "proto3";
+
+package provena.v1;
+
+option go_package = "github.com/altrixy/provena/control-plane/gen/provena/v1;provenav1";
+
+import "provena/v1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+// ---------------------------------------------------------------------------
+// OrchestrationService — Rust gRPC server
+// Called by Go API gateway on every inbound request, BEFORE the LLM is invoked.
+// ---------------------------------------------------------------------------
+
+service OrchestrationService {
+  // Full pre-flight: trigger lookup → cold start → budget → prompt assembly
+  rpc PreFlight (PreFlightRequest) returns (PreFlightResponse);
+
+  // Individual sub-operations for fine-grained calls
+  rpc TriggerLookup (TriggerLookupRequest) returns (TriggerLookupResponse);
+  rpc ComputeBudget (BudgetRequest) returns (BudgetResponse);
+  rpc AssemblePrompt (PromptAssemblyRequest) returns (PromptAssemblyResponse);
+  rpc CountTokens (TokenCountRequest) returns (TokenCountResponse);
+
+  // Trigger index management
+  rpc IndexTriggers (IndexTriggersRequest) returns (IndexTriggersResponse);
+  rpc RemoveTriggers (RemoveTriggersRequest) returns (RemoveTriggersResponse);
+}
+
+// ---------------------------------------------------------------------------
+// PreFlight — the main hot-path call
+// ---------------------------------------------------------------------------
+
+message PreFlightRequest {
+  string user_message          = 1;
+  ScopeEnvelope scope          = 2;
+  string session_id            = 3;
+  bool   is_new_session        = 4;   // triggers cold start
+  int32  max_context_tokens    = 5;   // budget ceiling
+  ModelTier preferred_tier     = 6;
+  repeated MemoryRecord candidate_memories = 7;  // from read pipeline
+}
+
+message PreFlightResponse {
+  // Trigger index hits (zero LLM tokens)
+  repeated TriggerHit trigger_hits     = 1;
+
+  // Cold start overview (injected if new session)
+  ProjectOverview cold_start_overview  = 2;
+
+  // Budget allocation
+  BudgetAllocation budget              = 3;
+
+  // Assembled prompt ready for LLM
+  string assembled_prompt              = 4;
+
+  // Timing
+  int64  elapsed_us                    = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Trigger index
+// ---------------------------------------------------------------------------
+
+message TriggerLookupRequest {
+  string user_message  = 1;
+  ScopeEnvelope scope  = 2;
+}
+
+message TriggerLookupResponse {
+  repeated TriggerHit hits = 1;
+  int64 elapsed_us         = 2;
+}
+
+message TriggerHit {
+  string phrase      = 1;
+  string memory_id   = 2;
+  float  match_score = 3;  // 1.0 = exact, <1.0 = fuzzy
+}
+
+message IndexTriggersRequest {
+  repeated TriggerEntry entries = 1;
+}
+
+message TriggerEntry {
+  string memory_id          = 1;
+  repeated string phrases   = 2;
+  ScopeEnvelope scope       = 3;
+}
+
+message IndexTriggersResponse {
+  int32 indexed_count = 1;
+}
+
+message RemoveTriggersRequest {
+  repeated string memory_ids = 1;
+}
+
+message RemoveTriggersResponse {
+  int32 removed_count = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Context budget
+// ---------------------------------------------------------------------------
+
+message BudgetRequest {
+  int32 max_tokens                       = 1;
+  repeated MemoryCandidate candidates    = 2;
+  string system_prompt                   = 3;
+  string user_message                    = 4;
+}
+
+message MemoryCandidate {
+  string memory_id   = 1;
+  int32  token_count = 2;
+  float  score       = 3;
+  float  importance  = 4;
+}
+
+message BudgetResponse {
+  BudgetAllocation allocation = 1;
+}
+
+message BudgetAllocation {
+  int32 total_budget       = 1;
+  int32 system_tokens      = 2;
+  int32 user_tokens        = 3;
+  int32 memory_tokens      = 4;
+  int32 remaining_tokens   = 5;
+  repeated string selected_memory_ids = 6;  // memories that fit the budget
+}
+
+// ---------------------------------------------------------------------------
+// Prompt assembly
+// ---------------------------------------------------------------------------
+
+message PromptAssemblyRequest {
+  string system_prompt                   = 1;
+  string user_message                    = 2;
+  repeated MemoryRecord memories         = 3;
+  ProjectOverview overview               = 4;
+  repeated Citation citations            = 5;
+}
+
+message PromptAssemblyResponse {
+  string assembled_prompt = 1;
+  int32  total_tokens     = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Token counting
+// ---------------------------------------------------------------------------
+
+message TokenCountRequest {
+  string text = 1;
+}
+
+message TokenCountResponse {
+  int32 token_count = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Cold start
+// ---------------------------------------------------------------------------
+
+message ProjectOverview {
+  string tenant_id          = 1;
+  string project_id         = 2;
+  string summary            = 3;
+  repeated string key_entities    = 4;
+  repeated string recent_decisions = 5;
+  int32 active_memory_count = 6;
+  google.protobuf.Timestamp generated_at = 7;
+}
