@@ -39,7 +39,7 @@ class ModelRouter:
                 max_tokens=4096,
                 cost_per_1k_input=0.001,
                 cost_per_1k_output=0.001,
-                capabilities=["rerank", "classify"],
+                capabilities=["rerank", "classify", "extract"],
             ),
             ModelConfig(
                 model_id="quality-compact",
@@ -48,7 +48,7 @@ class ModelRouter:
                 max_tokens=8192,
                 cost_per_1k_input=0.003,
                 cost_per_1k_output=0.015,
-                capabilities=["compact", "summarize", "classify", "rerank"],
+                capabilities=["compact", "summarize", "classify", "rerank", "extract"],
             ),
             ModelConfig(
                 model_id="haiku",
@@ -66,7 +66,7 @@ class ModelRouter:
                 max_tokens=8192,
                 cost_per_1k_input=0.003,
                 cost_per_1k_output=0.015,
-                capabilities=["classify", "summarize", "compact", "rerank"],
+                capabilities=["classify", "summarize", "compact", "rerank", "extract"],
             ),
             ModelConfig(
                 model_id="opus",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import httpx
@@ -33,6 +34,7 @@ class ReadPipeline:
         self.model_router = model_router
         self.store_url = store_url
         self.orchestration_url = orchestration_url
+        self.min_combined_score = float(os.environ.get("PROVENA_ABSTAIN_MIN_SCORE", "0.15"))
 
     async def search(
         self,
@@ -44,9 +46,19 @@ class ReadPipeline:
             request.query,
             request.scope,
             request.limit,
+            query_embedding=request.query_embedding or None,
             access_headers=access_headers,
         )
         ranked = self._rerank(request.query, candidates)
+        if ranked and ranked[0].combined < self.min_combined_score:
+            return ReadSearchResponse(
+                results=[],
+                token_usage=TokenUsage(
+                    operation="abstain_low_evidence",
+                    tenant_id=request.scope.get("tenant_id", ""),
+                ),
+                budget_remaining=request.max_tokens,
+            )
         contradictions = self._detect_contradictions(ranked)
         trimmed, tokens_used = await self._apply_context_budget(ranked, request.max_tokens)
         citations = self._package_citations([self._citation_payload(memory) for memory in trimmed])
@@ -107,14 +119,15 @@ class ReadPipeline:
         scope: dict[str, Any],
         limit: int = 20,
         vector_weight: float = 0.45,
+        query_embedding: list[float] | None = None,
         access_headers: dict[str, str] | None = None,
     ) -> list[ScoredMemory]:
-        query_embedding = self.embedding_manager.generate(query)
+        resolved_embedding = query_embedding or self.embedding_manager.generate(query)
         fts_results = await self._fts_search(
             query,
             scope,
             limit,
-            query_embedding,
+            resolved_embedding,
             access_headers=access_headers,
         )
         if not fts_results:
@@ -127,7 +140,7 @@ class ReadPipeline:
         }
         vector_scores = {
             item.memory_id: item.vector_score
-            for item in self._vector_search(query_embedding, embeddings, limit, fts_results)
+            for item in self._vector_search(resolved_embedding, embeddings, limit, fts_results)
         }
 
         merged: list[ScoredMemory] = []

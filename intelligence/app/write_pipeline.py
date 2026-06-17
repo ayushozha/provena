@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from app.embeddings import EmbeddingManager
+from app.extract_facts import ExtractedFact, FactExtractor
 from app.model_router import ModelRouter
 from app.models import (
     ACLEntry,
@@ -43,12 +44,14 @@ class WritePipeline:
         overview_generator: Any | None = None,
         store_url: str = "http://localhost:8000",
         orchestration_url: str = "http://localhost:50051",
+        fact_extractor: FactExtractor | None = None,
     ) -> None:
         self.embedding_manager = embedding_manager
         self.model_router = model_router
         self.overview_generator = overview_generator
         self.store_url = store_url
         self.orchestration_url = orchestration_url
+        self.fact_extractor = fact_extractor or FactExtractor(model_router)
         self._fingerprints: set[str] = set()
 
     async def process(self, request: WriteRequest) -> WriteResponse:
@@ -58,13 +61,51 @@ class WritePipeline:
         kind = request.kind if request.kind not in {"", "auto"} else self._classify(request.content, request.title, request.tags)
         trace.classified_kind = kind
 
+        facts = await self.fact_extractor.extract(request.content, request.title)
+        primary: WriteResponse | None = None
+        stored_count = 0
+        fact_count = len(facts)
+
+        for index, fact in enumerate(facts):
+            fact_request = self._fact_request(request, fact, kind, index)
+            result = await self._process_one(
+                fact_request,
+                trace,
+                start,
+                update_overview=index == len(facts) - 1,
+                fact_count=fact_count,
+            )
+            if result.created:
+                stored_count += 1
+            if primary is None:
+                primary = result
+            elif result.created:
+                primary.memory.setdefault("extracted_memory_ids", []).append(result.memory.get("memory_id"))
+
+        if primary is None:
+            trace.elapsed_ms = (time.monotonic() - start) * 1000
+            return WriteResponse(created=False, memory={}, pipeline_trace=trace)
+
+        primary.memory["extraction_count"] = len(facts)
+        primary.memory["extraction_stored"] = stored_count
+        trace.elapsed_ms = (time.monotonic() - start) * 1000
+        primary.pipeline_trace = trace
+        return primary
+
+    async def _process_one(
+        self,
+        request: WriteRequest,
+        trace: PipelineTrace,
+        start: float,
+        update_overview: bool,
+        fact_count: int = 1,
+    ) -> WriteResponse:
         fingerprint = self._fingerprint(request.content, request.scope)
         is_dup, dup_id = self._deduplicate(fingerprint)
-        trace.deduplicated = is_dup
         if is_dup:
-            trace.elapsed_ms = (time.monotonic() - start) * 1000
             return WriteResponse(created=False, memory={"duplicate_of": dup_id}, pipeline_trace=trace)
 
+        kind = request.kind if request.kind not in {"", "auto"} else self._classify(request.content, request.title, request.tags)
         embedding = self._generate_embedding(request.content)
         trace.embedding_model_used = self.embedding_manager.model_id
         trace.embedding_dimensions = self.embedding_manager.dimensions
@@ -75,12 +116,14 @@ class WritePipeline:
         conflicts = self._detect_conflicts(request.content, request.scope, entities)
         trace.detected_conflicts = conflicts
 
-        memory = self._memory_payload(request, kind, embedding, entities)
-        created = True
+        memory = self._memory_payload(request, kind, embedding, entities, fact_count=fact_count)
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(f"{self.store_url}/v1/memories", json=memory)
+                if response.status_code >= 400 and request.memory_id and "UNIQUE" in response.text:
+                    memory["memory_id"] = str(uuid.uuid4())
+                    response = await client.post(f"{self.store_url}/v1/memories", json=memory)
                 if response.status_code >= 400:
                     raise WritePipelineError(response.status_code, response.text or "store rejected write")
                 stored = response.json()
@@ -96,9 +139,25 @@ class WritePipeline:
         if created:
             await self._index_triggers(memory, request.scope)
 
-        trace.overview_updated = await self._update_overview(request.scope)
-        trace.elapsed_ms = (time.monotonic() - start) * 1000
+        if update_overview:
+            trace.overview_updated = await self._update_overview(request.scope)
+
         return WriteResponse(created=created, memory=memory, pipeline_trace=trace)
+
+    def _fact_request(self, request: WriteRequest, fact: ExtractedFact, kind: str, index: int) -> WriteRequest:
+        metadata = {
+            **request.metadata,
+            "extraction_source": "add_only",
+            "extraction_index": index,
+        }
+        return request.model_copy(
+            update={
+                "content": fact.content,
+                "title": fact.title or request.title,
+                "kind": fact.kind if fact.kind not in {"", "auto"} else kind,
+                "metadata": metadata,
+            }
+        )
 
     def _memory_payload(
         self,
@@ -106,9 +165,14 @@ class WritePipeline:
         kind: str,
         embedding: list[float],
         entities: list[str],
+        fact_count: int = 1,
     ) -> dict[str, Any]:
+        extraction_index = int(request.metadata.get("extraction_index", 0))
+        memory_id = request.memory_id or str(uuid.uuid4())
+        if fact_count > 1:
+            memory_id = f"{memory_id}_f{extraction_index}"
         return {
-            "memory_id": request.memory_id or str(uuid.uuid4()),
+            "memory_id": memory_id,
             "kind": kind,
             "scope": request.scope,
             "content": request.content,

@@ -9,10 +9,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
+from app.hot_cache import InMemoryHotCache, MemoryHotCache
 from app.models import (
     ACLEntry,
     ACLPermission,
+    AgentContextMemory,
+    AgentContextRequest,
+    AgentContextResponse,
+    AuditEvent,
     ConnectorConfig,
+    ConnectedSourceInspection,
     ConnectorSourceBatch,
     ConnectorSourceRecord,
     ConnectorStatus,
@@ -21,14 +27,30 @@ from app.models import (
     EraseResponse,
     IntegrationCoverageSummary,
     LegalHold,
+    MemoryArchitectureOverview,
     MemoryCreate,
+    MemoryFeedbackCreate,
+    MemoryFeedbackRecord,
+    MemoryFeedbackSummary,
+    MemoryFeedbackType,
+    MemoryHistoryEvent,
+    MemoryHistoryEventType,
+    MemoryInspectionResponse,
     MemoryKind,
+    MemoryLayer,
     MemoryRecord,
+    MemoryStorageState,
     MemoryStatus,
+    MemoryUpdate,
     MemoryWriteResult,
+    OnboardingStatus,
+    OnboardingStep,
     PermissionLevel,
     PrincipalMapping,
     PrincipalMappingBatch,
+    ProductionEvidenceMetric,
+    ProductionEvidenceReport,
+    ProductionUseCaseEvidence,
     ProjectSnapshot,
     RelatedMemory,
     RelationKind,
@@ -39,14 +61,21 @@ from app.models import (
     RetentionPolicy,
     ScopeEnvelope,
     SearchRequest,
+    SearchExplainCandidate,
+    SearchExplainResponse,
     SearchResponse,
     SearchResult,
+    StorageTierOverview,
     SourcePermissionBatch,
     SourcePermissionGrant,
     SourceReference,
     SourceSyncStatus,
     SyncJob,
     SyncJobStatus,
+    TemporalGraphEdge,
+    TemporalGraphNode,
+    TemporalGraphRequest,
+    TemporalGraphResponse,
 )
 
 
@@ -63,13 +92,34 @@ class AccessContext:
     groups: list[str] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class SearchEvaluation:
+    record: MemoryRecord
+    score: float = 0.0
+    reasons: list[str] = field(default_factory=list)
+    rejection_reasons: list[str] = field(default_factory=list)
+    fts_rank: float | None = None
+    vector_rank: float | None = None
+
+
+@dataclass(slots=True)
+class SearchCandidate:
+    row: sqlite3.Row
+    fts_rank: float | None = None
+    vector_rank: float | None = None
+
+
+_SEARCH_VECTOR_WEIGHT = 0.45
+
+
 class ProvenaStore:
-    def __init__(self, db_path: Path | str) -> None:
+    def __init__(self, db_path: Path | str, hot_cache: MemoryHotCache | None = None) -> None:
         path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        self.hot_cache = hot_cache or InMemoryHotCache(ttl_seconds=300)
         self._ensure_schema()
         self._ensure_compatibility()
 
@@ -99,6 +149,7 @@ class ProvenaStore:
         now = self._iso_now()
         memory_id = payload.memory_id or str(uuid.uuid4())
         acl = payload.acl or self._default_acl(payload.scope, access)
+        memory_layer = payload.memory_layer or self._infer_memory_layer(payload.scope)
 
         with self.conn:
             self.conn.execute(
@@ -107,9 +158,10 @@ class ProvenaStore:
                     memory_id, fingerprint, kind, status, tenant_id, workspace_id,
                     project_id, user_id, agent_id, session_id, title, content, summary,
                     entity_keys_json, tags_json, metadata_json, importance, confidence,
-                    strength, valid_from, valid_to, created_at, updated_at,
+                    strength, valid_from, valid_to, expires_at, created_at, updated_at,
+                    memory_layer,
                     embedding_model, embedding_json, acl_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     memory_id,
@@ -133,8 +185,10 @@ class ProvenaStore:
                     payload.strength,
                     self._to_iso(payload.valid_from),
                     self._to_iso(payload.valid_to),
+                    self._to_iso(payload.expires_at),
                     now,
                     now,
+                    memory_layer.value,
                     payload.embedding_model,
                     self._to_json(payload.embedding),
                     self._to_json([entry.model_dump() for entry in acl]),
@@ -167,7 +221,154 @@ class ProvenaStore:
         if record is None:
             row = self.conn.execute("SELECT * FROM memories WHERE memory_id = ?", (memory_id,)).fetchone()
             record = self._row_to_record(row)
+        with self.conn:
+            self._insert_history(
+                memory_id,
+                MemoryHistoryEventType.ADD,
+                old_memory={},
+                new_memory=record.model_dump(mode="json"),
+                details={"kind": payload.kind.value, "memory_layer": memory_layer.value},
+                actor_id=access.principal_id if access else None,
+            )
+        self._invalidate_tenant_cache(payload.scope.tenant_id)
         return MemoryWriteResult(created=True, memory=record)
+
+    def update_memory(
+        self,
+        memory_id: str,
+        payload: MemoryUpdate,
+        access: AccessContext | None = None,
+    ) -> MemoryWriteResult:
+        existing = self.get_memory(memory_id, access=access)
+        if existing is None:
+            raise ValueError("memory not found")
+        if not self._can_access(existing, access, ACLPermission.WRITE):
+            raise ValueError("write access required")
+
+        updates = payload.model_dump(exclude_unset=True)
+        if not updates:
+            return MemoryWriteResult(created=False, memory=existing)
+
+        next_kind = payload.kind or existing.kind
+        next_layer = payload.memory_layer or existing.memory_layer
+        next_title = payload.title if "title" in updates else existing.title
+        next_content = payload.content if "content" in updates else existing.content
+        next_summary = payload.summary if "summary" in updates else existing.summary
+        next_entity_keys = payload.entity_keys if payload.entity_keys is not None else existing.entity_keys
+        next_tags = payload.tags if payload.tags is not None else existing.tags
+        next_metadata = payload.metadata if payload.metadata is not None else existing.metadata
+        next_importance = payload.importance if payload.importance is not None else existing.importance
+        next_confidence = payload.confidence if payload.confidence is not None else existing.confidence
+        next_strength = payload.strength if payload.strength is not None else existing.strength
+        next_valid_from = payload.valid_from if "valid_from" in updates else existing.valid_from
+        next_valid_to = payload.valid_to if "valid_to" in updates else existing.valid_to
+        next_expires_at = payload.expires_at if "expires_at" in updates else existing.expires_at
+        next_embedding_model = payload.embedding_model if "embedding_model" in updates else existing.embedding_model
+        next_embedding = payload.embedding if payload.embedding is not None else existing.embedding
+        next_acl = payload.acl if payload.acl is not None else existing.acl
+        next_sources = payload.source_references if payload.source_references is not None else existing.source_references
+        next_triggers = payload.trigger_phrases if payload.trigger_phrases is not None else existing.trigger_phrases
+        next_fingerprint = self._fingerprint(existing.scope, next_kind.value, next_title, next_content)
+        old_snapshot = existing.model_dump(mode="json")
+        now = self._iso_now()
+
+        try:
+            with self.conn:
+                self.conn.execute(
+                    """
+                    UPDATE memories
+                    SET fingerprint = ?,
+                        kind = ?,
+                        title = ?,
+                        content = ?,
+                        summary = ?,
+                        entity_keys_json = ?,
+                        tags_json = ?,
+                        metadata_json = ?,
+                        importance = ?,
+                        confidence = ?,
+                        strength = ?,
+                        valid_from = ?,
+                        valid_to = ?,
+                        expires_at = ?,
+                        updated_at = ?,
+                        memory_layer = ?,
+                        embedding_model = ?,
+                        embedding_json = ?,
+                        acl_json = ?
+                    WHERE memory_id = ?
+                    """,
+                    (
+                        next_fingerprint,
+                        next_kind.value,
+                        next_title,
+                        next_content,
+                        next_summary,
+                        self._to_json(next_entity_keys),
+                        self._to_json(next_tags),
+                        self._to_json(next_metadata),
+                        next_importance,
+                        next_confidence,
+                        next_strength,
+                        self._to_iso(next_valid_from),
+                        self._to_iso(next_valid_to),
+                        self._to_iso(next_expires_at),
+                        now,
+                        next_layer.value,
+                        next_embedding_model,
+                        self._to_json(next_embedding),
+                        self._to_json([entry.model_dump() for entry in next_acl]),
+                        memory_id,
+                    ),
+                )
+                if payload.source_references is not None:
+                    self.conn.execute("DELETE FROM memory_sources WHERE memory_id = ?", (memory_id,))
+                    for source in next_sources:
+                        self._insert_source(memory_id, source)
+                if payload.trigger_phrases is not None:
+                    self._replace_trigger_phrases(memory_id, existing.scope.tenant_id, next_triggers)
+                if payload.supersedes_memory_id:
+                    self.conn.execute(
+                        "UPDATE memories SET status = ?, updated_at = ? WHERE memory_id = ? AND tenant_id = ?",
+                        (
+                            MemoryStatus.SUPERSEDED.value,
+                            now,
+                            payload.supersedes_memory_id,
+                            existing.scope.tenant_id,
+                        ),
+                    )
+                    self._insert_relation(
+                        payload.supersedes_memory_id,
+                        memory_id,
+                        RelationKind.SUPERSEDES.value,
+                        existing.scope,
+                    )
+                self._index_memory(memory_id, next_title, next_summary, next_content, next_tags, next_entity_keys)
+                self._insert_audit(
+                    "memory_updated",
+                    memory_id,
+                    existing.scope.tenant_id,
+                    {"updated_fields": sorted(updates.keys())},
+                )
+                self._refresh_hold_state([memory_id])
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("update would create a duplicate memory fingerprint") from exc
+
+        updated = self.get_memory(memory_id, access=access)
+        if updated is None:
+            row = self.conn.execute("SELECT * FROM memories WHERE memory_id = ?", (memory_id,)).fetchone()
+            updated = self._row_to_record(row)
+        with self.conn:
+            self._insert_history(
+                memory_id,
+                MemoryHistoryEventType.UPDATE,
+                old_memory=old_snapshot,
+                new_memory=updated.model_dump(mode="json"),
+                details={"updated_fields": sorted(updates.keys())},
+                actor_id=access.principal_id if access else None,
+            )
+        self._invalidate_tenant_cache(existing.scope.tenant_id)
+        return MemoryWriteResult(created=False, memory=updated)
 
     def get_memory(
         self,
@@ -189,42 +390,201 @@ class ProvenaStore:
             return None
         return record
 
+    def inspect_memory(
+        self,
+        memory_id: str,
+        audit_limit: int = 25,
+    ) -> MemoryInspectionResponse | None:
+        self._refresh_hold_state([memory_id])
+        row = self._raw_memory_row(memory_id)
+        if row is None:
+            return None
+        record = self._row_to_record(row)
+        connected_sources = self._connected_sources_for_record(record)
+        return MemoryInspectionResponse(
+            memory=record,
+            storage=self._storage_state(record, connected_source_count=len(connected_sources)),
+            connected_sources=connected_sources,
+            related_memories=self._related_memories(record.memory_id, access=None),
+            audit_trail=self._audit_events_for_memory(record.memory_id, limit=audit_limit),
+            history=self.list_memory_history(record.memory_id, limit=audit_limit),
+            feedback_summary=self.feedback_summary(record.memory_id),
+        )
+
+    def list_memory_history(self, memory_id: str, limit: int = 50) -> list[MemoryHistoryEvent]:
+        rows = self.conn.execute(
+            """
+            SELECT history_id, memory_id, event, actor_id, old_memory_json, new_memory_json, details_json, created_at
+            FROM memory_history
+            WHERE memory_id = ?
+            ORDER BY datetime(created_at) DESC, rowid DESC
+            LIMIT ?
+            """,
+            (memory_id, limit),
+        ).fetchall()
+        return [
+            MemoryHistoryEvent(
+                history_id=row["history_id"],
+                memory_id=row["memory_id"],
+                event=MemoryHistoryEventType(row["event"]),
+                actor_id=row["actor_id"],
+                old_memory=self._json_to_dict(row["old_memory_json"]),
+                new_memory=self._json_to_dict(row["new_memory_json"]),
+                details=self._json_to_dict(row["details_json"]),
+                created_at=self._from_iso(row["created_at"]) or datetime.now(UTC),
+            )
+            for row in rows
+        ]
+
+    def add_memory_feedback(
+        self,
+        memory_id: str,
+        payload: MemoryFeedbackCreate,
+        access: AccessContext | None = None,
+    ) -> MemoryFeedbackRecord:
+        record = self.get_memory(memory_id, access=access)
+        if record is None:
+            raise ValueError("memory not found")
+        if not self._can_access(record, access, ACLPermission.READ):
+            raise ValueError("read access required")
+        created_at = self._iso_now()
+        feedback = MemoryFeedbackRecord(
+            feedback_id=payload.feedback_id or str(uuid.uuid4()),
+            memory_id=memory_id,
+            tenant_id=record.scope.tenant_id,
+            feedback_type=payload.feedback_type,
+            principal_id=payload.principal_id or (access.principal_id if access else None),
+            reason=payload.reason,
+            metadata=payload.metadata,
+            created_at=self._from_iso(created_at) or datetime.now(UTC),
+        )
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO memory_feedback (
+                    feedback_id, memory_id, tenant_id, feedback_type, principal_id, reason, metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    feedback.feedback_id,
+                    feedback.memory_id,
+                    feedback.tenant_id,
+                    feedback.feedback_type.value,
+                    feedback.principal_id,
+                    feedback.reason,
+                    self._to_json(feedback.metadata),
+                    created_at,
+                ),
+            )
+            self._insert_audit(
+                "memory_feedback_added",
+                memory_id,
+                record.scope.tenant_id,
+                {"feedback_type": feedback.feedback_type.value},
+            )
+            self._insert_history(
+                memory_id,
+                MemoryHistoryEventType.FEEDBACK,
+                old_memory={},
+                new_memory={},
+                details={
+                    "feedback_type": feedback.feedback_type.value,
+                    "reason": feedback.reason,
+                    "principal_id": feedback.principal_id,
+                },
+                actor_id=feedback.principal_id,
+            )
+        self._invalidate_tenant_cache(record.scope.tenant_id)
+        return feedback
+
+    def list_memory_feedback(
+        self,
+        memory_id: str,
+        access: AccessContext | None = None,
+        limit: int = 100,
+    ) -> list[MemoryFeedbackRecord]:
+        record = self.get_memory(memory_id, access=access)
+        if record is None:
+            raise ValueError("memory not found")
+        rows = self.conn.execute(
+            """
+            SELECT feedback_id, memory_id, tenant_id, feedback_type, principal_id, reason, metadata_json, created_at
+            FROM memory_feedback
+            WHERE memory_id = ?
+            ORDER BY datetime(created_at) DESC, rowid DESC
+            LIMIT ?
+            """,
+            (memory_id, limit),
+        ).fetchall()
+        return [
+            MemoryFeedbackRecord(
+                feedback_id=row["feedback_id"],
+                memory_id=row["memory_id"],
+                tenant_id=row["tenant_id"],
+                feedback_type=MemoryFeedbackType(row["feedback_type"]),
+                principal_id=row["principal_id"],
+                reason=row["reason"],
+                metadata=self._json_to_dict(row["metadata_json"]),
+                created_at=self._from_iso(row["created_at"]) or datetime.now(UTC),
+            )
+            for row in rows
+        ]
+
+    def feedback_summary(self, memory_id: str) -> MemoryFeedbackSummary:
+        rows = self.conn.execute(
+            """
+            SELECT feedback_type, COUNT(*) AS count, MAX(created_at) AS latest_created_at
+            FROM memory_feedback
+            WHERE memory_id = ?
+            GROUP BY feedback_type
+            """,
+            (memory_id,),
+        ).fetchall()
+        counts = {row["feedback_type"]: int(row["count"]) for row in rows}
+        latest_values = [self._from_iso(row["latest_created_at"]) for row in rows if row["latest_created_at"]]
+        summary = MemoryFeedbackSummary(
+            positive=counts.get(MemoryFeedbackType.POSITIVE.value, 0),
+            negative=counts.get(MemoryFeedbackType.NEGATIVE.value, 0),
+            correction=counts.get(MemoryFeedbackType.CORRECTION.value, 0),
+            pin=counts.get(MemoryFeedbackType.PIN.value, 0),
+            latest_feedback_at=max(latest_values) if latest_values else None,
+        )
+        summary.net_score = self._feedback_net_score(summary)
+        return summary
+
     def search_memories(
         self,
         payload: SearchRequest,
         access: AccessContext | None = None,
     ) -> SearchResponse:
+        cache_key = self._search_cache_key(payload, access)
+        cached = self.hot_cache.get_search(payload.scope.tenant_id, cache_key)
+        if cached is not None:
+            return SearchResponse(**cached)
+
         query_terms = self._query_terms(payload.query)
-        rows = self._candidate_rows(payload)
-        self._refresh_hold_state([row["memory_id"] for row in rows])
-        rows = self._candidate_rows(payload)
+        candidates, _ = self._candidate_rows_with_strategy(payload)
+        self._refresh_hold_state([candidate.row["memory_id"] for candidate in candidates])
+        candidates, _ = self._candidate_rows_with_strategy(payload)
         results: list[SearchResult] = []
-        for row in rows:
-            record = self._row_to_record(row)
-            if not self._can_read_memory(record, access):
-                continue
-            if not self._scope_matches(record.scope, payload.scope):
-                continue
-            if payload.kinds and record.kind not in payload.kinds:
-                continue
-            if payload.tags and not set(payload.tags).issubset(record.tags):
-                continue
-            if payload.entity_keys and not set(payload.entity_keys).intersection(record.entity_keys):
-                continue
-            fts_rank = float(row["fts_rank"]) if "fts_rank" in row.keys() and row["fts_rank"] is not None else None
-            score, reasons = self._score_record(record, payload.scope, query_terms, fts_rank)
-            if payload.query_embedding and record.embedding:
-                vector_score = self._cosine_similarity(payload.query_embedding, record.embedding)
-                score += vector_score * 0.35
-                reasons.append("vector similarity")
-            if score <= 0:
+        for candidate in candidates:
+            record = self._row_to_record(candidate.row)
+            evaluation = self._evaluate_search_candidate(
+                record,
+                payload,
+                access,
+                query_terms,
+                candidate.fts_rank,
+                candidate.vector_rank,
+            )
+            if evaluation.rejection_reasons:
                 continue
             related = self._related_memories(record.memory_id, access) if payload.include_relations else []
             results.append(
                 SearchResult(
                     memory=record,
-                    score=score,
-                    reasons=reasons,
+                    score=evaluation.score,
+                    reasons=evaluation.reasons,
                     related_memories=related,
                 )
             )
@@ -237,7 +597,508 @@ class ProvenaStore:
             ),
             reverse=True,
         )
-        return SearchResponse(results=results[: payload.limit])
+        response = SearchResponse(results=results[: payload.limit])
+        self.hot_cache.set_search(
+            payload.scope.tenant_id,
+            cache_key,
+            response.model_dump(mode="json"),
+        )
+        return response
+
+    def agent_context(
+        self,
+        payload: AgentContextRequest,
+        access: AccessContext | None = None,
+    ) -> AgentContextResponse:
+        search = SearchRequest(
+            query=payload.query,
+            scope=payload.scope,
+            kinds=payload.kinds,
+            memory_layers=payload.memory_layers,
+            tags=payload.tags,
+            entity_keys=payload.entity_keys,
+            include_relations=True,
+            limit=payload.max_memories,
+        )
+        response = self.search_memories(search, access=access)
+        context_blocks: list[str] = []
+        context_memories: list[AgentContextMemory] = []
+        all_citations: list[str] = []
+        remaining = payload.max_characters
+
+        for index, result in enumerate(response.results, start=1):
+            record = result.memory
+            content = record.summary or record.content
+            citations = self._citation_labels(record)
+            all_citations.extend(citation for citation in citations if citation not in all_citations)
+            header = f"[{index}] {record.kind.value}/{record.memory_layer.value}: {record.title or record.memory_id}"
+            block_parts = [header, content]
+            if payload.include_citations and citations:
+                block_parts.append("Sources: " + "; ".join(citations[:5]))
+            if result.reasons:
+                block_parts.append("Retrieval reasons: " + ", ".join(result.reasons[:5]))
+            block = "\n".join(block_parts)
+            if len(block) > remaining:
+                if remaining < 120:
+                    break
+                block = block[: remaining - 3].rstrip() + "..."
+            context_blocks.append(block)
+            remaining -= len(block) + 2
+            context_memories.append(
+                AgentContextMemory(
+                    memory_id=record.memory_id,
+                    title=record.title,
+                    kind=record.kind,
+                    memory_layer=record.memory_layer,
+                    content=content,
+                    score=result.score,
+                    reasons=result.reasons,
+                    citations=citations,
+                    updated_at=record.updated_at,
+                )
+            )
+            if remaining <= 0:
+                break
+
+        context = "\n\n".join(context_blocks)
+        return AgentContextResponse(
+            query=payload.query,
+            scope=payload.scope,
+            context=context,
+            token_estimate=max(1, len(context) // 4) if context else 0,
+            memories=context_memories,
+            citations=all_citations,
+        )
+
+    def temporal_graph(
+        self,
+        payload: TemporalGraphRequest,
+        access: AccessContext | None = None,
+    ) -> TemporalGraphResponse:
+        seed_ids = list(dict.fromkeys(payload.seed_memory_ids))
+        if payload.query or not seed_ids:
+            search = SearchRequest(
+                query=payload.query or "",
+                scope=payload.scope,
+                memory_layers=payload.memory_layers,
+                include_relations=False,
+                include_deleted=payload.include_expired,
+                limit=payload.limit,
+            )
+            seed_ids.extend(result.memory.memory_id for result in self.search_memories(search, access=access).results)
+            seed_ids = list(dict.fromkeys(seed_ids))
+
+        visited: dict[str, MemoryRecord] = {}
+        frontier = seed_ids[: payload.limit]
+        now = datetime.now(UTC)
+        for depth in range(payload.depth + 1):
+            next_frontier: list[str] = []
+            for memory_id in frontier:
+                if len(visited) >= payload.limit or memory_id in visited:
+                    continue
+                record = self.get_memory(memory_id, access=access, enforce_source_grants=True)
+                if record is None:
+                    continue
+                if not self._scope_matches(record.scope, payload.scope):
+                    continue
+                if payload.memory_layers and record.memory_layer not in payload.memory_layers:
+                    continue
+                if not payload.include_expired and record.expires_at and record.expires_at <= now:
+                    continue
+                visited[memory_id] = record
+                if depth >= payload.depth:
+                    continue
+                next_frontier.extend(self._adjacent_memory_ids(memory_id, payload.scope.tenant_id))
+            frontier = [memory_id for memory_id in dict.fromkeys(next_frontier) if memory_id not in visited]
+            if not frontier or len(visited) >= payload.limit:
+                break
+
+        nodes = [
+            TemporalGraphNode(
+                memory=record,
+                observed_at=record.updated_at,
+                valid_from=record.valid_from,
+                valid_to=record.valid_to,
+                expires_at=record.expires_at,
+                layer=record.memory_layer,
+            )
+            for record in sorted(
+                visited.values(),
+                key=lambda item: (
+                    item.valid_from or item.updated_at,
+                    item.updated_at,
+                ),
+                reverse=True,
+            )
+        ]
+        edges = self._temporal_edges(sorted(visited), payload.scope.tenant_id)
+        return TemporalGraphResponse(
+            scope=payload.scope,
+            query=payload.query,
+            seed_memory_ids=seed_ids[: payload.limit],
+            nodes=nodes,
+            edges=edges,
+        )
+
+    def explain_search(
+        self,
+        payload: SearchRequest,
+        access: AccessContext | None = None,
+    ) -> SearchExplainResponse:
+        query_terms = self._query_terms(payload.query)
+        candidates, strategy = self._candidate_rows_with_strategy(payload)
+        self._refresh_hold_state([candidate.row["memory_id"] for candidate in candidates])
+        candidates, strategy = self._candidate_rows_with_strategy(payload)
+
+        accepted: list[SearchExplainCandidate] = []
+        filtered_out: list[SearchExplainCandidate] = []
+        for candidate in candidates:
+            record = self._row_to_record(candidate.row)
+            evaluation = self._evaluate_search_candidate(
+                record,
+                payload,
+                access,
+                query_terms,
+                candidate.fts_rank,
+                candidate.vector_rank,
+            )
+            candidate = SearchExplainCandidate(
+                memory=record,
+                score=evaluation.score,
+                reasons=evaluation.reasons,
+                rejection_reasons=evaluation.rejection_reasons,
+                fts_rank=evaluation.fts_rank,
+            )
+            if evaluation.rejection_reasons:
+                filtered_out.append(candidate)
+            else:
+                accepted.append(candidate)
+
+        accepted.sort(
+            key=lambda item: (
+                item.score,
+                item.memory.updated_at,
+                item.memory.created_at,
+            ),
+            reverse=True,
+        )
+        for index, candidate in enumerate(accepted, start=1):
+            candidate.rank = index
+
+        filtered_out.sort(
+            key=lambda item: (
+                item.memory.updated_at,
+                item.memory.created_at,
+            ),
+            reverse=True,
+        )
+
+        returned = accepted[: payload.limit]
+        not_returned = accepted[payload.limit :]
+        return SearchExplainResponse(
+            query=payload.query,
+            query_terms=sorted(query_terms),
+            candidate_strategy=strategy,
+            total_candidates=len(candidates),
+            returned=returned,
+            not_returned=not_returned,
+            filtered_out=filtered_out,
+        )
+
+    def storage_overview(self, tenant_id: str) -> MemoryArchitectureOverview:
+        storage = StorageTierOverview(
+            memories_total=self._count_scalar(
+                "SELECT COUNT(*) FROM memories WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            memories_active=self._count_scalar(
+                "SELECT COUNT(*) FROM memories WHERE tenant_id = ? AND status = ?",
+                (tenant_id, MemoryStatus.ACTIVE.value),
+            ),
+            memories_superseded=self._count_scalar(
+                "SELECT COUNT(*) FROM memories WHERE tenant_id = ? AND status = ?",
+                (tenant_id, MemoryStatus.SUPERSEDED.value),
+            ),
+            memories_deleted=self._count_scalar(
+                "SELECT COUNT(*) FROM memories WHERE tenant_id = ? AND status = ?",
+                (tenant_id, MemoryStatus.DELETED.value),
+            ),
+            memories_held=self._count_scalar(
+                "SELECT COUNT(*) FROM memories WHERE tenant_id = ? AND held = 1",
+                (tenant_id,),
+            ),
+            conversation_layer_total=self._count_scalar(
+                "SELECT COUNT(*) FROM memories WHERE tenant_id = ? AND memory_layer = ?",
+                (tenant_id, MemoryLayer.CONVERSATION.value),
+            ),
+            session_layer_total=self._count_scalar(
+                "SELECT COUNT(*) FROM memories WHERE tenant_id = ? AND memory_layer = ?",
+                (tenant_id, MemoryLayer.SESSION.value),
+            ),
+            user_layer_total=self._count_scalar(
+                "SELECT COUNT(*) FROM memories WHERE tenant_id = ? AND memory_layer = ?",
+                (tenant_id, MemoryLayer.USER.value),
+            ),
+            agent_layer_total=self._count_scalar(
+                "SELECT COUNT(*) FROM memories WHERE tenant_id = ? AND memory_layer = ?",
+                (tenant_id, MemoryLayer.AGENT.value),
+            ),
+            organization_layer_total=self._count_scalar(
+                "SELECT COUNT(*) FROM memories WHERE tenant_id = ? AND memory_layer = ?",
+                (tenant_id, MemoryLayer.ORGANIZATION.value),
+            ),
+            source_references_total=self._count_scalar(
+                """
+                SELECT COUNT(*) FROM memory_sources
+                WHERE memory_id IN (SELECT memory_id FROM memories WHERE tenant_id = ?)
+                """,
+                (tenant_id,),
+            ),
+            connected_sources_total=self._count_scalar(
+                "SELECT COUNT(*) FROM connector_sources WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            relations_total=self._count_scalar(
+                "SELECT COUNT(*) FROM memory_relations WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            trigger_phrases_total=self._count_scalar(
+                "SELECT COUNT(*) FROM trigger_index WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            entity_registry_total=self._count_scalar(
+                "SELECT COUNT(*) FROM entity_registry WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            token_usage_total=self._count_scalar(
+                "SELECT COUNT(*) FROM token_usage WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            evidence_cache_total=self._count_scalar(
+                "SELECT COUNT(*) FROM evidence_cache WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            replication_state_total=self._count_scalar("SELECT COUNT(*) FROM replication_state"),
+            embedding_models_total=self._count_scalar("SELECT COUNT(*) FROM embedding_models"),
+            fts_indexed_memories=self._count_scalar(
+                """
+                SELECT COUNT(*) FROM memories_fts
+                WHERE memory_id IN (SELECT memory_id FROM memories WHERE tenant_id = ?)
+                """,
+                (tenant_id,),
+            ),
+            vectorized_memories=self._count_scalar(
+                """
+                SELECT COUNT(*) FROM memories
+                WHERE tenant_id = ?
+                  AND embedding_json IS NOT NULL
+                  AND embedding_json != '[]'
+                """,
+                (tenant_id,),
+            ),
+            project_snapshots_total=self._count_scalar(
+                "SELECT COUNT(*) FROM project_snapshots WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            audit_events_total=self._count_scalar(
+                "SELECT COUNT(*) FROM audit_log WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            history_events_total=self._count_scalar(
+                "SELECT COUNT(*) FROM memory_history WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            feedback_total=self._count_scalar(
+                "SELECT COUNT(*) FROM memory_feedback WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            connectors_total=self._count_scalar(
+                "SELECT COUNT(*) FROM connectors WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            principal_mappings_total=self._count_scalar(
+                "SELECT COUNT(*) FROM principal_mappings WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            permission_grants_total=self._count_scalar(
+                "SELECT COUNT(*) FROM source_permission_grants WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+            sync_jobs_total=self._count_scalar(
+                "SELECT COUNT(*) FROM sync_jobs WHERE tenant_id = ?",
+                (tenant_id,),
+            ),
+        )
+        return MemoryArchitectureOverview(
+            tenant_id=tenant_id,
+            generated_at=datetime.now(UTC),
+            storage=storage,
+            coverage=self.integration_coverage(tenant_id),
+        )
+
+    def onboarding_status(self, tenant_id: str) -> OnboardingStatus:
+        overview = self.storage_overview(tenant_id)
+        storage = overview.storage
+        coverage = overview.coverage
+        cache_backend = self.hot_cache.backend_name
+        steps = [
+            self._onboarding_step(
+                "storage",
+                "Storage schema initialized",
+                True,
+                f"{storage.memories_total} memories and {storage.audit_events_total} audit events are visible.",
+            ),
+            self._onboarding_step(
+                "redis_hot_cache",
+                "Redis hot cache configured",
+                cache_backend == "redis",
+                f"Current cache backend is {cache_backend}.",
+                required=False,
+                warning=True,
+            ),
+            self._onboarding_step(
+                "connector_registry",
+                "At least one enterprise connector registered",
+                coverage.connectors_total > 0,
+                f"{coverage.connectors_total} connectors registered; {coverage.connectors_healthy} active.",
+            ),
+            self._onboarding_step(
+                "source_inventory",
+                "Source inventory synchronized",
+                coverage.sources_total > 0,
+                f"{coverage.sources_total} sources indexed; {coverage.sources_stale} stale.",
+            ),
+            self._onboarding_step(
+                "principal_mapping",
+                "Principal mappings synchronized",
+                coverage.principals_mapped > 0,
+                f"{coverage.principals_mapped} principals mapped.",
+            ),
+            self._onboarding_step(
+                "source_permissions",
+                "Source permissions synchronized",
+                coverage.grants_total > 0,
+                f"{coverage.grants_total} source permission grants stored.",
+            ),
+            self._onboarding_step(
+                "memory_lifecycle",
+                "Memory lifecycle events observable",
+                storage.history_events_total > 0,
+                f"{storage.history_events_total} history events and {storage.feedback_total} feedback events stored.",
+                required=False,
+            ),
+            self._onboarding_step(
+                "benchmark_proof",
+                "Benchmark harness available",
+                True,
+                "Run python scripts/run_memory_benchmarks.py --output reports/memory-benchmark.json.",
+                required=False,
+            ),
+        ]
+        recommended_next_actions: list[str] = []
+        if coverage.connectors_total == 0:
+            recommended_next_actions.append("Register the first production connector with principal and ACL sync enabled.")
+        if coverage.sources_total == 0:
+            recommended_next_actions.append("Run a connector sync to populate source inventory.")
+        if coverage.principals_mapped == 0:
+            recommended_next_actions.append("Sync identity mappings before enabling broad enterprise recall.")
+        if coverage.grants_total == 0:
+            recommended_next_actions.append("Sync source permission grants so search cannot leak restricted memories.")
+        if cache_backend != "redis":
+            recommended_next_actions.append("Set PROVENA_REDIS_URL and PROVENA_HOT_CACHE_ENABLED=true before load testing.")
+
+        ready = all(step.status == "complete" for step in steps if step.required)
+        return OnboardingStatus(
+            tenant_id=tenant_id,
+            generated_at=datetime.now(UTC),
+            ready=ready,
+            cache_backend=cache_backend,
+            steps=steps,
+            recommended_next_actions=recommended_next_actions,
+        )
+
+    def production_evidence(self, tenant_id: str) -> ProductionEvidenceReport:
+        overview = self.storage_overview(tenant_id)
+        storage = overview.storage
+        coverage = overview.coverage
+        cache_backend = self.hot_cache.backend_name
+        gaps = list(coverage.missing_foundations)
+        if cache_backend != "redis":
+            gaps.append("redis_hot_cache")
+        if storage.memories_total == 0:
+            gaps.append("tenant_memory_corpus")
+        if storage.source_references_total == 0:
+            gaps.append("source_citations")
+
+        scale_level = "demo"
+        if coverage.connectors_total > 0 and coverage.sources_total > 0 and coverage.grants_total > 0:
+            scale_level = "pilot"
+        if storage.memories_total >= 1000 and coverage.sources_total >= 100 and cache_backend == "redis":
+            scale_level = "enterprise_candidate"
+
+        metrics = [
+            ProductionEvidenceMetric(
+                name="memories_total",
+                value=storage.memories_total,
+                unit="memories",
+                status="ok" if storage.memories_total > 0 else "missing",
+                detail="Stored tenant memories across all memory layers.",
+            ),
+            ProductionEvidenceMetric(
+                name="source_references_total",
+                value=storage.source_references_total,
+                unit="citations",
+                status="ok" if storage.source_references_total > 0 else "missing",
+                detail="Citations available for proving what the agent remembered.",
+            ),
+            ProductionEvidenceMetric(
+                name="connectors_total",
+                value=coverage.connectors_total,
+                unit="connectors",
+                status="ok" if coverage.connectors_total > 0 else "missing",
+                detail="Registered systems of record feeding enterprise context.",
+            ),
+            ProductionEvidenceMetric(
+                name="permission_grants_total",
+                value=coverage.grants_total,
+                unit="grants",
+                status="ok" if coverage.grants_total > 0 else "missing",
+                detail="Source ACL grants used to preserve enterprise access boundaries.",
+            ),
+            ProductionEvidenceMetric(
+                name="hot_cache_backend",
+                value=cache_backend,
+                status="ok" if cache_backend == "redis" else "warning",
+                detail="Redis is expected for production latency evidence.",
+            ),
+        ]
+        use_cases = [
+            ProductionUseCaseEvidence(
+                name="Permission-preserving enterprise assistant",
+                readiness="ready" if coverage.grants_total > 0 and storage.memories_total > 0 else "blocked",
+                detail="Requires memories plus synced source permission grants.",
+            ),
+            ProductionUseCaseEvidence(
+                name="Auditable memory investigation",
+                readiness="ready" if storage.audit_events_total > 0 and storage.history_events_total > 0 else "partial",
+                detail="Uses inspect, history, feedback, and storage overview APIs.",
+            ),
+            ProductionUseCaseEvidence(
+                name="Agent-native context injection",
+                readiness="ready" if storage.memories_total > 0 else "blocked",
+                detail="Uses POST /v1/agent/context for citation-aware prompt context.",
+            ),
+        ]
+        return ProductionEvidenceReport(
+            tenant_id=tenant_id,
+            generated_at=datetime.now(UTC),
+            cache_backend=cache_backend,
+            scale_level=scale_level,
+            metrics=metrics,
+            use_cases=use_cases,
+            benchmark_command="python scripts/run_memory_benchmarks.py --output reports/memory-benchmark.json",
+            gaps=sorted(dict.fromkeys(gaps)),
+        )
 
     def write_relation(
         self,
@@ -275,6 +1136,7 @@ class ProvenaStore:
             return DeleteResponse(memory_id=memory_id, deleted=False, hard_delete=hard_delete)
         if not self._can_access(record, access, ACLPermission.DELETE):
             raise ValueError("delete access required")
+        old_snapshot = record.model_dump(mode="json")
 
         with self.conn:
             if hard_delete:
@@ -285,6 +1147,15 @@ class ProvenaStore:
                     (MemoryStatus.DELETED.value, self._iso_now(), memory_id),
                 )
             self._insert_audit("memory_deleted", memory_id, record.scope.tenant_id, {"hard_delete": hard_delete})
+            self._insert_history(
+                memory_id,
+                MemoryHistoryEventType.DELETE,
+                old_memory=old_snapshot,
+                new_memory={} if hard_delete else {**old_snapshot, "status": MemoryStatus.DELETED.value},
+                details={"hard_delete": hard_delete},
+                actor_id=access.principal_id if access else None,
+            )
+        self._invalidate_tenant_cache(record.scope.tenant_id)
         return DeleteResponse(memory_id=memory_id, deleted=True, hard_delete=hard_delete)
 
     def erase_scope(
@@ -890,6 +1761,16 @@ class ProvenaStore:
             memory_id=memory_id,
             fingerprint=row["fingerprint"],
             kind=MemoryKind(row["kind"]),
+            memory_layer=MemoryLayer(row["memory_layer"] or self._infer_memory_layer(
+                ScopeEnvelope(
+                    tenant_id=row["tenant_id"],
+                    workspace_id=row["workspace_id"],
+                    project_id=row["project_id"],
+                    user_id=row["user_id"],
+                    agent_id=row["agent_id"],
+                    session_id=row["session_id"],
+                )
+            )),
             status=MemoryStatus(row["status"]),
             scope=ScopeEnvelope(
                 tenant_id=row["tenant_id"],
@@ -910,6 +1791,7 @@ class ProvenaStore:
             strength=float(row["strength"]),
             valid_from=self._from_iso(row["valid_from"]),
             valid_to=self._from_iso(row["valid_to"]),
+            expires_at=self._from_iso(row["expires_at"]),
             created_at=self._from_iso(row["created_at"]) or datetime.now(UTC),
             updated_at=self._from_iso(row["updated_at"]) or datetime.now(UTC),
             last_verified_at=self._from_iso(row["last_verified_at"]),
@@ -1022,6 +1904,35 @@ class ProvenaStore:
                 ],
             )
         ]
+
+    def _count_scalar(self, query: str, params: tuple[Any, ...] = ()) -> int:
+        row = self.conn.execute(query, params).fetchone()
+        return int(row[0]) if row else 0
+
+    def _onboarding_step(
+        self,
+        step_id: str,
+        label: str,
+        complete: bool,
+        detail: str,
+        *,
+        required: bool = True,
+        warning: bool = False,
+    ) -> OnboardingStep:
+        status = "complete" if complete else ("warning" if warning else "pending")
+        return OnboardingStep(
+            step_id=step_id,
+            label=label,
+            status=status,
+            detail=detail,
+            required=required,
+        )
+
+    def _raw_memory_row(self, memory_id: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM memories WHERE memory_id = ?",
+            (memory_id,),
+        ).fetchone()
 
     def _can_access(
         self,
@@ -1136,6 +2047,140 @@ class ProvenaStore:
             (record.scope.tenant_id, *source_ids),
         ).fetchall()
 
+    def _storage_state(
+        self,
+        record: MemoryRecord,
+        connected_source_count: int | None = None,
+    ) -> MemoryStorageState:
+        connected_source_count = (
+            connected_source_count
+            if connected_source_count is not None
+            else len(self._connected_sources_for_record(record))
+        )
+        return MemoryStorageState(
+            fingerprint=record.fingerprint,
+            embedding_dimensions=len(record.embedding),
+            source_reference_count=self._count_scalar(
+                "SELECT COUNT(*) FROM memory_sources WHERE memory_id = ?",
+                (record.memory_id,),
+            ),
+            connected_source_count=connected_source_count,
+            trigger_phrase_count=self._count_scalar(
+                "SELECT COUNT(*) FROM trigger_index WHERE memory_id = ?",
+                (record.memory_id,),
+            ),
+            relation_count=self._count_scalar(
+                """
+                SELECT COUNT(*) FROM memory_relations
+                WHERE from_memory_id = ? OR to_memory_id = ?
+                """,
+                (record.memory_id, record.memory_id),
+            ),
+            audit_event_count=self._count_scalar(
+                "SELECT COUNT(*) FROM audit_log WHERE memory_id = ?",
+                (record.memory_id,),
+            ),
+            fts_indexed=bool(
+                self.conn.execute(
+                    "SELECT 1 FROM memories_fts WHERE memory_id = ? LIMIT 1",
+                    (record.memory_id,),
+                ).fetchone()
+            ),
+            trigger_indexed=bool(
+                self.conn.execute(
+                    "SELECT 1 FROM trigger_index WHERE memory_id = ? LIMIT 1",
+                    (record.memory_id,),
+                ).fetchone()
+            ),
+        )
+
+    def _audit_events_for_memory(self, memory_id: str, limit: int = 25) -> list[AuditEvent]:
+        rows = self.conn.execute(
+            """
+            SELECT audit_id, action, memory_id, actor_id, tenant_id, details_json, created_at
+            FROM audit_log
+            WHERE memory_id = ?
+            ORDER BY datetime(created_at) DESC, rowid DESC
+            LIMIT ?
+            """,
+            (memory_id, limit),
+        ).fetchall()
+        return [
+            AuditEvent(
+                audit_id=row["audit_id"],
+                action=row["action"],
+                memory_id=row["memory_id"],
+                actor_id=row["actor_id"],
+                tenant_id=row["tenant_id"],
+                details=self._json_to_dict(row["details_json"]),
+                created_at=self._from_iso(row["created_at"]) or datetime.now(UTC),
+            )
+            for row in rows
+        ]
+
+    def _connected_sources_for_record(self, record: MemoryRecord) -> list[ConnectedSourceInspection]:
+        source_ids = list(
+            dict.fromkeys(
+                source.source_id
+                for source in record.source_references
+                if source.source_id
+            )
+        )
+        if not source_ids:
+            return []
+        placeholders = ", ".join("?" for _ in source_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                cs.source_id,
+                cs.connector_id,
+                cs.source_type,
+                cs.display_name,
+                cs.status,
+                cs.last_synced_at,
+                cs.stale_after,
+                c.freshness_sla_seconds,
+                COUNT(spg.grant_id) AS grant_count
+            FROM connector_sources AS cs
+            LEFT JOIN connectors AS c
+                ON c.connector_id = cs.connector_id
+               AND c.tenant_id = cs.tenant_id
+            LEFT JOIN source_permission_grants AS spg
+                ON spg.source_id = cs.source_id
+               AND spg.connector_id = cs.connector_id
+               AND spg.tenant_id = cs.tenant_id
+            WHERE cs.tenant_id = ?
+              AND cs.source_id IN ({placeholders})
+            GROUP BY
+                cs.source_id,
+                cs.connector_id,
+                cs.source_type,
+                cs.display_name,
+                cs.status,
+                cs.last_synced_at,
+                cs.stale_after,
+                c.freshness_sla_seconds
+            ORDER BY cs.source_id ASC
+            """,
+            (record.scope.tenant_id, *source_ids),
+        ).fetchall()
+        inspections: list[ConnectedSourceInspection] = []
+        for row in rows:
+            inspections.append(
+                ConnectedSourceInspection(
+                    source_id=row["source_id"],
+                    connector_id=row["connector_id"],
+                    source_type=row["source_type"],
+                    display_name=row["display_name"],
+                    status=SourceSyncStatus(row["status"]) if row["status"] else None,
+                    grant_count=int(row["grant_count"]),
+                    last_synced_at=self._from_iso(row["last_synced_at"]),
+                    stale_after=self._from_iso(row["stale_after"]),
+                    freshness_deadline=self._source_freshness_deadline(row),
+                )
+            )
+        return inspections
+
     def _read_principal_candidates(
         self,
         tenant_id: str,
@@ -1189,12 +2234,113 @@ class ProvenaStore:
             return value.removeprefix("group:")
         return value
 
+    def _search_status_filter(self, include_deleted: bool, alias: str = "") -> tuple[str, list[Any]]:
+        prefix = f"{alias}." if alias else ""
+        if include_deleted:
+            return "", []
+        return (
+            f" AND {prefix}status NOT IN (?, ?)",
+            [MemoryStatus.SUPERSEDED.value, MemoryStatus.DELETED.value],
+        )
+
+    def _is_superseded_in_chain(self, memory_id: str, tenant_id: str) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT 1
+            FROM memory_relations
+            WHERE tenant_id = ?
+              AND from_memory_id = ?
+              AND relation = ?
+            LIMIT 1
+            """,
+            (tenant_id, memory_id, RelationKind.SUPERSEDES.value),
+        ).fetchone()
+        return row is not None
+
+    def _evaluate_search_candidate(
+        self,
+        record: MemoryRecord,
+        payload: SearchRequest,
+        access: AccessContext | None,
+        query_terms: set[str],
+        fts_rank: float | None = None,
+        vector_rank: float | None = None,
+    ) -> SearchEvaluation:
+        rejection_reasons: list[str] = []
+        now = datetime.now(UTC)
+        if not self._can_access(record, access, ACLPermission.READ):
+            rejection_reasons.append("acl denied")
+        elif not self._has_required_source_grants(record, access):
+            rejection_reasons.append("source grants denied")
+        if not self._scope_matches(record.scope, payload.scope):
+            rejection_reasons.append("scope mismatch")
+        if payload.kinds and record.kind not in payload.kinds:
+            rejection_reasons.append("kind filtered")
+        if payload.memory_layers and record.memory_layer not in payload.memory_layers:
+            rejection_reasons.append("memory layer filtered")
+        missing_tags = sorted(set(payload.tags).difference(record.tags))
+        if missing_tags:
+            rejection_reasons.append(f"missing tags: {', '.join(missing_tags)}")
+        if payload.entity_keys and not set(payload.entity_keys).intersection(record.entity_keys):
+            rejection_reasons.append("entity keys filtered")
+        if not payload.include_deleted:
+            if record.status == MemoryStatus.DELETED:
+                rejection_reasons.append("deleted")
+            elif (
+                record.status == MemoryStatus.SUPERSEDED
+                or self._is_superseded_in_chain(record.memory_id, record.scope.tenant_id)
+            ):
+                rejection_reasons.append("superseded")
+        if record.valid_from and now < record.valid_from:
+            rejection_reasons.append("not yet valid")
+        if record.valid_to and now > record.valid_to:
+            rejection_reasons.append("validity ended")
+        if record.expires_at and record.expires_at <= now:
+            rejection_reasons.append("expired")
+        if rejection_reasons:
+            return SearchEvaluation(
+                record=record,
+                rejection_reasons=rejection_reasons,
+                fts_rank=fts_rank,
+                vector_rank=vector_rank,
+            )
+
+        retrieval_score, retrieval_reasons = self._fuse_retrieval_score(
+            fts_rank,
+            vector_rank,
+            payload.query_embedding,
+            record.embedding,
+        )
+        score, reasons = self._score_record(
+            record,
+            payload.scope,
+            query_terms,
+            retrieval_score=retrieval_score,
+        )
+        reasons = retrieval_reasons + reasons
+        if score <= 0:
+            return SearchEvaluation(
+                record=record,
+                score=score,
+                reasons=reasons,
+                rejection_reasons=["query terms not present"],
+                fts_rank=fts_rank,
+                vector_rank=vector_rank,
+            )
+        return SearchEvaluation(
+            record=record,
+            score=score,
+            reasons=reasons,
+            fts_rank=fts_rank,
+            vector_rank=vector_rank,
+        )
+
     def _score_record(
         self,
         record: MemoryRecord,
         scope: ScopeEnvelope,
         query_terms: set[str],
-        fts_rank: float | None = None,
+        retrieval_score: float = 0.0,
     ) -> tuple[float, list[str]]:
         haystack = " ".join(
             [
@@ -1206,14 +2352,21 @@ class ProvenaStore:
             ]
         ).lower()
         matches = sum(1 for term in query_terms if term in haystack)
-        if query_terms and matches == 0:
+        if query_terms and matches == 0 and retrieval_score <= 0:
             return 0.0, []
 
         reasons: list[str] = []
         score = float(matches)
-        if fts_rank is not None:
-            score += max(0.0, 1.0 - min(abs(fts_rank), 10.0) / 10.0)
-            reasons.append("fts match")
+        if retrieval_score > 0:
+            score += retrieval_score * 2.5
+        entity_matches = sum(1 for term in query_terms if term in {key.lower() for key in record.entity_keys})
+        if entity_matches:
+            score += entity_matches * 0.6
+            reasons.append("entity match")
+        tag_matches = sum(1 for term in query_terms if term in {tag.lower() for tag in record.tags})
+        if tag_matches:
+            score += tag_matches * 0.3
+            reasons.append("tag match")
         if record.scope.workspace_id and record.scope.workspace_id == scope.workspace_id:
             score += 0.4
             reasons.append("exact workspace scope")
@@ -1226,62 +2379,206 @@ class ProvenaStore:
         if record.scope.session_id and record.scope.session_id == scope.session_id:
             score += 1.2
             reasons.append("exact session scope")
+        layer_bonus, layer_reason = self._memory_layer_bonus(record, scope)
+        score += layer_bonus
+        if layer_reason:
+            reasons.append(layer_reason)
         if record.status == MemoryStatus.ACTIVE:
             score += 0.15
         if record.status == MemoryStatus.SUPERSEDED:
             score -= 0.2
             reasons.append("superseded memory")
+        feedback_summary = self.feedback_summary(record.memory_id)
+        feedback_score = self._feedback_net_score(feedback_summary)
+        score += feedback_score
+        if feedback_score > 0:
+            reasons.append("positive feedback")
+        elif feedback_score < 0:
+            reasons.append("negative feedback")
         score += min(record.importance, 1.0) * 0.25
         score += self._recency_bonus(record.updated_at)
         return score, reasons or ["content match"]
 
     def _candidate_rows(self, payload: SearchRequest) -> list[sqlite3.Row]:
-        params: list[Any]
-        if payload.query.strip():
-            query = self._fts_query(payload.query)
-            if query:
-                try:
-                    rows = self.conn.execute(
-                        """
-                        SELECT m.*, bm25(memories_fts) AS fts_rank
-                        FROM memories_fts
-                        JOIN memories AS m ON m.memory_id = memories_fts.memory_id
-                        WHERE memories_fts MATCH ?
-                          AND m.tenant_id = ?
-                          AND (? = 1 OR m.status != ?)
-                        ORDER BY bm25(memories_fts), datetime(m.updated_at) DESC
-                        LIMIT ?
-                        """,
-                        (
-                            query,
-                            payload.scope.tenant_id,
-                            1 if payload.include_deleted else 0,
-                            MemoryStatus.DELETED.value,
-                            max(payload.limit * 5, payload.limit),
-                        ),
-                    ).fetchall()
-                    if rows:
-                        return rows
-                except sqlite3.OperationalError:
-                    pass
+        candidates, _ = self._candidate_rows_with_strategy(payload)
+        return [candidate.row for candidate in candidates]
 
+    def _search_scope_clauses(self, scope: ScopeEnvelope) -> tuple[list[str], list[Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        for field in ("workspace_id", "project_id", "user_id", "agent_id", "session_id"):
+            value = getattr(scope, field)
+            if value:
+                clauses.append(f"(m.{field} IS NULL OR m.{field} = ?)")
+                params.append(value)
+        return clauses, params
+
+    def _candidate_rows_with_strategy(self, payload: SearchRequest) -> tuple[list[SearchCandidate], str]:
+        candidate_limit = max(payload.limit * 5, payload.limit)
+        fts_candidates = self._fts_candidate_rows(payload, candidate_limit)
+        vector_candidates = self._vector_candidate_rows(payload, candidate_limit)
+        if fts_candidates or vector_candidates:
+            merged = self._merge_search_candidates(fts_candidates, vector_candidates)
+            if fts_candidates and vector_candidates:
+                strategy = "hybrid"
+            elif fts_candidates:
+                strategy = "fts"
+            else:
+                strategy = "vector"
+            return merged, strategy
+
+        fallback_scope_clauses, fallback_scope_params = self._search_scope_clauses(payload.scope)
+        fallback_scope_sql = ""
+        if fallback_scope_clauses:
+            fallback_scope_sql = " AND " + " AND ".join(
+                clause.replace("m.", "") for clause in fallback_scope_clauses
+            )
+        status_sql, status_params = self._search_status_filter(payload.include_deleted)
         params = [
             payload.scope.tenant_id,
-            1 if payload.include_deleted else 0,
-            MemoryStatus.DELETED.value,
-            max(payload.limit * 5, payload.limit),
+            *status_params,
+            *fallback_scope_params,
+            candidate_limit,
         ]
-        return self.conn.execute(
-            """
+        rows = self.conn.execute(
+            f"""
             SELECT *, NULL AS fts_rank
             FROM memories
-            WHERE tenant_id = ?
-              AND (? = 1 OR status != ?)
+            WHERE tenant_id = ?{status_sql}{fallback_scope_sql}
             ORDER BY datetime(updated_at) DESC
             LIMIT ?
             """,
             params,
         ).fetchall()
+        return [SearchCandidate(row=row) for row in rows], "recency_fallback"
+
+    def _fts_candidate_rows(self, payload: SearchRequest, candidate_limit: int) -> list[SearchCandidate]:
+        if not payload.query.strip():
+            return []
+        query = self._fts_query(payload.query)
+        if not query:
+            return []
+        scope_clauses, scope_params = self._search_scope_clauses(payload.scope)
+        scope_sql = f" AND {' AND '.join(scope_clauses)}" if scope_clauses else ""
+        status_sql, status_params = self._search_status_filter(payload.include_deleted, alias="m")
+        try:
+            rows = self.conn.execute(
+                f"""
+                SELECT m.*, bm25(memories_fts) AS fts_rank
+                FROM memories_fts
+                JOIN memories AS m ON m.memory_id = memories_fts.memory_id
+                WHERE memories_fts MATCH ?
+                  AND m.tenant_id = ?{status_sql}{scope_sql}
+                ORDER BY bm25(memories_fts), datetime(m.updated_at) DESC
+                LIMIT ?
+                """,
+                (
+                    query,
+                    payload.scope.tenant_id,
+                    *status_params,
+                    *scope_params,
+                    candidate_limit,
+                ),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        return [
+            SearchCandidate(
+                row=row,
+                fts_rank=float(row["fts_rank"]) if row["fts_rank"] is not None else None,
+            )
+            for row in rows
+        ]
+
+    def _vector_candidate_rows(self, payload: SearchRequest, candidate_limit: int) -> list[SearchCandidate]:
+        if not payload.query_embedding:
+            return []
+        scope_clauses, scope_params = self._search_scope_clauses(payload.scope)
+        scope_sql = f" AND {' AND '.join(scope_clauses)}" if scope_clauses else ""
+        status_sql, status_params = self._search_status_filter(payload.include_deleted, alias="m")
+        scan_limit = max(candidate_limit * 6, candidate_limit)
+        rows = self.conn.execute(
+            f"""
+            SELECT m.*, NULL AS fts_rank
+            FROM memories AS m
+            WHERE m.tenant_id = ?{status_sql}
+              AND m.embedding_json IS NOT NULL
+              AND m.embedding_json NOT IN ('[]', 'null', ''){scope_sql}
+            ORDER BY datetime(m.updated_at) DESC
+            LIMIT ?
+            """,
+            (
+                payload.scope.tenant_id,
+                *status_params,
+                *scope_params,
+                scan_limit,
+            ),
+        ).fetchall()
+        scored: list[SearchCandidate] = []
+        for row in rows:
+            embedding = self._json_to_float_list(row["embedding_json"])
+            similarity = self._cosine_similarity(payload.query_embedding, embedding)
+            if similarity <= 0:
+                continue
+            scored.append(SearchCandidate(row=row, vector_rank=similarity))
+        scored.sort(
+            key=lambda candidate: (
+                candidate.vector_rank or 0.0,
+                candidate.row["updated_at"],
+            ),
+            reverse=True,
+        )
+        return scored[:candidate_limit]
+
+    def _merge_search_candidates(
+        self,
+        fts_candidates: list[SearchCandidate],
+        vector_candidates: list[SearchCandidate],
+    ) -> list[SearchCandidate]:
+        merged: dict[str, SearchCandidate] = {}
+        for candidate in fts_candidates:
+            memory_id = candidate.row["memory_id"]
+            merged[memory_id] = candidate
+        for candidate in vector_candidates:
+            memory_id = candidate.row["memory_id"]
+            existing = merged.get(memory_id)
+            if existing is None:
+                merged[memory_id] = candidate
+                continue
+            if candidate.vector_rank is not None:
+                existing.vector_rank = candidate.vector_rank
+        return list(merged.values())
+
+    def _normalize_fts_rank(self, fts_rank: float | None) -> float:
+        if fts_rank is None:
+            return 0.0
+        return max(0.0, 1.0 - min(abs(fts_rank), 10.0) / 10.0)
+
+    def _fuse_retrieval_score(
+        self,
+        fts_rank: float | None,
+        vector_rank: float | None,
+        query_embedding: list[float],
+        record_embedding: list[float],
+    ) -> tuple[float, list[str]]:
+        fts_score = self._normalize_fts_rank(fts_rank)
+        vector_score = vector_rank
+        if vector_score is None and query_embedding and record_embedding:
+            vector_score = self._cosine_similarity(query_embedding, record_embedding)
+        reasons: list[str] = []
+        if fts_score > 0:
+            reasons.append("fts match")
+        if vector_score and vector_score > 0:
+            reasons.append("vector similarity")
+        if not query_embedding:
+            return fts_score, reasons
+        if fts_score > 0 and vector_score and vector_score > 0:
+            fused = fts_score * (1.0 - _SEARCH_VECTOR_WEIGHT) + vector_score * _SEARCH_VECTOR_WEIGHT
+            reasons.append("hybrid retrieval")
+            return fused, reasons
+        if vector_score and vector_score > 0:
+            return vector_score, reasons
+        return fts_score, reasons
 
     def _cosine_similarity(self, left: list[float], right: list[float]) -> float:
         if not left or not right or len(left) != len(right):
@@ -1322,6 +2619,58 @@ class ProvenaStore:
                 continue
             related.append(RelatedMemory(relation=RelationKind(row["relation"]), memory=record))
         return related
+
+    def _citation_labels(self, record: MemoryRecord) -> list[str]:
+        labels: list[str] = []
+        for source in record.source_references:
+            label = f"{source.source_type}:{source.source_id}"
+            if source.title:
+                label = f"{label} ({source.title})"
+            if source.uri:
+                label = f"{label} <{source.uri}>"
+            labels.append(label)
+        return labels
+
+    def _adjacent_memory_ids(self, memory_id: str, tenant_id: str) -> list[str]:
+        rows = self.conn.execute(
+            """
+            SELECT from_memory_id, to_memory_id
+            FROM memory_relations
+            WHERE tenant_id = ?
+              AND (from_memory_id = ? OR to_memory_id = ?)
+            ORDER BY datetime(created_at) DESC
+            """,
+            (tenant_id, memory_id, memory_id),
+        ).fetchall()
+        adjacent: list[str] = []
+        for row in rows:
+            adjacent.append(row["to_memory_id"] if row["from_memory_id"] == memory_id else row["from_memory_id"])
+        return adjacent
+
+    def _temporal_edges(self, memory_ids: list[str], tenant_id: str) -> list[TemporalGraphEdge]:
+        if not memory_ids:
+            return []
+        placeholders = ", ".join("?" for _ in memory_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT from_memory_id, to_memory_id, relation, created_at
+            FROM memory_relations
+            WHERE tenant_id = ?
+              AND from_memory_id IN ({placeholders})
+              AND to_memory_id IN ({placeholders})
+            ORDER BY datetime(created_at) DESC
+            """,
+            (tenant_id, *memory_ids, *memory_ids),
+        ).fetchall()
+        return [
+            TemporalGraphEdge(
+                from_memory_id=row["from_memory_id"],
+                to_memory_id=row["to_memory_id"],
+                relation=RelationKind(row["relation"]),
+                created_at=self._from_iso(row["created_at"]) or datetime.now(UTC),
+            )
+            for row in rows
+        ]
 
     def _source_freshness_deadline(self, row: sqlite3.Row) -> datetime | None:
         stale_after = self._from_iso(row["stale_after"])
@@ -1606,6 +2955,8 @@ class ProvenaStore:
             "hold_reason": "ALTER TABLE memories ADD COLUMN hold_reason TEXT",
             "hold_until": "ALTER TABLE memories ADD COLUMN hold_until TEXT",
             "pre_hold_status": "ALTER TABLE memories ADD COLUMN pre_hold_status TEXT",
+            "memory_layer": f"ALTER TABLE memories ADD COLUMN memory_layer TEXT NOT NULL DEFAULT '{MemoryLayer.ORGANIZATION.value}'",
+            "expires_at": "ALTER TABLE memories ADD COLUMN expires_at TEXT",
         }
         with self.conn:
             for column, statement in migrations.items():
@@ -1655,6 +3006,90 @@ class ProvenaStore:
         if age <= timedelta(days=30):
             return 0.05
         return 0.0
+
+    def _memory_layer_bonus(self, record: MemoryRecord, scope: ScopeEnvelope) -> tuple[float, str | None]:
+        if record.memory_layer == MemoryLayer.CONVERSATION and record.scope.session_id == scope.session_id:
+            return 1.1, "conversation layer"
+        if record.memory_layer == MemoryLayer.SESSION and record.scope.session_id == scope.session_id:
+            return 0.9, "session layer"
+        if record.memory_layer == MemoryLayer.USER and record.scope.user_id == scope.user_id:
+            return 0.7, "user layer"
+        if record.memory_layer == MemoryLayer.AGENT and record.scope.agent_id == scope.agent_id:
+            return 0.55, "agent layer"
+        if record.memory_layer == MemoryLayer.ORGANIZATION:
+            return 0.35, "organization layer"
+        return 0.0, None
+
+    def _feedback_net_score(self, summary: MemoryFeedbackSummary) -> float:
+        return round(
+            min(summary.positive * 0.12, 0.6)
+            - min(summary.negative * 0.15, 0.6)
+            + min(summary.correction * 0.05, 0.25)
+            + min(summary.pin * 0.4, 0.8),
+            4,
+        )
+
+    def _search_cache_key(self, payload: SearchRequest, access: AccessContext | None) -> str:
+        envelope = {
+            "query": payload.query.strip().lower(),
+            "scope": payload.scope.model_dump(exclude_none=True),
+            "kinds": sorted(kind.value for kind in payload.kinds),
+            "memory_layers": sorted(layer.value for layer in payload.memory_layers),
+            "tags": sorted(payload.tags),
+            "entity_keys": sorted(payload.entity_keys),
+            "query_embedding": payload.query_embedding,
+            "include_relations": payload.include_relations,
+            "include_deleted": payload.include_deleted,
+            "limit": payload.limit,
+            "access": {
+                "tenant_id": access.tenant_id if access else None,
+                "role": access.role if access else None,
+                "principal_id": access.principal_id if access else None,
+                "groups": sorted(access.groups) if access else [],
+            },
+        }
+        return hashlib.sha256(self._to_json(envelope).encode("utf-8")).hexdigest()
+
+    def _invalidate_tenant_cache(self, tenant_id: str) -> None:
+        self.hot_cache.bump_search_version(tenant_id)
+
+    def _insert_history(
+        self,
+        memory_id: str,
+        event: MemoryHistoryEventType,
+        old_memory: dict[str, Any],
+        new_memory: dict[str, Any],
+        details: dict[str, Any],
+        actor_id: str | None,
+    ) -> None:
+        tenant_id = new_memory.get("scope", {}).get("tenant_id") or old_memory.get("scope", {}).get("tenant_id")
+        self.conn.execute(
+            """
+            INSERT INTO memory_history (
+                history_id, memory_id, tenant_id, event, actor_id, old_memory_json, new_memory_json, details_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                memory_id,
+                tenant_id,
+                event.value,
+                actor_id,
+                self._to_json(old_memory),
+                self._to_json(new_memory),
+                self._to_json(details),
+                self._iso_now(),
+            ),
+        )
+
+    def _infer_memory_layer(self, scope: ScopeEnvelope) -> MemoryLayer:
+        if scope.session_id:
+            return MemoryLayer.SESSION
+        if scope.agent_id and not scope.user_id:
+            return MemoryLayer.AGENT
+        if scope.user_id:
+            return MemoryLayer.USER
+        return MemoryLayer.ORGANIZATION
 
     def _fingerprint(self, scope: ScopeEnvelope, kind: str, title: str | None, content: str) -> str:
         scope_json = self._to_json(scope.model_dump(exclude_none=True))
