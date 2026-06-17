@@ -72,12 +72,18 @@ def create_app() -> FastAPI:
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
+    def require_write(request: Request) -> None:
+        role = (request.headers.get("X-Provena-Role") or "").strip().lower()
+        if role and role not in {"editor", "admin", "superadmin"}:
+            raise HTTPException(status_code=403, detail="write access required")
+
     # ------------------------------------------------------------------
     # Write pipeline
     # ------------------------------------------------------------------
 
     @app.post("/v1/pipeline/write")
     async def pipeline_write(request: Request, body: WriteRequest):
+        require_write(request)
         wp: WritePipeline = request.app.state.write_pipeline
         try:
             result = await wp.process(body)
@@ -87,6 +93,7 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/batch-write")
     async def batch_write(request: Request, body: list[dict[str, Any]]):
+        require_write(request)
         wp: WritePipeline = request.app.state.write_pipeline
         results: list[dict[str, Any]] = []
         for item in body:

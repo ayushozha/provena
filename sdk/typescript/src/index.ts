@@ -53,14 +53,17 @@ async function request<T>(
   headers?: HeadersInit,
   init?: RequestInit,
 ): Promise<T> {
-  const response = await fetch(new URL(path, baseUrl), {
-    headers: {
-      "content-type": "application/json",
-      ...(headers ?? {}),
-      ...(init?.headers ?? {}),
+  const response = await fetch(
+    new URL(`${baseUrl.replace(/\/$/, "")}/${path.replace(/^\//, "")}`),
+    {
+      headers: {
+        "content-type": "application/json",
+        ...(headers ?? {}),
+        ...(init?.headers ?? {}),
+      },
+      ...init,
     },
-    ...init,
-  });
+  );
 
   if (!response.ok) {
     const body = await response.text();

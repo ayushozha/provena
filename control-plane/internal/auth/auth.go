@@ -190,3 +190,35 @@ func splitCSV(value string) []string {
 	}
 	return groups
 }
+
+// WritePermissionMiddleware rejects viewer keys on mutating memory routes.
+func WritePermissionMiddleware(next http.Handler) http.Handler {
+	writePrefixes := []string{
+		"/v1/memories",
+		"/v1/project-snapshots",
+		"/v1/admin/",
+		"/v1/integrations/",
+		"/v1/agent/context",
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+		path := r.URL.Path
+		needsWrite := false
+		for _, prefix := range writePrefixes {
+			if strings.HasPrefix(path, prefix) {
+				needsWrite = true
+				break
+			}
+		}
+		if needsWrite {
+			if ac, ok := FromContext(r.Context()); ok && !HasPermission(ac.Role, Write) {
+				http.Error(w, `{"error":"write access required"}`, http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
