@@ -94,11 +94,12 @@ func TestMemoryListUsesSearch(t *testing.T) {
 	defer upstream.Close()
 
 	callTool(t, newTestServer(upstream), "memory_list", map[string]any{
+		"query": "project memories",
 		"scope": map[string]any{"tenant_id": "t1", "project_id": "p1"},
 		"limit": float64(25),
 	})
-	if body["query"] != "*" {
-		t.Fatalf("expected default query *, got %#v", body["query"])
+	if body["query"] != "project memories" {
+		t.Fatalf("expected query project memories, got %#v", body["query"])
 	}
 	if int(body["limit"].(float64)) != 25 {
 		t.Fatalf("expected limit 25, got %#v", body["limit"])

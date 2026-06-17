@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -138,7 +139,7 @@ func NewMCPServer(name, version, upstreamURL, serviceAPIKey string) *MCPServer {
 		},
 		{
 			Name:        "memory_list",
-			Description: "List memories for a scope via semantic search (use a broad query such as *).",
+			Description: "List memories for a scope via semantic search.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -146,7 +147,7 @@ func NewMCPServer(name, version, upstreamURL, serviceAPIKey string) *MCPServer {
 					"scope": map[string]any{"type": "object"},
 					"limit": map[string]any{"type": "integer"},
 				},
-				"required": []string{"scope"},
+				"required": []string{"scope", "query"},
 			},
 		},
 		{
@@ -161,6 +162,11 @@ func NewMCPServer(name, version, upstreamURL, serviceAPIKey string) *MCPServer {
 					"user_id":      map[string]any{"type": "string"},
 				},
 				"required": []string{"tenant_id"},
+				"anyOf": []map[string]any{
+					{"required": []string{"project_id"}},
+					{"required": []string{"workspace_id"}},
+					{"required": []string{"user_id"}},
+				},
 			},
 		},
 		{
@@ -287,7 +293,7 @@ func (s *MCPServer) executeTool(params ToolCallParams, authHeader string) (ToolR
 	case "memory_list":
 		query, _ := params.Arguments["query"].(string)
 		if query == "" {
-			query = "*"
+			return ToolResult{}, fmt.Errorf("memory_list requires query")
 		}
 		limit := 50
 		if raw, ok := params.Arguments["limit"].(float64); ok && raw > 0 {
@@ -316,7 +322,11 @@ func (s *MCPServer) executeTool(params ToolCallParams, authHeader string) (ToolR
 		if tenantID == "" || projectID == "" {
 			return ToolResult{}, fmt.Errorf("list_entities requires tenant_id and project_id")
 		}
-		path := fmt.Sprintf("/v1/project-snapshots/latest?tenant_id=%s&project_id=%s", tenantID, projectID)
+		path := fmt.Sprintf(
+			"/v1/project-snapshots/latest?tenant_id=%s&project_id=%s",
+			url.QueryEscape(tenantID),
+			url.QueryEscape(projectID),
+		)
 		body, err := s.request(http.MethodGet, path, nil, authHeader)
 		return s.toolResult(body, err)
 	case "get_event_status":
@@ -328,7 +338,7 @@ func (s *MCPServer) executeTool(params ToolCallParams, authHeader string) (ToolR
 		if raw, ok := params.Arguments["limit"].(float64); ok && raw > 0 {
 			limit = int(raw)
 		}
-		path := fmt.Sprintf("/v1/memories/%s/history?limit=%d", memoryID, limit)
+		path := fmt.Sprintf("/v1/memories/%s/history?limit=%d", url.PathEscape(memoryID), limit)
 		body, err := s.request(http.MethodGet, path, nil, authHeader)
 		return s.toolResult(body, err)
 	default:
