@@ -12,7 +12,8 @@ from unittest.mock import patch
 import httpx
 from app.embeddings import EmbeddingManager
 from app.model_router import ModelRouter
-from app.models import ModelTier, ScoredMemory, WriteRequest
+from app.models import ModelTier, ReadSearchRequest, ScoredMemory, WriteRequest
+from app.extract_facts import ExtractedFact, FactExtractor
 from app.read_pipeline import ReadPipeline
 from app.write_pipeline import WritePipeline, WritePipelineError
 from app.overview_generator import OverviewGenerator
@@ -87,6 +88,105 @@ class TestEntityResolution(unittest.TestCase):
         # Should extract multi-word capitalized phrases
         self.assertIn("John Smith", entities)
         self.assertIn("Tim Cook", entities)
+
+
+class TestFactExtraction(unittest.TestCase):
+    def setUp(self) -> None:
+        self.extractor = FactExtractor(ModelRouter())
+
+    def test_local_extract_splits_role_lines(self) -> None:
+        content = "user: I moved to Seattle in 2024.\nassistant: Seattle is a great city."
+        facts = asyncio.run(self.extractor.extract(content))
+        self.assertGreaterEqual(len(facts), 2)
+        self.assertTrue(any("Seattle" in fact.content for fact in facts))
+
+    def test_extract_disabled_returns_single_chunk(self) -> None:
+        import os
+
+        os.environ["PROVENA_EXTRACT_DISABLED"] = "true"
+        try:
+            extractor = FactExtractor(ModelRouter())
+            facts = asyncio.run(extractor.extract("user: one\nassistant: two"))
+            self.assertEqual(len(facts), 1)
+            self.assertIn("user:", facts[0].content)
+        finally:
+            os.environ.pop("PROVENA_EXTRACT_DISABLED", None)
+
+
+class TestWriteExtraction(unittest.TestCase):
+    def test_write_splits_into_multiple_store_posts(self) -> None:
+        wp = WritePipeline(EmbeddingManager(), ModelRouter())
+        request = WriteRequest(
+            kind="episode",
+            scope={"tenant_id": "tenant-a"},
+            content="user: I prefer dark mode.\nassistant: Noted your preference.",
+        )
+
+        posted: list[dict] = []
+
+        class DummyResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"created": True, "memory": {"memory_id": f"mem-{len(posted)}"}}
+
+        class DummyClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, *args, **kwargs):
+                posted.append(kwargs.get("json", {}))
+                return DummyResponse()
+
+        with patch("app.write_pipeline.httpx.AsyncClient", return_value=DummyClient()):
+            result = asyncio.run(wp.process(request))
+
+        self.assertTrue(result.created)
+        self.assertGreater(len(posted), 1)
+        self.assertTrue(all(item.get("metadata", {}).get("extraction_source") == "add_only" for item in posted))
+
+    def test_mocked_llm_extraction(self) -> None:
+        extractor = FactExtractor(ModelRouter(), llm_api_key="test-key")
+
+        async def _mock_llm(content: str, title: str = ""):
+            return [
+                ExtractedFact(content="User works at Acme Corp", title="Job"),
+                ExtractedFact(content="User lives in Austin", title="Location"),
+            ]
+
+        extractor._llm_extract = _mock_llm  # type: ignore[method-assign]
+        wp = WritePipeline(EmbeddingManager(), ModelRouter(), fact_extractor=extractor)
+        request = WriteRequest(kind="fact", scope={"tenant_id": "tenant-a"}, content="long blob")
+
+        posted: list[dict] = []
+
+        class DummyResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"created": True, "memory": {"memory_id": f"mem-{len(posted)}"}}
+
+        class DummyClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, *args, **kwargs):
+                posted.append(kwargs.get("json", {}))
+                return DummyResponse()
+
+        with patch("app.write_pipeline.httpx.AsyncClient", return_value=DummyClient()):
+            result = asyncio.run(wp.process(request))
+
+        self.assertEqual(len(posted), 2)
+        self.assertEqual(result.memory.get("extraction_count"), 2)
 
 
 class TestWriteFailures(unittest.TestCase):
@@ -197,6 +297,76 @@ class TestRetrievalMetrics(unittest.TestCase):
         relevant = ["a", "b"]
         result = mrr(retrieved, relevant)
         self.assertAlmostEqual(result, 1 / 3)
+
+
+class TestAbstentionGate(unittest.TestCase):
+    """Test ReadPipeline abstention when evidence scores are too low."""
+
+    def setUp(self) -> None:
+        em = EmbeddingManager()
+        mr = ModelRouter()
+        self.rp = ReadPipeline(em, mr)
+        self.rp.min_combined_score = 0.15
+
+    def test_high_score_query_returns_hits(self) -> None:
+        candidates = [
+            ScoredMemory(
+                memory_id="m1",
+                content="PostgreSQL is the primary database",
+                title="Database",
+                combined=0.85,
+                fts_score=0.8,
+                vector_score=0.9,
+            ),
+        ]
+
+        async def _mock_retrieve(*args, **kwargs):
+            return candidates
+
+        with patch.object(self.rp, "_hybrid_retrieve", side_effect=_mock_retrieve):
+            with patch.object(self.rp, "_trigger_lookup", return_value=[]):
+                response = asyncio.run(
+                    self.rp.search(
+                        ReadSearchRequest(
+                            query="PostgreSQL database",
+                            scope={"tenant_id": "t1"},
+                            limit=5,
+                        )
+                    )
+                )
+
+        self.assertGreater(len(response.results), 0)
+        self.assertNotEqual(response.token_usage.operation, "abstain_low_evidence")
+
+    def test_noise_query_abstains(self) -> None:
+        candidates = [
+            ScoredMemory(
+                memory_id="m1",
+                content="unrelated noise fragment",
+                title="Noise",
+                combined=0.05,
+                fts_score=0.04,
+                vector_score=0.06,
+            ),
+        ]
+
+        async def _mock_retrieve(*args, **kwargs):
+            return candidates
+
+        with patch.object(self.rp, "_hybrid_retrieve", side_effect=_mock_retrieve):
+            with patch.object(self.rp, "_trigger_lookup", return_value=[]):
+                response = asyncio.run(
+                    self.rp.search(
+                        ReadSearchRequest(
+                            query="xyzzy quantum flarn",
+                            scope={"tenant_id": "t1"},
+                            limit=5,
+                        )
+                    )
+                )
+
+        self.assertEqual(response.results, [])
+        self.assertEqual(response.token_usage.operation, "abstain_low_evidence")
 
 
 class TestCitationPackaging(unittest.TestCase):

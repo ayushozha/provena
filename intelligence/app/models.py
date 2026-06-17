@@ -133,6 +133,7 @@ class ReadSearchRequest(BaseModel):
     kinds: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     entity_keys: list[str] = Field(default_factory=list)
+    query_embedding: list[float] = Field(default_factory=list)
     include_relations: bool = False
     include_deleted: bool = False
     limit: int = 20
