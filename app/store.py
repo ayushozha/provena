@@ -2238,24 +2238,12 @@ class ProvenaStore:
         prefix = f"{alias}." if alias else ""
         if include_deleted:
             return "", []
+        # Superseded memories stay retrievable (the evaluator ranks them below
+        # the latest revision); only deleted memories are excluded by default.
         return (
-            f" AND {prefix}status NOT IN (?, ?)",
-            [MemoryStatus.SUPERSEDED.value, MemoryStatus.DELETED.value],
+            f" AND {prefix}status != ?",
+            [MemoryStatus.DELETED.value],
         )
-
-    def _is_superseded_in_chain(self, memory_id: str, tenant_id: str) -> bool:
-        row = self.conn.execute(
-            """
-            SELECT 1
-            FROM memory_relations
-            WHERE tenant_id = ?
-              AND from_memory_id = ?
-              AND relation = ?
-            LIMIT 1
-            """,
-            (tenant_id, memory_id, RelationKind.SUPERSEDES.value),
-        ).fetchone()
-        return row is not None
 
     def _evaluate_search_candidate(
         self,
@@ -2286,11 +2274,8 @@ class ProvenaStore:
         if not payload.include_deleted:
             if record.status == MemoryStatus.DELETED:
                 rejection_reasons.append("deleted")
-            elif (
-                record.status == MemoryStatus.SUPERSEDED
-                or self._is_superseded_in_chain(record.memory_id, record.scope.tenant_id)
-            ):
-                rejection_reasons.append("superseded")
+            # Superseded memories are NOT rejected: they remain retrievable and
+            # are ranked below the latest revision by the scoring logic.
         if record.valid_from and now < record.valid_from:
             rejection_reasons.append("not yet valid")
         if record.valid_to and now > record.valid_to:
