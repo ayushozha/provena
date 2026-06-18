@@ -40,6 +40,7 @@ class InMemoryHotCache:
         self._lock = threading.Lock()
         self._versions: dict[str, int] = {}
         self._entries: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._write_count = 0
 
     def _versioned_key(self, tenant_id: str, cache_key: str) -> str:
         version = self._versions.get(tenant_id, 0)
@@ -61,7 +62,11 @@ class InMemoryHotCache:
     def set_search(self, tenant_id: str, cache_key: str, value: dict[str, Any]) -> None:
         now = time.time()
         with self._lock:
-            self._purge_expired(now)
+            # Purge expired entries periodically rather than on every write, so
+            # a hot write path doesn't eat an O(N) scan each time.
+            self._write_count += 1
+            if self._write_count % 100 == 0:
+                self._purge_expired(now)
             self._entries[self._versioned_key(tenant_id, cache_key)] = (now + self._ttl, value)
 
     def bump_search_version(self, tenant_id: str) -> None:
