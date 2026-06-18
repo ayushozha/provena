@@ -43,7 +43,7 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        store = ProvenaStore(settings.resolved_db_path)
+        store = ProvenaStore(settings.resolved_db_path, vector_dimensions=settings.vector_dimensions)
         app.state.store = store
         app.state.connector_execution = ConnectorExecutionService(store)
         app.state.connector_scheduler = ConnectorSchedulerService(
