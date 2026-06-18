@@ -71,9 +71,32 @@ class ACLEntry(BaseModel):
     permissions: list[ACLPermission] = Field(default_factory=list)
 
 
+class MemoryLayer(str, Enum):
+    CONVERSATION = "conversation"
+    SESSION = "session"
+    USER = "user"
+    AGENT = "agent"
+    ORGANIZATION = "organization"
+
+
+class MemoryFeedbackType(str, Enum):
+    POSITIVE = "positive"
+    NEGATIVE = "negative"
+    CORRECTION = "correction"
+    PIN = "pin"
+
+
+class MemoryHistoryEventType(str, Enum):
+    ADD = "add"
+    UPDATE = "update"
+    DELETE = "delete"
+    FEEDBACK = "feedback"
+
+
 class MemoryCreate(BaseModel):
     memory_id: str | None = None
     kind: MemoryKind
+    memory_layer: MemoryLayer | None = None
     scope: ScopeEnvelope
     content: str
     title: str | None = None
@@ -86,6 +109,7 @@ class MemoryCreate(BaseModel):
     strength: float = Field(default=0.7, ge=0.0, le=1.0)
     valid_from: datetime | None = None
     valid_to: datetime | None = None
+    expires_at: datetime | None = None
     source_references: list[SourceReference] = Field(default_factory=list)
     supersedes_memory_id: str | None = None
     trigger_phrases: list[str] = Field(default_factory=list)
@@ -105,6 +129,7 @@ class MemoryRecord(BaseModel):
     fingerprint: str
     kind: MemoryKind
     status: MemoryStatus
+    memory_layer: MemoryLayer = MemoryLayer.USER
     scope: ScopeEnvelope
     title: str | None = None
     content: str
@@ -117,6 +142,7 @@ class MemoryRecord(BaseModel):
     strength: float
     valid_from: datetime | None = None
     valid_to: datetime | None = None
+    expires_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     last_verified_at: datetime | None = None
@@ -142,6 +168,7 @@ class SearchRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     entity_keys: list[str] = Field(default_factory=list)
     query_embedding: list[float] = Field(default_factory=list)
+    memory_layers: list[MemoryLayer] = Field(default_factory=list)
     include_relations: bool = True
     include_deleted: bool = False
     limit: int = Field(default=10, ge=1, le=100)
@@ -413,3 +440,276 @@ class RetentionEnforcementRequest(BaseModel):
 
 class RetentionEnforcementResponse(BaseModel):
     expired_memory_ids: list[str] = Field(default_factory=list)
+
+
+class MemoryUpdate(BaseModel):
+    kind: MemoryKind | None = None
+    memory_layer: MemoryLayer | None = None
+    title: str | None = None
+    content: str | None = None
+    summary: str | None = None
+    entity_keys: list[str] | None = None
+    tags: list[str] | None = None
+    metadata: dict[str, Any] | None = None
+    importance: float | None = None
+    confidence: float | None = None
+    strength: float | None = None
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    expires_at: datetime | None = None
+    embedding_model: str | None = None
+    embedding: list[float] | None = None
+    acl: list[ACLEntry] | None = None
+    source_references: list[SourceReference] | None = None
+    trigger_phrases: list[str] | None = None
+    supersedes_memory_id: str | None = None
+
+
+class MemoryHistoryEvent(BaseModel):
+    history_id: str
+    memory_id: str
+    event: MemoryHistoryEventType
+    actor_id: str | None = None
+    old_memory: dict[str, Any] = Field(default_factory=dict)
+    new_memory: dict[str, Any] = Field(default_factory=dict)
+    details: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class MemoryFeedbackCreate(BaseModel):
+    feedback_id: str | None = None
+    feedback_type: MemoryFeedbackType
+    principal_id: str | None = None
+    reason: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryFeedbackRecord(BaseModel):
+    feedback_id: str
+    memory_id: str
+    tenant_id: str
+    feedback_type: MemoryFeedbackType
+    principal_id: str | None = None
+    reason: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class MemoryFeedbackSummary(BaseModel):
+    positive: int = 0
+    negative: int = 0
+    correction: int = 0
+    pin: int = 0
+    latest_feedback_at: datetime | None = None
+    net_score: float = 0.0
+
+
+class AuditEvent(BaseModel):
+    audit_id: str
+    action: str
+    memory_id: str | None = None
+    actor_id: str | None = None
+    tenant_id: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class ConnectedSourceInspection(BaseModel):
+    source_id: str
+    connector_id: str
+    source_type: str
+    display_name: str
+    status: SourceSyncStatus | None = None
+    grant_count: int = 0
+    last_synced_at: datetime | None = None
+    stale_after: datetime | None = None
+    freshness_deadline: datetime | None = None
+
+
+class MemoryStorageState(BaseModel):
+    fingerprint: str
+    embedding_dimensions: int = 0
+    source_reference_count: int = 0
+    connected_source_count: int = 0
+    trigger_phrase_count: int = 0
+    relation_count: int = 0
+    audit_event_count: int = 0
+    fts_indexed: bool = False
+    trigger_indexed: bool = False
+
+
+class MemoryInspectionResponse(BaseModel):
+    memory: MemoryRecord
+    storage: MemoryStorageState
+    connected_sources: list[ConnectedSourceInspection] = Field(default_factory=list)
+    related_memories: list[RelatedMemory] = Field(default_factory=list)
+    audit_trail: list[AuditEvent] = Field(default_factory=list)
+    history: list[MemoryHistoryEvent] = Field(default_factory=list)
+    feedback_summary: MemoryFeedbackSummary
+
+
+class AgentContextRequest(BaseModel):
+    query: str
+    scope: ScopeEnvelope
+    kinds: list[MemoryKind] = Field(default_factory=list)
+    memory_layers: list[MemoryLayer] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    entity_keys: list[str] = Field(default_factory=list)
+    max_memories: int = 10
+    max_characters: int = 4000
+    include_citations: bool = True
+
+
+class AgentContextMemory(BaseModel):
+    memory_id: str
+    title: str | None = None
+    kind: MemoryKind
+    memory_layer: MemoryLayer
+    content: str
+    score: float
+    reasons: list[str] = Field(default_factory=list)
+    citations: list[str] = Field(default_factory=list)
+    updated_at: datetime
+
+
+class AgentContextResponse(BaseModel):
+    query: str
+    scope: ScopeEnvelope
+    context: str
+    token_estimate: int = 0
+    memories: list[AgentContextMemory] = Field(default_factory=list)
+    citations: list[str] = Field(default_factory=list)
+
+
+class TemporalGraphRequest(BaseModel):
+    scope: ScopeEnvelope
+    query: str | None = None
+    seed_memory_ids: list[str] = Field(default_factory=list)
+    memory_layers: list[MemoryLayer] = Field(default_factory=list)
+    include_expired: bool = False
+    depth: int = 1
+    limit: int = Field(default=50, ge=1, le=500)
+
+
+class TemporalGraphNode(BaseModel):
+    memory: MemoryRecord
+    observed_at: datetime
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    expires_at: datetime | None = None
+    layer: MemoryLayer
+
+
+class TemporalGraphEdge(BaseModel):
+    from_memory_id: str
+    to_memory_id: str
+    relation: RelationKind
+    created_at: datetime
+
+
+class TemporalGraphResponse(BaseModel):
+    scope: ScopeEnvelope
+    query: str | None = None
+    seed_memory_ids: list[str] = Field(default_factory=list)
+    nodes: list[TemporalGraphNode] = Field(default_factory=list)
+    edges: list[TemporalGraphEdge] = Field(default_factory=list)
+
+
+class SearchExplainCandidate(BaseModel):
+    memory: MemoryRecord
+    score: float
+    reasons: list[str] = Field(default_factory=list)
+    rejection_reasons: list[str] = Field(default_factory=list)
+    fts_rank: int | None = None
+    rank: int | None = None
+
+
+class SearchExplainResponse(BaseModel):
+    query: str
+    query_terms: list[str] = Field(default_factory=list)
+    candidate_strategy: str
+    total_candidates: int = 0
+    returned: list[SearchExplainCandidate] = Field(default_factory=list)
+    not_returned: list[SearchExplainCandidate] = Field(default_factory=list)
+    filtered_out: list[SearchExplainCandidate] = Field(default_factory=list)
+
+
+class StorageTierOverview(BaseModel):
+    memories_total: int = 0
+    memories_active: int = 0
+    memories_superseded: int = 0
+    memories_deleted: int = 0
+    memories_held: int = 0
+    conversation_layer_total: int = 0
+    session_layer_total: int = 0
+    user_layer_total: int = 0
+    agent_layer_total: int = 0
+    organization_layer_total: int = 0
+    source_references_total: int = 0
+    connected_sources_total: int = 0
+    relations_total: int = 0
+    trigger_phrases_total: int = 0
+    entity_registry_total: int = 0
+    token_usage_total: int = 0
+    evidence_cache_total: int = 0
+    replication_state_total: int = 0
+    embedding_models_total: int = 0
+    fts_indexed_memories: int = 0
+    vectorized_memories: int = 0
+    project_snapshots_total: int = 0
+    audit_events_total: int = 0
+    history_events_total: int = 0
+    feedback_total: int = 0
+    connectors_total: int = 0
+    principal_mappings_total: int = 0
+    permission_grants_total: int = 0
+    sync_jobs_total: int = 0
+
+
+class MemoryArchitectureOverview(BaseModel):
+    tenant_id: str
+    generated_at: datetime
+    storage: StorageTierOverview
+    coverage: IntegrationCoverageSummary
+
+
+class OnboardingStep(BaseModel):
+    step_id: str
+    label: str
+    status: str
+    detail: str
+    required: bool = True
+
+
+class OnboardingStatus(BaseModel):
+    tenant_id: str
+    generated_at: datetime
+    ready: bool = False
+    cache_backend: str
+    steps: list[OnboardingStep] = Field(default_factory=list)
+    recommended_next_actions: list[str] = Field(default_factory=list)
+
+
+class ProductionEvidenceMetric(BaseModel):
+    name: str
+    value: Any
+    unit: str | None = None
+    status: str
+    detail: str | None = None
+
+
+class ProductionUseCaseEvidence(BaseModel):
+    name: str
+    readiness: str
+    detail: str | None = None
+
+
+class ProductionEvidenceReport(BaseModel):
+    tenant_id: str
+    generated_at: datetime
+    cache_backend: str
+    scale_level: str
+    metrics: list[ProductionEvidenceMetric] = Field(default_factory=list)
+    use_cases: list[ProductionUseCaseEvidence] = Field(default_factory=list)
+    benchmark_command: str
+    gaps: list[str] = Field(default_factory=list)
