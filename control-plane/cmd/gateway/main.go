@@ -1,5 +1,5 @@
 // Command gateway runs the Provena API gateway on :8080.
-// Middleware chain: trace -> metrics -> logging -> auth -> write-permission -> rate-limit.
+// Middleware chain: trace -> metrics -> logging -> rate-limit -> auth -> write-permission.
 package main
 
 import (
