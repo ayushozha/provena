@@ -17,7 +17,11 @@ from app.models import (
     IntegrationCoverageSummary,
     LegalHold,
     MemoryCreate,
+    MemoryFeedbackCreate,
+    MemoryFeedbackRecord,
+    MemoryHistoryEvent,
     MemoryRecord,
+    MemoryUpdate,
     MemoryWriteResult,
     PrincipalMapping,
     PrincipalMappingBatch,
@@ -140,6 +144,44 @@ def create_app() -> FastAPI:
             return request.app.state.store.delete_memory(memory_id, hard_delete=hard_delete, access=access)
         except ValueError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    def _memory_value_error(exc: ValueError) -> HTTPException:
+        detail = str(exc)
+        status = 404 if detail == "memory not found" else 403
+        return HTTPException(status_code=status, detail=detail)
+
+    @app.put("/v1/memories/{memory_id}", response_model=MemoryWriteResult)
+    async def update_memory(memory_id: str, payload: MemoryUpdate, request: Request) -> MemoryWriteResult:
+        try:
+            return request.app.state.store.update_memory(memory_id, payload, access=extract_access(request))
+        except ValueError as exc:
+            raise _memory_value_error(exc) from exc
+
+    @app.get("/v1/memories/{memory_id}/history", response_model=list[MemoryHistoryEvent])
+    async def memory_history(
+        memory_id: str,
+        request: Request,
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> list[MemoryHistoryEvent]:
+        return request.app.state.store.list_memory_history(memory_id, limit=limit)
+
+    @app.post("/v1/memories/{memory_id}/feedback", response_model=MemoryFeedbackRecord)
+    async def add_memory_feedback(memory_id: str, payload: MemoryFeedbackCreate, request: Request) -> MemoryFeedbackRecord:
+        try:
+            return request.app.state.store.add_memory_feedback(memory_id, payload, access=extract_access(request))
+        except ValueError as exc:
+            raise _memory_value_error(exc) from exc
+
+    @app.get("/v1/memories/{memory_id}/feedback", response_model=list[MemoryFeedbackRecord])
+    async def list_memory_feedback(
+        memory_id: str,
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> list[MemoryFeedbackRecord]:
+        try:
+            return request.app.state.store.list_memory_feedback(memory_id, access=extract_access(request), limit=limit)
+        except ValueError as exc:
+            raise _memory_value_error(exc) from exc
 
     @app.post("/v1/admin/erase", response_model=EraseResponse)
     async def erase_memories(payload: EraseRequest, request: Request) -> EraseResponse:
