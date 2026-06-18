@@ -26,6 +26,12 @@ from app.models import (
     WriteResponse,
 )
 
+# Polarity markers used to flag a candidate that overlaps the new content but
+# negates it (e.g. "X is supported" vs "X is not supported").
+_NEGATION_WORDS = frozenset(
+    {"not", "never", "no", "don't", "doesn't", "isn't", "wasn't", "aren't", "won't", "can't", "cannot"}
+)
+
 
 class WritePipelineError(Exception):
     def __init__(self, status_code: int, detail: str) -> None:
@@ -113,7 +119,7 @@ class WritePipeline:
         entities = self._resolve_entities(request.content, request.entity_keys)
         trace.resolved_entities = entities
 
-        conflicts = self._detect_conflicts(request.content, request.scope, entities)
+        conflicts = await self._detect_conflicts(request.content, request.scope, entities, embedding)
         trace.detected_conflicts = conflicts
 
         memory = self._memory_payload(request, kind, embedding, entities, fact_count=fact_count)
@@ -227,8 +233,61 @@ class WritePipeline:
         found = re.findall(pattern, content)
         return list(dict.fromkeys(entity_keys + found))
 
-    def _detect_conflicts(self, content: str, scope: dict[str, Any], entity_keys: list[str]) -> list[str]:
-        return []
+    async def _detect_conflicts(
+        self,
+        content: str,
+        scope: dict[str, Any],
+        entity_keys: list[str],
+        query_embedding: list[float] | None = None,
+    ) -> list[str]:
+        """Flag existing memories that overlap the new content but negate it.
+
+        Candidates come from the store's hybrid search (FTS + vector KNN); the
+        contradiction signal is shared non-negation terms with opposite
+        polarity. Best-effort and advisory (surfaced in the pipeline trace): a
+        store hiccup yields no conflicts rather than failing the write.
+        """
+        candidates = await self._conflict_candidates(content, scope, query_embedding)
+        if not candidates:
+            return []
+        new_terms = set(content.lower().split())
+        new_negated = bool(new_terms & _NEGATION_WORDS)
+        conflicts: list[str] = []
+        for item in candidates:
+            memory = item.get("memory", item)
+            cand_terms = set((memory.get("content") or "").lower().split())
+            shared = (new_terms & cand_terms) - _NEGATION_WORDS
+            if not shared:
+                continue
+            if new_negated != bool(cand_terms & _NEGATION_WORDS):
+                conflicts.append(
+                    f"memory {memory.get('memory_id', '?')} may conflict on: "
+                    f"{', '.join(sorted(shared)[:5])}"
+                )
+        return conflicts
+
+    async def _conflict_candidates(
+        self,
+        content: str,
+        scope: dict[str, Any],
+        query_embedding: list[float] | None,
+    ) -> list[dict[str, Any]]:
+        payload: dict[str, Any] = {
+            "query": content,
+            "scope": scope,
+            "limit": 10,
+            "include_relations": False,
+        }
+        if query_embedding:
+            payload["query_embedding"] = query_embedding
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(f"{self.store_url}/v1/memories/search", json=payload)
+                if response.status_code >= 400:
+                    return []
+                return response.json().get("results", [])
+        except Exception:
+            return []
 
     async def _index_triggers(self, memory: dict[str, Any], scope: dict[str, Any]) -> bool:
         phrases = memory.get("trigger_phrases") or []

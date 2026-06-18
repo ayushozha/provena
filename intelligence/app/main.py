@@ -155,10 +155,11 @@ def create_app() -> FastAPI:
     @app.post("/v1/pipeline/conflicts")
     async def pipeline_conflicts(request: Request, body: dict[str, Any]):
         wp: WritePipeline = request.app.state.write_pipeline
-        conflicts = wp._detect_conflicts(
+        conflicts = await wp._detect_conflicts(
             content=body.get("content", ""),
             scope=body.get("scope", {}),
             entity_keys=body.get("entity_keys", []),
+            query_embedding=body.get("query_embedding"),
         )
         return {"conflicts": conflicts}
 
