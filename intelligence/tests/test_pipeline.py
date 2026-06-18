@@ -198,6 +198,9 @@ class TestWriteExtraction(unittest.TestCase):
                 return False
 
             async def post(self, *args, **kwargs):
+                url = args[0] if args else ""
+                if url.endswith("/v1/memories/search"):
+                    return DummyResponse()  # conflict-detection probe; no candidates
                 posted.append(kwargs.get("json", {}))
                 return DummyResponse()
 
@@ -238,6 +241,9 @@ class TestWriteExtraction(unittest.TestCase):
                 return False
 
             async def post(self, *args, **kwargs):
+                url = args[0] if args else ""
+                if url.endswith("/v1/memories/search"):
+                    return DummyResponse()  # conflict-detection probe; no candidates
                 posted.append(kwargs.get("json", {}))
                 return DummyResponse()
 
@@ -517,6 +523,62 @@ class TestOverviewGeneration(unittest.TestCase):
         self.assertIn("Team", overview.key_entities)
         self.assertEqual(overview.tenant_id, "t1")
         self.assertEqual(overview.project_id, "p1")
+
+
+class TestWriteConflictDetection(unittest.TestCase):
+    """WritePipeline._detect_conflicts flags opposite-polarity overlap."""
+
+    @staticmethod
+    def _client_returning(search_results: list[dict]):
+        class Resp:
+            def __init__(self, data: dict) -> None:
+                self.status_code = 200
+                self.text = ""
+                self._data = data
+
+            def json(self) -> dict:
+                return self._data
+
+        class DummyClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, url, json=None, **kwargs):
+                if url.endswith("/v1/memories/search"):
+                    return Resp({"results": search_results})
+                if url.endswith("/v1/memories"):
+                    return Resp({"created": True, "memory": {"memory_id": "m-new"}})
+                return Resp({})
+
+        return DummyClient
+
+    def _run(self, search_results: list[dict]) -> list[str]:
+        wp = WritePipeline(EmbeddingManager(), ModelRouter())
+        request = WriteRequest(
+            kind="fact",
+            scope={"tenant_id": "t"},
+            content="Postgres is the primary database",
+        )
+        client = self._client_returning(search_results)
+        with patch("app.write_pipeline.httpx.AsyncClient", return_value=client()):
+            result = asyncio.run(wp.process(request))
+        return result.pipeline_trace.detected_conflicts
+
+    def test_negation_conflict_is_flagged(self) -> None:
+        conflicts = self._run(
+            [{"memory": {"memory_id": "m-old", "content": "Postgres is not the primary database"}}]
+        )
+        self.assertTrue(conflicts)
+        self.assertIn("m-old", conflicts[0])
+
+    def test_compatible_memory_is_not_flagged(self) -> None:
+        conflicts = self._run(
+            [{"memory": {"memory_id": "m-old", "content": "Postgres is the primary database"}}]
+        )
+        self.assertEqual(conflicts, [])
 
 
 if __name__ == "__main__":
