@@ -7,11 +7,10 @@ services:
     build:
       context: ./orchestration
       dockerfile: Dockerfile
-    # Internal only: reachable on the compose network, never published to the
-    # host. All external data-plane traffic must go through the gateway, which
-    # authenticates and overwrites the X-Provena-* identity headers.
-    expose:
-      - "50051"
+    # Internal only: loopback-bound for local dev; not reachable from other hosts.
+    # All external data-plane traffic must go through the gateway.
+    ports:
+      - "127.0.0.1:${PROVENA_ORCHESTRATION_HOST_PORT:-50051}:50051"
     environment:
       - RUST_LOG=info
     healthcheck:
@@ -86,8 +85,8 @@ services:
       dockerfile: Dockerfile
       args:
         CMD: queue
-    expose:
-      - "8091"
+    ports:
+      - "127.0.0.1:${PROVENA_QUEUE_HOST_PORT:-8091}:8091"
     environment:
       - PROVENA_QUEUE_LISTEN_ADDR=:8091
       - PROVENA_PIPELINE_URL=http://intelligence:8081
@@ -112,8 +111,8 @@ services:
       dockerfile: Dockerfile
       args:
         CMD: lifecycle
-    expose:
-      - "8092"
+    ports:
+      - "127.0.0.1:${PROVENA_LIFECYCLE_HOST_PORT:-8092}:8092"
     environment:
       - PROVENA_LIFECYCLE_LISTEN_ADDR=:8092
       - PROVENA_STORE_URL=http://store:8000
@@ -131,8 +130,8 @@ services:
     build:
       context: ./intelligence
       dockerfile: Dockerfile
-    expose:
-      - "8081"
+    ports:
+      - "127.0.0.1:${PROVENA_INTELLIGENCE_HOST_PORT:-8081}:8081"
     environment:
       - PROVENA_INTEL_LISTEN_PORT=8081
       - PROVENA_INTEL_PIPELINE_URL=http://store:8000
@@ -158,8 +157,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.store
-    expose:
-      - "8000"
+    ports:
+      - "127.0.0.1:${PROVENA_STORE_HOST_PORT:-8000}:8000"
     environment:
       - PROVENA_DB_PATH=/data/provena.db
     volumes:
