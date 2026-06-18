@@ -118,12 +118,14 @@ func main() {
 	})
 
 	var handler http.Handler = mux
-	handler = gateway.RateLimitMiddleware(rl)(handler)
 	// WritePermission must be wrapped *before* Auth so that Auth runs first
 	// and populates the AuthContext the permission check reads. Reversing
 	// these makes WritePermission a no-op (FromContext returns ok=false).
 	handler = auth.WritePermissionMiddleware(handler)
 	handler = auth.AuthMiddleware(keyStore, authEnabled)(handler)
+	// Rate-limit OUTSIDE auth: throttle floods of invalid tokens before they
+	// reach the CPU-intensive key validation (SHA-256 + constant-time compare).
+	handler = gateway.RateLimitMiddleware(rl)(handler)
 	handler = gateway.RequestLogger(handler)
 	handler = observability.MetricsMiddleware(handler)
 	handler = observability.TraceMiddleware(handler)
