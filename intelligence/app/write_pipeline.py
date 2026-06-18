@@ -233,6 +233,17 @@ class WritePipeline:
         found = re.findall(pattern, content)
         return list(dict.fromkeys(entity_keys + found))
 
+
+    @staticmethod
+    def _conflict_terms(text: str) -> set[str]:
+        """Tokenise content for overlap checks; strip edge punctuation, keep contractions."""
+        terms: set[str] = set()
+        for word in text.lower().split():
+            token = word.strip(".,!?;:\"()[]{}")
+            if token:
+                terms.add(token)
+        return terms
+
     async def _detect_conflicts(
         self,
         content: str,
@@ -250,12 +261,12 @@ class WritePipeline:
         candidates = await self._conflict_candidates(content, scope, query_embedding)
         if not candidates:
             return []
-        new_terms = set(content.lower().split())
+        new_terms = self._conflict_terms(content)
         new_negated = bool(new_terms & _NEGATION_WORDS)
         conflicts: list[str] = []
         for item in candidates:
-            memory = item.get("memory", item)
-            cand_terms = set((memory.get("content") or "").lower().split())
+            memory = item.get("memory") or item
+            cand_terms = self._conflict_terms(memory.get("content") or "")
             shared = (new_terms & cand_terms) - _NEGATION_WORDS
             if not shared:
                 continue

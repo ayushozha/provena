@@ -156,9 +156,9 @@ def create_app() -> FastAPI:
     async def pipeline_conflicts(request: Request, body: dict[str, Any]):
         wp: WritePipeline = request.app.state.write_pipeline
         conflicts = await wp._detect_conflicts(
-            content=body.get("content", ""),
-            scope=body.get("scope", {}),
-            entity_keys=body.get("entity_keys", []),
+            content=body.get("content") or "",
+            scope=body.get("scope") or {},
+            entity_keys=body.get("entity_keys") or [],
             query_embedding=body.get("query_embedding"),
         )
         return {"conflicts": conflicts}
@@ -170,7 +170,7 @@ def create_app() -> FastAPI:
     @app.post("/v1/pipeline/overview")
     async def pipeline_overview(request: Request, body: dict[str, Any]):
         og: OverviewGenerator = request.app.state.overview_generator
-        result = await og.generate(scope=body.get("scope", {}))
+        result = await og.generate(scope=body.get("scope") or {})
         return result.model_dump()
 
     # ------------------------------------------------------------------
