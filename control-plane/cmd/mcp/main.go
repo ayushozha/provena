@@ -27,8 +27,11 @@ func main() {
 
 	listenAddr := env("PROVENA_MCP_LISTEN_ADDR", ":8090")
 	upstreamURL := env("PROVENA_GATEWAY_URL", "http://localhost:8080")
+	// Service credential the MCP server presents to the gateway as a Bearer
+	// token, so its forwarded calls authenticate as a real principal.
+	serviceAPIKey := env("PROVENA_SERVICE_API_KEY", "")
 
-	server := mcp.NewMCPServer("provena-mcp", "0.1.0", upstreamURL)
+	server := mcp.NewMCPServer("provena-mcp", "0.1.0", upstreamURL, serviceAPIKey)
 
 	mux := http.NewServeMux()
 
