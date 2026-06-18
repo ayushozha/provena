@@ -420,7 +420,8 @@ CREATE TABLE IF NOT EXISTS memory_history (
     old_memory_json TEXT NOT NULL DEFAULT '{}',
     new_memory_json TEXT NOT NULL DEFAULT '{}',
     details_json    TEXT NOT NULL DEFAULT '{}',
-    created_at      TEXT NOT NULL
+    created_at      TEXT NOT NULL,
+    FOREIGN KEY(memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_history_memory ON memory_history(memory_id);
@@ -439,7 +440,8 @@ CREATE TABLE IF NOT EXISTS memory_feedback (
     principal_id    TEXT,
     reason          TEXT,
     metadata_json   TEXT NOT NULL DEFAULT '{}',
-    created_at      TEXT NOT NULL
+    created_at      TEXT NOT NULL,
+    FOREIGN KEY(memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_feedback_memory ON memory_feedback(memory_id);
