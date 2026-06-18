@@ -224,6 +224,7 @@ class ProvenaStore:
         with self.conn:
             self._insert_history(
                 memory_id,
+                record.scope.tenant_id,
                 MemoryHistoryEventType.ADD,
                 old_memory={},
                 new_memory=record.model_dump(mode="json"),
@@ -361,6 +362,7 @@ class ProvenaStore:
         with self.conn:
             self._insert_history(
                 memory_id,
+                existing.scope.tenant_id,
                 MemoryHistoryEventType.UPDATE,
                 old_memory=old_snapshot,
                 new_memory=updated.model_dump(mode="json"),
@@ -484,6 +486,7 @@ class ProvenaStore:
             )
             self._insert_history(
                 memory_id,
+                record.scope.tenant_id,
                 MemoryHistoryEventType.FEEDBACK,
                 old_memory={},
                 new_memory={},
@@ -1155,6 +1158,7 @@ class ProvenaStore:
             if not hard_delete:
                 self._insert_history(
                     memory_id,
+                    record.scope.tenant_id,
                     MemoryHistoryEventType.DELETE,
                     old_memory=old_snapshot,
                     new_memory={**old_snapshot, "status": MemoryStatus.DELETED.value},
@@ -3047,13 +3051,13 @@ class ProvenaStore:
     def _insert_history(
         self,
         memory_id: str,
+        tenant_id: str,
         event: MemoryHistoryEventType,
         old_memory: dict[str, Any],
         new_memory: dict[str, Any],
         details: dict[str, Any],
         actor_id: str | None,
     ) -> None:
-        tenant_id = new_memory.get("scope", {}).get("tenant_id") or old_memory.get("scope", {}).get("tenant_id")
         self.conn.execute(
             """
             INSERT INTO memory_history (
