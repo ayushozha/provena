@@ -1147,14 +1147,20 @@ class ProvenaStore:
                     (MemoryStatus.DELETED.value, self._iso_now(), memory_id),
                 )
             self._insert_audit("memory_deleted", memory_id, record.scope.tenant_id, {"hard_delete": hard_delete})
-            self._insert_history(
-                memory_id,
-                MemoryHistoryEventType.DELETE,
-                old_memory=old_snapshot,
-                new_memory={} if hard_delete else {**old_snapshot, "status": MemoryStatus.DELETED.value},
-                details={"hard_delete": hard_delete},
-                actor_id=access.principal_id if access else None,
-            )
+            # A hard delete removes the memory row, which cascades away its
+            # history; recording a DELETE event here would reference a row that
+            # no longer exists (FK violation) and be wiped anyway. The audit_log
+            # (no FK) is the durable record of a hard delete. Soft deletes keep
+            # the row, so their history event is retained.
+            if not hard_delete:
+                self._insert_history(
+                    memory_id,
+                    MemoryHistoryEventType.DELETE,
+                    old_memory=old_snapshot,
+                    new_memory={**old_snapshot, "status": MemoryStatus.DELETED.value},
+                    details={"hard_delete": hard_delete},
+                    actor_id=access.principal_id if access else None,
+                )
         self._invalidate_tenant_cache(record.scope.tenant_id)
         return DeleteResponse(memory_id=memory_id, deleted=True, hard_delete=hard_delete)
 
