@@ -1147,14 +1147,20 @@ class ProvenaStore:
                     (MemoryStatus.DELETED.value, self._iso_now(), memory_id),
                 )
             self._insert_audit("memory_deleted", memory_id, record.scope.tenant_id, {"hard_delete": hard_delete})
-            self._insert_history(
-                memory_id,
-                MemoryHistoryEventType.DELETE,
-                old_memory=old_snapshot,
-                new_memory={} if hard_delete else {**old_snapshot, "status": MemoryStatus.DELETED.value},
-                details={"hard_delete": hard_delete},
-                actor_id=access.principal_id if access else None,
-            )
+            # A hard delete removes the memory row, which cascades away its
+            # history; recording a DELETE event here would reference a row that
+            # no longer exists (FK violation) and be wiped anyway. The audit_log
+            # (no FK) is the durable record of a hard delete. Soft deletes keep
+            # the row, so their history event is retained.
+            if not hard_delete:
+                self._insert_history(
+                    memory_id,
+                    MemoryHistoryEventType.DELETE,
+                    old_memory=old_snapshot,
+                    new_memory={**old_snapshot, "status": MemoryStatus.DELETED.value},
+                    details={"hard_delete": hard_delete},
+                    actor_id=access.principal_id if access else None,
+                )
         self._invalidate_tenant_cache(record.scope.tenant_id)
         return DeleteResponse(memory_id=memory_id, deleted=True, hard_delete=hard_delete)
 
@@ -2238,24 +2244,12 @@ class ProvenaStore:
         prefix = f"{alias}." if alias else ""
         if include_deleted:
             return "", []
+        # Superseded memories stay retrievable (the evaluator ranks them below
+        # the latest revision); only deleted memories are excluded by default.
         return (
-            f" AND {prefix}status NOT IN (?, ?)",
-            [MemoryStatus.SUPERSEDED.value, MemoryStatus.DELETED.value],
+            f" AND {prefix}status != ?",
+            [MemoryStatus.DELETED.value],
         )
-
-    def _is_superseded_in_chain(self, memory_id: str, tenant_id: str) -> bool:
-        row = self.conn.execute(
-            """
-            SELECT 1
-            FROM memory_relations
-            WHERE tenant_id = ?
-              AND from_memory_id = ?
-              AND relation = ?
-            LIMIT 1
-            """,
-            (tenant_id, memory_id, RelationKind.SUPERSEDES.value),
-        ).fetchone()
-        return row is not None
 
     def _evaluate_search_candidate(
         self,
@@ -2286,11 +2280,8 @@ class ProvenaStore:
         if not payload.include_deleted:
             if record.status == MemoryStatus.DELETED:
                 rejection_reasons.append("deleted")
-            elif (
-                record.status == MemoryStatus.SUPERSEDED
-                or self._is_superseded_in_chain(record.memory_id, record.scope.tenant_id)
-            ):
-                rejection_reasons.append("superseded")
+            # Superseded memories are NOT rejected: they remain retrievable and
+            # are ranked below the latest revision by the scoring logic.
         if record.valid_from and now < record.valid_from:
             rejection_reasons.append("not yet valid")
         if record.valid_to and now > record.valid_to:

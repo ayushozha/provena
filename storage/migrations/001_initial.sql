@@ -406,3 +406,43 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 CREATE INDEX IF NOT EXISTS idx_apikeys_tenant ON api_keys(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_apikeys_hash ON api_keys(key_hash);
+
+-- ---------------------------------------------------------------------------
+-- Memory history: append-only audit trail of add/update/delete/feedback events
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS memory_history (
+    history_id      TEXT PRIMARY KEY,
+    memory_id       TEXT NOT NULL,
+    tenant_id       TEXT NOT NULL,
+    event           TEXT NOT NULL,
+    actor_id        TEXT,
+    old_memory_json TEXT NOT NULL DEFAULT '{}',
+    new_memory_json TEXT NOT NULL DEFAULT '{}',
+    details_json    TEXT NOT NULL DEFAULT '{}',
+    created_at      TEXT NOT NULL,
+    FOREIGN KEY(memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_history_memory ON memory_history(memory_id);
+CREATE INDEX IF NOT EXISTS idx_history_tenant ON memory_history(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_history_created ON memory_history(created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Memory feedback: per-memory signals (positive/negative/correction/pin)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS memory_feedback (
+    feedback_id     TEXT PRIMARY KEY,
+    memory_id       TEXT NOT NULL,
+    tenant_id       TEXT NOT NULL,
+    feedback_type   TEXT NOT NULL,
+    principal_id    TEXT,
+    reason          TEXT,
+    metadata_json   TEXT NOT NULL DEFAULT '{}',
+    created_at      TEXT NOT NULL,
+    FOREIGN KEY(memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_memory ON memory_feedback(memory_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_tenant ON memory_feedback(tenant_id);

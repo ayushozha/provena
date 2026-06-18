@@ -215,6 +215,28 @@ class ProvenaApiTests(unittest.TestCase):
         self.assertEqual(results[0]["memory"]["scope"]["session_id"], "session-7")
         self.assertIn("exact session scope", results[0]["reasons"])
 
+    def test_hard_delete_removes_memory(self) -> None:
+        headers = self._admin_headers()
+        created = self.client.post(
+            "/v1/memories",
+            json={
+                "kind": "fact",
+                "scope": {"tenant_id": "tenant-acme", "workspace_id": "ws-growth"},
+                "title": "Ephemeral",
+                "content": "to be hard-deleted",
+            },
+            headers=headers,
+        )
+        mem_id = created.json()["memory"]["memory_id"]
+        resp = self.client.delete(
+            f"/v1/memories/{mem_id}", params={"hard_delete": "true"}, headers=headers
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["hard_delete"])
+        self.assertEqual(
+            self.client.get(f"/v1/memories/{mem_id}", headers=headers).status_code, 404
+        )
+
     def test_search_includes_related_memories(self) -> None:
         primary = self.client.post(
             "/v1/memories",
