@@ -131,7 +131,8 @@ class ProvenaStore:
         self._ensure_compatibility()
         # Optional KNN fast path; falls back to a linear cosine scan if the
         # sqlite-vec extension can't be loaded in this environment.
-        self.vec_enabled = self._init_vector_index()
+        self.vec_enabled = False
+        self._init_vector_index()
 
     def close(self) -> None:
         self.conn.close()
@@ -162,6 +163,7 @@ class ProvenaStore:
                 )
                 """
             )
+            self.vec_enabled = True
             self._backfill_vector_index()
             return True
         except Exception:
@@ -174,16 +176,20 @@ class ProvenaStore:
             "SELECT memory_id, embedding_json FROM memories "
             "WHERE embedding_json IS NOT NULL AND embedding_json NOT IN ('[]', 'null', '')"
         ).fetchall()
-        for row in rows:
-            if row["memory_id"] in existing:
-                continue
-            self._vec_upsert(row["memory_id"], self._json_to_float_list(row["embedding_json"]))
+        with self.conn:
+            for row in rows:
+                if row["memory_id"] in existing:
+                    continue
+                self._vec_upsert(row["memory_id"], self._json_to_float_list(row["embedding_json"]))
 
     def _vec_upsert(self, memory_id: str, embedding: list[float] | None) -> None:
         """Mirror an embedding into the vec index (delete-then-insert; vec0
         rejects INSERT OR REPLACE). No-op unless the index is enabled and the
         embedding matches the configured dimension."""
-        if not self.vec_enabled or not embedding or len(embedding) != self.vector_dimensions:
+        if not self.vec_enabled:
+            return
+        if not embedding or len(embedding) != self.vector_dimensions:
+            self.conn.execute("DELETE FROM memories_vec WHERE memory_id = ?", (memory_id,))
             return
         packed = struct.pack(f"{len(embedding)}f", *embedding)
         self.conn.execute("DELETE FROM memories_vec WHERE memory_id = ?", (memory_id,))
