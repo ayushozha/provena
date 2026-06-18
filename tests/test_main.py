@@ -291,6 +291,27 @@ class ProvenaApiTests(unittest.TestCase):
             404,
         )
 
+    def test_memory_history_denies_unauthorized_tenant(self) -> None:
+        headers = self._admin_headers()
+        created = self.client.post(
+            "/v1/memories",
+            json={
+                "kind": "fact",
+                "scope": {"tenant_id": "tenant-acme", "workspace_id": "ws-growth"},
+                "title": "Tenant scoped",
+                "content": "History should not leak across tenants.",
+            },
+            headers=headers,
+        )
+        self.assertEqual(created.status_code, 200)
+        mem_id = created.json()["memory"]["memory_id"]
+
+        cross_tenant = self.client.get(
+            f"/v1/memories/{mem_id}/history",
+            headers=self._admin_headers("tenant-other"),
+        )
+        self.assertEqual(cross_tenant.status_code, 404)
+
     def test_search_includes_related_memories(self) -> None:
         primary = self.client.post(
             "/v1/memories",
