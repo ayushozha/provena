@@ -7,8 +7,10 @@ services:
     build:
       context: ./orchestration
       dockerfile: Dockerfile
+    # Internal only: loopback-bound for local dev; not reachable from other hosts.
+    # All external data-plane traffic must go through the gateway.
     ports:
-      - "${PROVENA_ORCHESTRATION_HOST_PORT:-50051}:50051"
+      - "127.0.0.1:${PROVENA_ORCHESTRATION_HOST_PORT:-50051}:50051"
     environment:
       - RUST_LOG=info
     healthcheck:
@@ -35,6 +37,9 @@ services:
       - PROVENA_INTELLIGENCE_URL=http://intelligence:8081
       - PROVENA_STORE_URL=http://store:8000
       - PROVENA_LIFECYCLE_URL=http://lifecycle:8092
+      # Local dev default. Production MUST set PROVENA_AUTH_ENABLED=true and
+      # provision PROVENA_API_KEYS; the gateway is the only host-published
+      # data-plane entry, so this toggle governs all external access.
       - PROVENA_AUTH_ENABLED=false
     depends_on:
       orchestration:
@@ -81,7 +86,7 @@ services:
       args:
         CMD: queue
     ports:
-      - "${PROVENA_QUEUE_HOST_PORT:-8091}:8091"
+      - "127.0.0.1:${PROVENA_QUEUE_HOST_PORT:-8091}:8091"
     environment:
       - PROVENA_QUEUE_LISTEN_ADDR=:8091
       - PROVENA_PIPELINE_URL=http://intelligence:8081
@@ -107,7 +112,7 @@ services:
       args:
         CMD: lifecycle
     ports:
-      - "${PROVENA_LIFECYCLE_HOST_PORT:-8092}:8092"
+      - "127.0.0.1:${PROVENA_LIFECYCLE_HOST_PORT:-8092}:8092"
     environment:
       - PROVENA_LIFECYCLE_LISTEN_ADDR=:8092
       - PROVENA_STORE_URL=http://store:8000
@@ -126,7 +131,7 @@ services:
       context: ./intelligence
       dockerfile: Dockerfile
     ports:
-      - "${PROVENA_INTELLIGENCE_HOST_PORT:-8081}:8081"
+      - "127.0.0.1:${PROVENA_INTELLIGENCE_HOST_PORT:-8081}:8081"
     environment:
       - PROVENA_INTEL_LISTEN_PORT=8081
       - PROVENA_INTEL_PIPELINE_URL=http://store:8000
@@ -153,7 +158,7 @@ services:
       context: .
       dockerfile: Dockerfile.store
     ports:
-      - "${PROVENA_STORE_HOST_PORT:-8000}:8000"
+      - "127.0.0.1:${PROVENA_STORE_HOST_PORT:-8000}:8000"
     environment:
       - PROVENA_DB_PATH=/data/provena.db
     volumes:
