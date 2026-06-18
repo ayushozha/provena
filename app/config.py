@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     db_path: str = "./data/provena.db"
     default_limit: int = 10
     max_limit: int = 50
+    # Dimension of the sqlite-vec KNN index. Must match the embedding model in
+    # use (nomic-embed-text = 768). The index is an optional fast path; if the
+    # sqlite-vec extension can't load, the store falls back to a linear scan.
+    vector_dimensions: int = 768
 
     @property
     def resolved_db_path(self) -> Path:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import struct
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -113,18 +114,94 @@ _SEARCH_VECTOR_WEIGHT = 0.45
 
 
 class ProvenaStore:
-    def __init__(self, db_path: Path | str, hot_cache: MemoryHotCache | None = None) -> None:
+    def __init__(
+        self,
+        db_path: Path | str,
+        hot_cache: MemoryHotCache | None = None,
+        vector_dimensions: int = 768,
+    ) -> None:
         path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.hot_cache = hot_cache or InMemoryHotCache(ttl_seconds=300)
+        self.vector_dimensions = vector_dimensions
         self._ensure_schema()
         self._ensure_compatibility()
+        # Optional KNN fast path; falls back to a linear cosine scan if the
+        # sqlite-vec extension can't be loaded in this environment.
+        self.vec_enabled = False
+        self._init_vector_index()
 
     def close(self) -> None:
         self.conn.close()
+
+    # ------------------------------------------------------------------
+    # Vector index (sqlite-vec) — optional KNN fast path
+    # ------------------------------------------------------------------
+
+    def _init_vector_index(self) -> bool:
+        """Load sqlite-vec and create + backfill the KNN table.
+
+        Returns False (and leaves search on the linear-scan fallback) if the
+        extension can't be loaded — e.g. a Python build without loadable
+        extension support. Never raises: the index is an accelerator, not a
+        requirement.
+        """
+        try:
+            import sqlite_vec
+
+            self.conn.enable_load_extension(True)
+            sqlite_vec.load(self.conn)
+            self.conn.enable_load_extension(False)
+            self.conn.execute(
+                f"""
+                CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
+                    memory_id TEXT PRIMARY KEY,
+                    embedding float[{self.vector_dimensions}] distance_metric=cosine
+                )
+                """
+            )
+            self.vec_enabled = True
+            self._backfill_vector_index()
+            return True
+        except Exception:
+            return False
+
+    def _backfill_vector_index(self) -> None:
+        """Populate the vec table from any embeddings already in `memories`."""
+        existing = {row[0] for row in self.conn.execute("SELECT memory_id FROM memories_vec")}
+        rows = self.conn.execute(
+            "SELECT memory_id, embedding_json FROM memories "
+            "WHERE embedding_json IS NOT NULL AND embedding_json NOT IN ('[]', 'null', '')"
+        ).fetchall()
+        with self.conn:
+            for row in rows:
+                if row["memory_id"] in existing:
+                    continue
+                self._vec_upsert(row["memory_id"], self._json_to_float_list(row["embedding_json"]))
+
+    def _vec_upsert(self, memory_id: str, embedding: list[float] | None) -> None:
+        """Mirror an embedding into the vec index (delete-then-insert; vec0
+        rejects INSERT OR REPLACE). No-op unless the index is enabled and the
+        embedding matches the configured dimension."""
+        if not self.vec_enabled:
+            return
+        if not embedding or len(embedding) != self.vector_dimensions:
+            self.conn.execute("DELETE FROM memories_vec WHERE memory_id = ?", (memory_id,))
+            return
+        packed = struct.pack(f"{len(embedding)}f", *embedding)
+        self.conn.execute("DELETE FROM memories_vec WHERE memory_id = ?", (memory_id,))
+        self.conn.execute(
+            "INSERT INTO memories_vec(memory_id, embedding) VALUES (?, ?)",
+            (memory_id, packed),
+        )
+
+    def _vec_delete(self, memory_id: str) -> None:
+        if not self.vec_enabled:
+            return
+        self.conn.execute("DELETE FROM memories_vec WHERE memory_id = ?", (memory_id,))
 
     def create_memory(
         self,
@@ -230,6 +307,7 @@ class ProvenaStore:
                 details={"kind": payload.kind.value, "memory_layer": memory_layer.value},
                 actor_id=access.principal_id if access else None,
             )
+            self._vec_upsert(memory_id, record.embedding)
         self._invalidate_tenant_cache(payload.scope.tenant_id)
         return MemoryWriteResult(created=True, memory=record)
 
@@ -367,6 +445,7 @@ class ProvenaStore:
                 details={"updated_fields": sorted(updates.keys())},
                 actor_id=access.principal_id if access else None,
             )
+            self._vec_upsert(memory_id, updated.embedding)
         self._invalidate_tenant_cache(existing.scope.tenant_id)
         return MemoryWriteResult(created=False, memory=updated)
 
@@ -1141,6 +1220,7 @@ class ProvenaStore:
         with self.conn:
             if hard_delete:
                 self.conn.execute("DELETE FROM memories WHERE memory_id = ?", (memory_id,))
+                self._vec_delete(memory_id)
             else:
                 self.conn.execute(
                     "UPDATE memories SET status = ?, updated_at = ? WHERE memory_id = ?",
@@ -2481,9 +2561,62 @@ class ProvenaStore:
             for row in rows
         ]
 
+    def _vector_candidates_knn(
+        self, payload: SearchRequest, candidate_limit: int
+    ) -> list[SearchCandidate] | None:
+        """True KNN over the whole tenant's embeddings via sqlite-vec.
+
+        Returns None to signal the caller to fall back to the linear scan (e.g.
+        if the vec query errors). Over-fetches `k` then applies tenant / scope /
+        status filters in SQL, so superseded/other-tenant rows can't leak.
+        """
+        scope_clauses, scope_params = self._search_scope_clauses(payload.scope)
+        scope_sql = f" AND {' AND '.join(scope_clauses)}" if scope_clauses else ""
+        status_sql, status_params = self._search_status_filter(payload.include_deleted, alias="m")
+        k = max(candidate_limit * 10, candidate_limit)
+        query = struct.pack(f"{len(payload.query_embedding)}f", *payload.query_embedding)
+        try:
+            knn_rows = self.conn.execute(
+                "SELECT memory_id, distance FROM memories_vec "
+                "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+                (query, k),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return None
+        if not knn_rows:
+            return []
+        distance_by_id = {row["memory_id"]: row["distance"] for row in knn_rows}
+        ids = list(distance_by_id.keys())
+        placeholders = ",".join("?" for _ in ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT m.*, NULL AS fts_rank
+            FROM memories AS m
+            WHERE m.tenant_id = ?{status_sql}{scope_sql}
+              AND m.memory_id IN ({placeholders})
+            """,
+            (payload.scope.tenant_id, *status_params, *scope_params, *ids),
+        ).fetchall()
+        scored: list[SearchCandidate] = []
+        for row in rows:
+            distance = distance_by_id.get(row["memory_id"])
+            similarity = 1.0 - distance if distance is not None else 0.0
+            if similarity <= 0:
+                continue
+            scored.append(SearchCandidate(row=row, vector_rank=similarity))
+        scored.sort(
+            key=lambda candidate: (candidate.vector_rank or 0.0, candidate.row["updated_at"]),
+            reverse=True,
+        )
+        return scored[:candidate_limit]
+
     def _vector_candidate_rows(self, payload: SearchRequest, candidate_limit: int) -> list[SearchCandidate]:
         if not payload.query_embedding:
             return []
+        if self.vec_enabled and len(payload.query_embedding) == self.vector_dimensions:
+            knn = self._vector_candidates_knn(payload, candidate_limit)
+            if knn is not None:
+                return knn
         scope_clauses, scope_params = self._search_scope_clauses(payload.scope)
         scope_sql = f" AND {' AND '.join(scope_clauses)}" if scope_clauses else ""
         status_sql, status_params = self._search_status_filter(payload.include_deleted, alias="m")
