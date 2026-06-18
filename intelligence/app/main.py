@@ -30,6 +30,8 @@ async def lifespan(app: FastAPI):
         provider=settings.embedding_provider,
         model_id=settings.embedding_model,
         dimensions=settings.embedding_dimensions,
+        base_url=settings.embedding_base_url,
+        api_key=settings.embedding_api_key.get_secret_value(),
     )
     model_router = ModelRouter()
     overview_generator = OverviewGenerator(store_url=settings.pipeline_url)

@@ -7,6 +7,8 @@ import math
 import struct
 from typing import TYPE_CHECKING
 
+import httpx
+
 from app.models import EmbeddingModelInfo
 
 if TYPE_CHECKING:
@@ -21,10 +23,17 @@ class EmbeddingManager:
         provider: str = "local",
         model_id: str = "local-minilm",
         dimensions: int = 384,
+        base_url: str = "http://localhost:11434/v1",
+        api_key: str = "",
     ) -> None:
         self.provider = provider
         self.model_id = model_id
         self.dimensions = dimensions
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        # Lazily created persistent client so the per-request embedding call
+        # reuses one connection pool instead of a fresh TCP/TLS handshake each time.
+        self._client: httpx.Client | None = None
 
     # ------------------------------------------------------------------
     # Generation
@@ -33,9 +42,14 @@ class EmbeddingManager:
     def generate(self, text: str) -> list[float]:
         """Generate an embedding vector for *text*.
 
-        For the ``local`` provider this produces deterministic
-        pseudo-embeddings derived from the SHA-256 hash of the input.
+        The ``openai`` provider produces real semantic embeddings from any
+        OpenAI-compatible embeddings endpoint (the default runtime path),
+        pointed by env vars. The ``local`` provider produces deterministic
+        SHA-256 pseudo-embeddings with no semantic signal -- retained only
+        for offline/unit tests.
         """
+        if self.provider == "openai":
+            return self._openai_embed(text)
         if self.provider == "local":
             return self._local_embed(text)
         raise NotImplementedError(f"Provider {self.provider!r} not supported yet")
@@ -96,6 +110,41 @@ class EmbeddingManager:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _openai_embed(self, text: str) -> list[float]:
+        """Real semantic embedding from any OpenAI-compatible endpoint.
+
+        Pointed entirely by env: ``PROVENA_INTEL_EMBEDDING_BASE_URL`` /
+        ``_MODEL`` / ``_API_KEY``. Works against a local Ollama ``/v1``
+        shim, a local llama-server, OpenRouter, or OpenAI unchanged.
+
+        Synchronous on purpose: the read/write pipelines call ``generate``
+        synchronously. A failure here raises rather than silently falling
+        back to pseudo-embeddings -- a down embedder must surface loudly,
+        not quietly poison recall with hash noise.
+        """
+        if self._client is None:
+            self._client = httpx.Client(timeout=30.0)
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
+        try:
+            response = self._client.post(
+                f"{self.base_url}/embeddings",
+                json={"model": self.model_id, "input": text},
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json().get("data") or []
+            vector = data[0].get("embedding") if data else None
+        except Exception as exc:
+            raise RuntimeError(
+                f"Embedding request to {self.base_url} failed for model "
+                f"{self.model_id!r}: {exc}"
+            ) from exc
+        if not vector:
+            raise RuntimeError(
+                f"Embedding endpoint returned no vector for model {self.model_id!r}"
+            )
+        return [float(value) for value in vector]
 
     def _local_embed(self, text: str) -> list[float]:
         """Deterministic pseudo-embedding from SHA-256 hash bytes.
