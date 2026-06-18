@@ -237,6 +237,81 @@ class ProvenaApiTests(unittest.TestCase):
             self.client.get(f"/v1/memories/{mem_id}", headers=headers).status_code, 404
         )
 
+    def test_update_history_and_feedback_roundtrip(self) -> None:
+        headers = self._admin_headers()
+        created = self.client.post(
+            "/v1/memories",
+            json={
+                "kind": "fact",
+                "scope": {"tenant_id": "tenant-acme", "workspace_id": "ws-growth"},
+                "title": "Original",
+                "content": "Original content about onboarding.",
+            },
+            headers=headers,
+        )
+        self.assertEqual(created.status_code, 200)
+        mem_id = created.json()["memory"]["memory_id"]
+
+        updated = self.client.put(
+            f"/v1/memories/{mem_id}",
+            json={"title": "Revised", "content": "Revised content about onboarding."},
+            headers=headers,
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["memory"]["title"], "Revised")
+
+        hist = self.client.get(f"/v1/memories/{mem_id}/history", headers=headers)
+        self.assertEqual(hist.status_code, 200)
+        self.assertGreaterEqual(len(hist.json()), 1)
+        self.assertIn("update", {row["event"] for row in hist.json()})
+
+        fb = self.client.post(
+            f"/v1/memories/{mem_id}/feedback",
+            json={"feedback_type": "positive", "reason": "useful"},
+            headers=headers,
+        )
+        self.assertEqual(fb.status_code, 200)
+
+        fb_list = self.client.get(f"/v1/memories/{mem_id}/feedback", headers=headers)
+        self.assertEqual(fb_list.status_code, 200)
+        self.assertEqual(len(fb_list.json()), 1)
+        self.assertEqual(fb_list.json()[0]["feedback_type"], "positive")
+
+        # Unknown memory: mutating routes 404 rather than silently succeeding.
+        self.assertEqual(
+            self.client.put("/v1/memories/nope", json={"title": "x"}, headers=headers).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/v1/memories/nope/feedback",
+                json={"feedback_type": "positive"},
+                headers=headers,
+            ).status_code,
+            404,
+        )
+
+    def test_memory_history_denies_unauthorized_tenant(self) -> None:
+        headers = self._admin_headers()
+        created = self.client.post(
+            "/v1/memories",
+            json={
+                "kind": "fact",
+                "scope": {"tenant_id": "tenant-acme", "workspace_id": "ws-growth"},
+                "title": "Tenant scoped",
+                "content": "History should not leak across tenants.",
+            },
+            headers=headers,
+        )
+        self.assertEqual(created.status_code, 200)
+        mem_id = created.json()["memory"]["memory_id"]
+
+        cross_tenant = self.client.get(
+            f"/v1/memories/{mem_id}/history",
+            headers=self._admin_headers("tenant-other"),
+        )
+        self.assertEqual(cross_tenant.status_code, 404)
+
     def test_search_includes_related_memories(self) -> None:
         primary = self.client.post(
             "/v1/memories",
