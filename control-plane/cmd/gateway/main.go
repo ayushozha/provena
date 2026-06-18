@@ -1,5 +1,5 @@
 // Command gateway runs the Provena API gateway on :8080.
-// Middleware chain: trace -> metrics -> logging -> auth -> rate-limit.
+// Middleware chain: trace -> metrics -> logging -> auth -> write-permission -> rate-limit.
 package main
 
 import (
@@ -119,8 +119,11 @@ func main() {
 
 	var handler http.Handler = mux
 	handler = gateway.RateLimitMiddleware(rl)(handler)
-	handler = auth.AuthMiddleware(keyStore, authEnabled)(handler)
+	// WritePermission must be wrapped *before* Auth so that Auth runs first
+	// and populates the AuthContext the permission check reads. Reversing
+	// these makes WritePermission a no-op (FromContext returns ok=false).
 	handler = auth.WritePermissionMiddleware(handler)
+	handler = auth.AuthMiddleware(keyStore, authEnabled)(handler)
 	handler = gateway.RequestLogger(handler)
 	handler = observability.MetricsMiddleware(handler)
 	handler = observability.TraceMiddleware(handler)
