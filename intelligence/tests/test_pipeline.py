@@ -74,6 +74,65 @@ class TestEmbeddings(unittest.TestCase):
         self.assertLess(abs(sim), 0.5)
 
 
+class TestOpenAIEmbeddingProvider(unittest.TestCase):
+    """The openai-compatible provider speaks the OpenAI embeddings shape."""
+
+    def _manager(self, api_key: str = "test-key") -> EmbeddingManager:
+        return EmbeddingManager(
+            provider="openai",
+            model_id="nomic-embed-text",
+            dimensions=3,
+            base_url="https://endpoint.example/v1",
+            api_key=api_key,
+        )
+
+    @staticmethod
+    def _fake_response(payload: dict):
+        class FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            @staticmethod
+            def json() -> dict:
+                return payload
+
+        return FakeResponse()
+
+    def test_request_shape_and_parse(self) -> None:
+        captured: dict = {}
+
+        def fake_post(client_self, url, json=None, headers=None, timeout=None):
+            captured.update(url=url, json=json, headers=headers)
+            return self._fake_response({"data": [{"embedding": [0.1, 0.2, 0.3]}]})
+
+        with patch("app.embeddings.httpx.Client.post", fake_post):
+            vec = self._manager().generate("hello")
+
+        self.assertEqual(vec, [0.1, 0.2, 0.3])
+        self.assertEqual(captured["url"], "https://endpoint.example/v1/embeddings")
+        self.assertEqual(captured["json"], {"model": "nomic-embed-text", "input": "hello"})
+        self.assertEqual(captured["headers"], {"Authorization": "Bearer test-key"})
+
+    def test_no_auth_header_without_key(self) -> None:
+        captured: dict = {}
+
+        def fake_post(client_self, url, json=None, headers=None, timeout=None):
+            captured["headers"] = headers
+            return self._fake_response({"data": [{"embedding": [1.0]}]})
+
+        with patch("app.embeddings.httpx.Client.post", fake_post):
+            self._manager(api_key="").generate("x")
+        self.assertIsNone(captured["headers"])
+
+    def test_empty_vector_raises(self) -> None:
+        def fake_post(client_self, url, json=None, headers=None, timeout=None):
+            return self._fake_response({"data": []})
+
+        with patch("app.embeddings.httpx.Client.post", fake_post):
+            with self.assertRaises(RuntimeError):
+                self._manager().generate("x")
+
+
 class TestEntityResolution(unittest.TestCase):
     """Test WritePipeline._resolve_entities."""
 
