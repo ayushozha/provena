@@ -2,22 +2,44 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
 import httpx
 
 from app.embeddings import EmbeddingManager
+from app.llm import LLMClient
 from app.model_router import ModelRouter
 from app.models import (
     Citation,
     ContradictionPair,
+    ModelTier,
     ReadSearchRequest,
     ReadSearchResponse,
     ScoredMemory,
     TokenUsage,
     TriggerHit,
 )
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _with_combined(memory: ScoredMemory, combined: float) -> ScoredMemory:
+    """Copy a ScoredMemory with a new combined score (all else preserved)."""
+    return ScoredMemory(
+        memory_id=memory.memory_id,
+        content=memory.content,
+        title=memory.title,
+        memory=memory.memory,
+        reasons=memory.reasons,
+        related_memories=memory.related_memories,
+        vector_score=memory.vector_score,
+        fts_score=memory.fts_score,
+        combined=combined,
+    )
 
 
 class ReadPipeline:
@@ -29,11 +51,13 @@ class ReadPipeline:
         model_router: ModelRouter,
         store_url: str = "http://localhost:8000",
         orchestration_url: str = "http://localhost:50051",
+        llm: LLMClient | None = None,
     ) -> None:
         self.embedding_manager = embedding_manager
         self.model_router = model_router
         self.store_url = store_url
         self.orchestration_url = orchestration_url
+        self.llm = llm or LLMClient(model_router)
         self.min_combined_score = float(os.environ.get("PROVENA_ABSTAIN_MIN_SCORE", "0.15"))
 
     async def search(
@@ -49,7 +73,7 @@ class ReadPipeline:
             query_embedding=request.query_embedding or None,
             access_headers=access_headers,
         )
-        ranked = self._rerank(request.query, candidates)
+        ranked = await self._rerank(request.query, candidates)
         if ranked and ranked[0].combined < self.min_combined_score:
             return ReadSearchResponse(
                 results=[],
@@ -59,7 +83,7 @@ class ReadPipeline:
                 ),
                 budget_remaining=request.max_tokens,
             )
-        contradictions = self._detect_contradictions(ranked)
+        contradictions = await self._detect_contradictions(ranked)
         trimmed, tokens_used = await self._apply_context_budget(ranked, request.max_tokens)
         citations = self._package_citations([self._citation_payload(memory) for memory in trimmed])
 
@@ -233,7 +257,49 @@ class ReadPipeline:
         scored.sort(key=lambda item: item.vector_score, reverse=True)
         return scored[:limit]
 
-    def _rerank(self, query: str, candidates: list[ScoredMemory]) -> list[ScoredMemory]:
+    async def _rerank(self, query: str, candidates: list[ScoredMemory]) -> list[ScoredMemory]:
+        """Reorder candidates by relevance to the query. Uses the LLM to score
+        relevance when configured; otherwise falls back to term-overlap."""
+        if self.llm.enabled and candidates:
+            llm_ranked = await self._llm_rerank(query, candidates)
+            if llm_ranked is not None:
+                return llm_ranked
+        return self._rerank_heuristic(query, candidates)
+
+    async def _llm_rerank(
+        self, query: str, candidates: list[ScoredMemory]
+    ) -> list[ScoredMemory] | None:
+        # Ask the model to score each candidate 0..1 for relevance to the query.
+        items = [{"id": m.memory_id, "content": m.content[:500]} for m in candidates]
+        payload = await self.llm.chat_json(
+            task="rerank",
+            tier=ModelTier.BALANCED,
+            system="You score how relevant each memory is to a search query. Reply with JSON only.",
+            user=(
+                f"Query: {query}\n\nMemories (JSON): {json.dumps(items)}\n\n"
+                'Return JSON {"scores": [{"id": "<memory id>", "score": <0..1>}]} '
+                "with one entry per memory, score = relevance to the query."
+            ),
+        )
+        scores = payload.get("scores") if isinstance(payload, dict) else None
+        if not isinstance(scores, list):
+            return None
+        by_id = {
+            str(s.get("id")): float(s.get("score"))
+            for s in scores
+            if isinstance(s, dict) and s.get("id") is not None and _is_number(s.get("score"))
+        }
+        if not by_id:
+            return None
+        # Blend the LLM relevance into the retrieval score so vector/FTS signal
+        # still counts; missing ids keep their original combined score.
+        reranked = [
+            _with_combined(m, m.combined + by_id.get(m.memory_id, 0.0) * 0.5) for m in candidates
+        ]
+        reranked.sort(key=lambda item: item.combined, reverse=True)
+        return reranked
+
+    def _rerank_heuristic(self, query: str, candidates: list[ScoredMemory]) -> list[ScoredMemory]:
         query_terms = set(query.lower().split())
         reranked: list[ScoredMemory] = []
         for memory in candidates:
@@ -256,7 +322,60 @@ class ReadPipeline:
         reranked.sort(key=lambda item: item.combined, reverse=True)
         return reranked
 
-    def _detect_contradictions(self, memories: list[ScoredMemory]) -> list[ContradictionPair]:
+    async def _detect_contradictions(
+        self, memories: list[ScoredMemory]
+    ) -> list[ContradictionPair]:
+        """Find contradicting memory pairs. Uses the LLM to judge semantic
+        contradiction when configured; otherwise falls back to the negation
+        keyword heuristic."""
+        if self.llm.enabled and len(memories) > 1:
+            llm_pairs = await self._llm_detect_contradictions(memories)
+            if llm_pairs is not None:
+                return llm_pairs
+        return self._detect_contradictions_heuristic(memories)
+
+    async def _llm_detect_contradictions(
+        self, memories: list[ScoredMemory]
+    ) -> list[ContradictionPair] | None:
+        items = [{"id": m.memory_id, "content": m.content[:500]} for m in memories]
+        valid_ids = {m.memory_id for m in memories}
+        payload = await self.llm.chat_json(
+            task="classify",
+            tier=ModelTier.BALANCED,
+            system="You detect factual contradictions between memories. Reply with JSON only.",
+            user=(
+                f"Memories (JSON): {json.dumps(items)}\n\n"
+                'Return JSON {"contradictions": [{"id_a": "...", "id_b": "...", '
+                '"description": "...", "severity": "low|medium|high"}]} listing only '
+                "pairs that genuinely contradict each other (a fact and its negation, "
+                "incompatible values). Return an empty list if none."
+            ),
+        )
+        raw = payload.get("contradictions") if isinstance(payload, dict) else None
+        if not isinstance(raw, list):
+            return None
+        pairs: list[ContradictionPair] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            id_a, id_b = str(item.get("id_a", "")), str(item.get("id_b", ""))
+            # Only trust ids the model was actually given.
+            if id_a not in valid_ids or id_b not in valid_ids or id_a == id_b:
+                continue
+            severity = item.get("severity")
+            pairs.append(
+                ContradictionPair(
+                    memory_id_a=id_a,
+                    memory_id_b=id_b,
+                    description=str(item.get("description", "")).strip() or "Contradiction detected",
+                    severity=severity if severity in {"low", "medium", "high"} else "medium",
+                )
+            )
+        return pairs
+
+    def _detect_contradictions_heuristic(
+        self, memories: list[ScoredMemory]
+    ) -> list[ContradictionPair]:
         negation_words = {"not", "never", "no", "don't", "doesn't", "isn't", "wasn't", "aren't", "won't", "can't", "cannot"}
         pairs: list[ContradictionPair] = []
         for index in range(len(memories)):

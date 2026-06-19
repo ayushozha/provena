@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from app.embeddings import EmbeddingManager
@@ -218,6 +218,82 @@ class TestLlmExtraction(unittest.TestCase):
         with patch("app.extract_facts.httpx.AsyncClient", side_effect=AssertionError("should not call LLM")):
             facts = asyncio.run(extractor.extract("User: I love Postgres.", "t"))
         self.assertTrue(facts)  # produced by the deterministic local splitter
+
+
+class TestLlmStages(unittest.TestCase):
+    """LLM-backed rerank / contradiction / compaction with mocked chat_json."""
+
+    def _read_pipeline(self, chat_return):
+        from app.llm import LLMClient
+        from app.read_pipeline import ReadPipeline
+
+        llm = LLMClient(ModelRouter(), api_key="dummy")  # enabled
+        llm.chat_json = AsyncMock(return_value=chat_return)
+        return ReadPipeline(EmbeddingManager(), ModelRouter(), llm=llm)
+
+    def test_llm_rerank_reorders_by_score(self) -> None:
+        rp = self._read_pipeline({"scores": [{"id": "a", "score": 0.0}, {"id": "b", "score": 1.0}]})
+        candidates = [
+            ScoredMemory(memory_id="a", content="alpha", title="", combined=0.5),
+            ScoredMemory(memory_id="b", content="beta", title="", combined=0.4),
+        ]
+        ranked = asyncio.run(rp._rerank("q", candidates))
+        # b's LLM score (1.0 * 0.5) lifts it above a despite lower retrieval score
+        self.assertEqual([m.memory_id for m in ranked], ["b", "a"])
+
+    def test_llm_rerank_falls_back_when_unparseable(self) -> None:
+        rp = self._read_pipeline(None)  # chat_json returned None
+        candidates = [ScoredMemory(memory_id="a", content="alpha beta", title="", combined=0.5)]
+        ranked = asyncio.run(rp._rerank("alpha", candidates))
+        self.assertEqual(len(ranked), 1)  # heuristic path still returns results
+
+    def test_llm_contradictions_filters_unknown_ids(self) -> None:
+        rp = self._read_pipeline(
+            {"contradictions": [
+                {"id_a": "m1", "id_b": "m2", "description": "conflict", "severity": "high"},
+                {"id_a": "m1", "id_b": "ghost", "description": "bad", "severity": "low"},
+            ]}
+        )
+        memories = [
+            ScoredMemory(memory_id="m1", content="X is true", title=""),
+            ScoredMemory(memory_id="m2", content="X is false", title=""),
+        ]
+        pairs = asyncio.run(rp._detect_contradictions(memories))
+        self.assertEqual(len(pairs), 1)  # the ghost-id pair is dropped
+        self.assertEqual((pairs[0].memory_id_a, pairs[0].memory_id_b), ("m1", "m2"))
+        self.assertEqual(pairs[0].severity, "high")
+
+    def test_llm_compaction_summarizes_fetched_bodies(self) -> None:
+        from app.llm import LLMClient
+        from app.write_pipeline import WritePipeline
+
+        llm = LLMClient(ModelRouter(), api_key="dummy")
+        llm.chat_json = AsyncMock(return_value={"summary": "Karan likes Rust and Postgres.", "title": "Prefs"})
+        wp = WritePipeline(EmbeddingManager(), ModelRouter(), llm=llm)
+        wp._fetch_memory_bodies = AsyncMock(return_value={"m1": "likes Rust", "m2": "likes Postgres"})
+        resp = asyncio.run(wp._compact_memories(["m1", "m2"], {"tenant_id": "t"}))
+        self.assertEqual(resp.compacted_memory["content"], "Karan likes Rust and Postgres.")
+        self.assertEqual(sorted(resp.superseded_ids), ["m1", "m2"])
+
+    def test_compaction_noop_supersedes_nothing_without_llm(self) -> None:
+        from app.write_pipeline import WritePipeline
+
+        wp = WritePipeline(EmbeddingManager(), ModelRouter())  # no key → disabled
+        resp = asyncio.run(wp._compact_memories(["m1", "m2"], {"tenant_id": "t"}))
+        # Safe fallback: never claim to supersede sources we didn't actually fold in.
+        self.assertEqual(resp.superseded_ids, [])
+
+
+class TestLlmClientParsing(unittest.TestCase):
+    def test_parse_json_variants(self) -> None:
+        from app.llm import LLMClient
+
+        self.assertEqual(LLMClient._parse_json('{"a": 1}'), {"a": 1})
+        self.assertEqual(LLMClient._parse_json('```json\n{"a": 2}\n```'), {"a": 2})
+        self.assertEqual(LLMClient._parse_json('noise {"a": 3} trailing'), {"a": 3})
+        self.assertEqual(LLMClient._parse_json("[1, 2, 3]"), [1, 2, 3])
+        self.assertIsNone(LLMClient._parse_json("not json at all"))
+        self.assertIsNone(LLMClient._parse_json(""))
 
 
 class TestEntityResolution(unittest.TestCase):
@@ -574,7 +650,8 @@ class TestContradictionDetection(unittest.TestCase):
                 title="Tech Stack Update",
             ),
         ]
-        pairs = self.rp._detect_contradictions(memories)
+        # No LLM key configured in this pipeline → exercises the heuristic path.
+        pairs = asyncio.run(self.rp._detect_contradictions(memories))
         self.assertGreater(len(pairs), 0)
         self.assertEqual(pairs[0].memory_id_a, "m1")
         self.assertEqual(pairs[0].memory_id_b, "m2")
