@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 from app.config import settings
 from app.embeddings import EmbeddingManager
+from app.extract_facts import FactExtractor
 from app.model_router import ModelRouter
 from app.models import (
     CompactRequest,
@@ -35,12 +36,19 @@ async def lifespan(app: FastAPI):
     )
     model_router = ModelRouter()
     overview_generator = OverviewGenerator(store_url=settings.pipeline_url)
+    fact_extractor = FactExtractor(
+        model_router=model_router,
+        llm_api_key=settings.llm_api_key.get_secret_value(),
+        llm_model=settings.llm_model,
+        llm_base_url=settings.llm_base_url,
+    )
     write_pipeline = WritePipeline(
         embedding_manager=embedding_manager,
         model_router=model_router,
         overview_generator=overview_generator,
         store_url=settings.pipeline_url,
         orchestration_url=settings.orchestration_url,
+        fact_extractor=fact_extractor,
     )
     read_pipeline = ReadPipeline(
         embedding_manager=embedding_manager,
