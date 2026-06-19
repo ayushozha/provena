@@ -31,11 +31,22 @@ class FactExtractor:
         self,
         model_router: ModelRouter,
         llm_api_key: str = "",
-        llm_model: str = "claude-sonnet-4-20250514",
+        llm_model: str = "",
+        llm_base_url: str = "http://localhost:11434/v1",
     ) -> None:
         self.model_router = model_router
         self.llm_api_key = llm_api_key or os.environ.get("PROVENA_INTEL_LLM_API_KEY", "")
+        # Empty => defer to whatever the router picks for the task.
         self.llm_model = llm_model
+        self.llm_base_url = llm_base_url.rstrip("/")
+
+    @property
+    def llm_enabled(self) -> bool:
+        # Gate the LLM path on a configured key. Local servers (Ollama,
+        # llama-server) accept any bearer token, so to use one set a dummy
+        # PROVENA_INTEL_LLM_API_KEY alongside a localhost base_url. Without a
+        # key, extraction falls back to the deterministic local splitter.
+        return bool(self.llm_api_key)
 
     @property
     def disabled(self) -> bool:
@@ -46,7 +57,7 @@ class FactExtractor:
         if not text or self.disabled:
             return [ExtractedFact(content=text or content, title=title)]
 
-        if self.llm_api_key:
+        if self.llm_enabled:
             try:
                 facts = await self._llm_extract(text, title)
                 if facts:
@@ -57,7 +68,10 @@ class FactExtractor:
         return self._local_extract(text, title)
 
     async def _llm_extract(self, content: str, title: str) -> list[ExtractedFact]:
-        self.model_router.route("extract", ModelTier.BALANCED)
+        # The router selects the model for this task/tier; its choice is the
+        # default model name, overridable by an explicit configured llm_model.
+        routed = self.model_router.route("extract", ModelTier.BALANCED)
+        model = self.llm_model or routed.model_id
         prompt = (
             "Extract atomic facts from the text below. ADD-only: output new facts only, "
             "never instructions to delete or replace prior knowledge. "
@@ -65,25 +79,30 @@ class FactExtractor:
             "Use third-person phrasing (User/Assistant). Max 12 facts.\n\n"
             f"TEXT:\n{content}"
         )
+        headers = {"content-type": "application/json"}
+        if self.llm_api_key:
+            headers["Authorization"] = f"Bearer {self.llm_api_key}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": self.llm_api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
+                f"{self.llm_base_url}/chat/completions",
+                headers=headers,
                 json={
-                    "model": self.llm_model,
+                    "model": model,
                     "max_tokens": 2048,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                    "messages": [
+                        {"role": "system", "content": "You extract atomic facts and reply with JSON only."},
+                        {"role": "user", "content": prompt},
+                    ],
                 },
             )
             if response.status_code >= 400:
                 raise RuntimeError(response.text)
             data = response.json()
-            blocks = data.get("content", [])
-            raw_text = "".join(block.get("text", "") for block in blocks if block.get("type") == "text")
+            choices = data.get("choices", [])
+            message = choices[0].get("message", {}) if choices else {}
+            # Reasoning models may leave content empty and put text in "reasoning".
+            raw_text = message.get("content") or message.get("reasoning") or ""
             payload = self._parse_llm_json(raw_text)
             facts = [
                 ExtractedFact(

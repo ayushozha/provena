@@ -6,6 +6,7 @@ Run with:  python -m pytest tests/
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
 from unittest.mock import patch
 
@@ -131,6 +132,92 @@ class TestOpenAIEmbeddingProvider(unittest.TestCase):
         with patch("app.embeddings.httpx.Client.post", fake_post):
             with self.assertRaises(RuntimeError):
                 self._manager().generate("x")
+
+
+class _FakeResp:
+    def __init__(self, payload: dict, status: int = 200) -> None:
+        self.status_code = status
+        self._payload = payload
+        self.text = json.dumps(payload)
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _FakeAsyncClient:
+    """Async-context-manager stub capturing the request it receives."""
+
+    def __init__(self, resp: _FakeResp, capture: dict) -> None:
+        self._resp = resp
+        self._capture = capture
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    async def post(self, url, headers=None, json=None):  # noqa: A002 - mirror httpx kwarg
+        self._capture["url"] = url
+        self._capture["headers"] = headers
+        self._capture["json"] = json
+        return self._resp
+
+
+def _openai_payload(content: str = "", reasoning: str | None = None) -> dict:
+    message: dict = {"role": "assistant", "content": content}
+    if reasoning is not None:
+        message["reasoning"] = reasoning
+    return {"choices": [{"message": message}]}
+
+
+class TestLlmExtraction(unittest.TestCase):
+    """The LLM extraction path: router-selected model + OpenAI-compatible call."""
+
+    def _run_with(self, payload: dict, capture: dict, **kwargs):
+        extractor = FactExtractor(
+            ModelRouter(),
+            llm_api_key="dummy-key",
+            llm_base_url="http://llm.test/v1",
+            **kwargs,
+        )
+        client = _FakeAsyncClient(_FakeResp(payload), capture)
+        with patch("app.extract_facts.httpx.AsyncClient", return_value=client):
+            return asyncio.run(extractor.extract("User: I love Postgres and Rust.", "t"))
+
+    def test_uses_router_selected_model_by_default(self) -> None:
+        capture: dict = {}
+        facts = self._run_with(_openai_payload('{"facts":[{"content":"User likes Postgres"}]}'), capture)
+        # cheapest BALANCED model with the "extract" capability is balanced-rerank
+        self.assertEqual(capture["json"]["model"], "balanced-rerank")
+        self.assertTrue(capture["url"].endswith("/chat/completions"))
+        self.assertEqual(capture["headers"]["Authorization"], "Bearer dummy-key")
+        self.assertEqual([f.content for f in facts], ["User likes Postgres"])
+
+    def test_explicit_model_overrides_router(self) -> None:
+        capture: dict = {}
+        self._run_with(
+            _openai_payload('{"facts":[{"content":"x is a fact here"}]}'),
+            capture,
+            llm_model="qwen3",
+        )
+        self.assertEqual(capture["json"]["model"], "qwen3")
+
+    def test_reads_reasoning_field_when_content_empty(self) -> None:
+        # Reasoning models return content="" with output in `reasoning`.
+        capture: dict = {}
+        facts = self._run_with(
+            _openai_payload(content="", reasoning='{"facts":[{"content":"User uses Rust daily"}]}'),
+            capture,
+        )
+        self.assertEqual([f.content for f in facts], ["User uses Rust daily"])
+
+    def test_no_key_falls_back_to_local_without_network(self) -> None:
+        extractor = FactExtractor(ModelRouter(), llm_api_key="", llm_base_url="http://llm.test/v1")
+        self.assertFalse(extractor.llm_enabled)
+        with patch("app.extract_facts.httpx.AsyncClient", side_effect=AssertionError("should not call LLM")):
+            facts = asyncio.run(extractor.extract("User: I love Postgres.", "t"))
+        self.assertTrue(facts)  # produced by the deterministic local splitter
 
 
 class TestEntityResolution(unittest.TestCase):

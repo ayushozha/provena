@@ -31,9 +31,14 @@ class IntelligenceSettings(BaseSettings):
     pipeline_url: str = "http://localhost:8000"
     orchestration_url: str = "http://localhost:50051"
 
-    llm_provider: str = "anthropic"
-    llm_api_key: str = ""
-    llm_model: str = "claude-sonnet-4-20250514"
+    # LLM-backed extraction uses any OpenAI-compatible /chat/completions
+    # endpoint, selected via env (same pattern as embeddings). Point base_url
+    # at a local server (Ollama/llama-server), OpenRouter, OpenAI, or an
+    # Anthropic OpenAI-compat shim. llm_model="" => use the model the router
+    # selects for the task; set it to pin a concrete served model.
+    llm_base_url: str = "http://localhost:11434/v1"
+    llm_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    llm_model: str = ""
 
     store_db_path: str = "./data/provena.db"
     listen_port: int = 8081
