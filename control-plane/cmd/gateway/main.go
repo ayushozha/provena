@@ -34,7 +34,13 @@ func main() {
 	intelligenceURL := env("PROVENA_INTELLIGENCE_URL", "http://localhost:8081")
 	storeURL := env("PROVENA_STORE_URL", "http://localhost:8000")
 	lifecycleURL := env("PROVENA_LIFECYCLE_URL", "http://localhost:8092")
-	authEnabled := strings.EqualFold(env("PROVENA_AUTH_ENABLED", "false"), "true")
+	// Secure by default: auth is ON unless an operator explicitly opts out.
+	// When disabled, AuthMiddleware injects an anonymous super-admin context,
+	// so a missing/default value must NOT silently grant full access.
+	authEnabled := !strings.EqualFold(env("PROVENA_AUTH_ENABLED", "true"), "false")
+	if !authEnabled {
+		logger.Warn("PROVENA_AUTH_ENABLED=false — auth is DISABLED; every request runs as anonymous super-admin. Do not run this in production.")
+	}
 
 	keyStore, err := auth.NewKeyStore()
 	if err != nil {
