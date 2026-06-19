@@ -79,8 +79,9 @@ class LLMClient:
                 if response.status_code >= 400:
                     return None
                 data = response.json()
-                choices = data.get("choices", [])
-                message = choices[0].get("message", {}) if choices else {}
+                # `or default` so an explicit null falls back to a safe type.
+                choices = data.get("choices") or []
+                message = (choices[0].get("message") or {}) if choices else {}
                 # Reasoning models leave content empty and put text in `reasoning`.
                 raw = message.get("content") or message.get("reasoning") or ""
                 return self._parse_json(raw)

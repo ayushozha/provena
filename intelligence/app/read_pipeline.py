@@ -23,10 +23,6 @@ from app.models import (
 )
 
 
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
 def _with_combined(memory: ScoredMemory, combined: float) -> ScoredMemory:
     """Copy a ScoredMemory with a new combined score (all else preserved)."""
     return ScoredMemory(
@@ -284,11 +280,16 @@ class ReadPipeline:
         scores = payload.get("scores") if isinstance(payload, dict) else None
         if not isinstance(scores, list):
             return None
-        by_id = {
-            str(s.get("id")): float(s.get("score"))
-            for s in scores
-            if isinstance(s, dict) and s.get("id") is not None and _is_number(s.get("score"))
-        }
+        # Small/local models often emit scores as stringified numbers ("0.8"),
+        # so coerce with float() and skip only what genuinely won't parse.
+        by_id: dict[str, float] = {}
+        for s in scores:
+            if not isinstance(s, dict) or s.get("id") is None:
+                continue
+            try:
+                by_id[str(s.get("id"))] = float(s.get("score"))
+            except (ValueError, TypeError):
+                continue
         if not by_id:
             return None
         # Blend the LLM relevance into the retrieval score so vector/FTS signal
@@ -358,7 +359,7 @@ class ReadPipeline:
         for item in raw:
             if not isinstance(item, dict):
                 continue
-            id_a, id_b = str(item.get("id_a", "")), str(item.get("id_b", ""))
+            id_a, id_b = str(item.get("id_a") or ""), str(item.get("id_b") or "")
             # Only trust ids the model was actually given.
             if id_a not in valid_ids or id_b not in valid_ids or id_a == id_b:
                 continue

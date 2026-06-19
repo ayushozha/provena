@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -424,7 +425,7 @@ class WritePipeline:
             compacted_memory={
                 "scope": scope,
                 "content": summary.strip(),
-                "title": str(payload.get("title", "")).strip() or "Compacted memory",
+                "title": str(payload.get("title") or "").strip() or "Compacted memory",
                 "source_ids": compacted_ids,
             },
             # Only supersede the sources we actually folded into the summary.
@@ -446,12 +447,22 @@ class WritePipeline:
         bodies: dict[str, str] = {}
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                for mid in memory_ids:
-                    response = await client.get(f"{self.store_url}/v1/memories/{mid}")
-                    if response.status_code >= 400:
-                        continue
-                    content = response.json().get("content")
-                    if isinstance(content, str) and content.strip():
+
+                async def fetch(mid: str) -> tuple[str, str | None]:
+                    try:
+                        response = await client.get(f"{self.store_url}/v1/memories/{mid}")
+                        if response.status_code >= 400:
+                            return mid, None
+                        content = response.json().get("content")
+                        if isinstance(content, str) and content.strip():
+                            return mid, content
+                    except Exception:
+                        pass
+                    return mid, None
+
+                # Fetch concurrently — sequential awaits would serialize N round trips.
+                for mid, content in await asyncio.gather(*(fetch(m) for m in memory_ids)):
+                    if content is not None:
                         bodies[mid] = content
         except Exception:
             return bodies

@@ -241,6 +241,16 @@ class TestLlmStages(unittest.TestCase):
         # b's LLM score (1.0 * 0.5) lifts it above a despite lower retrieval score
         self.assertEqual([m.memory_id for m in ranked], ["b", "a"])
 
+    def test_llm_rerank_accepts_stringified_scores(self) -> None:
+        # Local models often emit scores as strings ("0.0"/"1.0").
+        rp = self._read_pipeline({"scores": [{"id": "a", "score": "0.0"}, {"id": "b", "score": "1.0"}]})
+        candidates = [
+            ScoredMemory(memory_id="a", content="alpha", title="", combined=0.5),
+            ScoredMemory(memory_id="b", content="beta", title="", combined=0.4),
+        ]
+        ranked = asyncio.run(rp._rerank("q", candidates))
+        self.assertEqual([m.memory_id for m in ranked], ["b", "a"])
+
     def test_llm_rerank_falls_back_when_unparseable(self) -> None:
         rp = self._read_pipeline(None)  # chat_json returned None
         candidates = [ScoredMemory(memory_id="a", content="alpha beta", title="", combined=0.5)]
