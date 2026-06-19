@@ -38,6 +38,9 @@ func main() {
 	// When disabled, AuthMiddleware injects an anonymous super-admin context,
 	// so a missing/default value must NOT silently grant full access.
 	authEnabled := !strings.EqualFold(env("PROVENA_AUTH_ENABLED", "true"), "false")
+	if !authEnabled {
+		logger.Warn("PROVENA_AUTH_ENABLED=false — auth is DISABLED; every request runs as anonymous super-admin. Do not run this in production.")
+	}
 
 	keyStore, err := auth.NewKeyStore()
 	if err != nil {
@@ -125,9 +128,6 @@ func main() {
 	// and populates the AuthContext the permission check reads. Reversing
 	// these makes WritePermission a no-op (FromContext returns ok=false).
 	handler = auth.WritePermissionMiddleware(handler)
-	if !authEnabled {
-		logger.Warn("PROVENA_AUTH_ENABLED=false — auth is DISABLED; every request runs as anonymous super-admin. Do not run this in production.")
-	}
 	handler = auth.AuthMiddleware(keyStore, authEnabled)(handler)
 	// Rate-limit OUTSIDE auth: throttle floods of invalid tokens before they
 	// reach the CPU-intensive key validation (SHA-256 + constant-time compare).
