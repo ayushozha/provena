@@ -99,8 +99,10 @@ class FactExtractor:
             if response.status_code >= 400:
                 raise RuntimeError(response.text)
             data = response.json()
-            choices = data.get("choices", [])
-            message = choices[0].get("message", {}) if choices else {}
+            # `or default` (not get(k, default)) so an explicit null in the
+            # response falls back to a safe type instead of None.
+            choices = data.get("choices") or []
+            message = (choices[0].get("message") or {}) if choices else {}
             # Reasoning models may leave content empty and put text in "reasoning".
             raw_text = message.get("content") or message.get("reasoning") or ""
             payload = self._parse_llm_json(raw_text)
