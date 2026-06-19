@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -14,10 +15,12 @@ import httpx
 
 from app.embeddings import EmbeddingManager
 from app.extract_facts import ExtractedFact, FactExtractor
+from app.llm import LLMClient
 from app.model_router import ModelRouter
 from app.models import (
     ACLEntry,
     CompactResponse,
+    ModelTier,
     PipelineTrace,
     ProjectOverview,
     SourceReference,
@@ -51,6 +54,7 @@ class WritePipeline:
         store_url: str = "http://localhost:8000",
         orchestration_url: str = "http://localhost:50051",
         fact_extractor: FactExtractor | None = None,
+        llm: LLMClient | None = None,
     ) -> None:
         self.embedding_manager = embedding_manager
         self.model_router = model_router
@@ -58,6 +62,7 @@ class WritePipeline:
         self.store_url = store_url
         self.orchestration_url = orchestration_url
         self.fact_extractor = fact_extractor or FactExtractor(model_router)
+        self.llm = llm or LLMClient(model_router)
         self._fingerprints: set[str] = set()
 
     async def process(self, request: WriteRequest) -> WriteResponse:
@@ -386,8 +391,79 @@ class WritePipeline:
         scope: dict[str, Any],
         tier: str = "balanced",
     ) -> CompactResponse:
+        """Summarize several memories into one compacted memory and mark the
+        sources superseded. Fetches the source bodies from the store and uses
+        the LLM to synthesize; if the LLM is unavailable or the fetch fails,
+        falls back to a no-op (source ids echoed, nothing superseded) so the
+        caller never loses data to a bad compaction."""
+        if not memory_ids or not self.llm.enabled:
+            return self._compact_noop(memory_ids, scope)
+
+        bodies = await self._fetch_memory_bodies(memory_ids)
+        if len(bodies) < 2:
+            # Nothing meaningful to compact.
+            return self._compact_noop(memory_ids, scope)
+
+        joined = "\n".join(f"- ({mid}) {content}" for mid, content in bodies.items())
+        payload = await self.llm.chat_json(
+            task="compact",
+            tier=ModelTier.QUALITY,
+            system="You compact several memories into one concise, faithful summary. Reply with JSON only.",
+            user=(
+                f"Memories:\n{joined}\n\n"
+                'Return JSON {"summary": "...", "title": "..."} — a single compacted '
+                "memory that preserves every distinct fact across the inputs, no "
+                "new information, no contradictions dropped silently."
+            ),
+        )
+        summary = payload.get("summary") if isinstance(payload, dict) else None
+        if not isinstance(summary, str) or not summary.strip():
+            return self._compact_noop(memory_ids, scope)
+
+        compacted_ids = list(bodies.keys())
         return CompactResponse(
-            compacted_memory={"scope": scope, "source_ids": memory_ids},
-            superseded_ids=memory_ids,
+            compacted_memory={
+                "scope": scope,
+                "content": summary.strip(),
+                "title": str(payload.get("title") or "").strip() or "Compacted memory",
+                "source_ids": compacted_ids,
+            },
+            # Only supersede the sources we actually folded into the summary.
+            superseded_ids=compacted_ids,
             token_usage=TokenUsage(operation="compact"),
         )
+
+    @staticmethod
+    def _compact_noop(memory_ids: list[str], scope: dict[str, Any]) -> CompactResponse:
+        return CompactResponse(
+            compacted_memory={"scope": scope, "source_ids": memory_ids},
+            superseded_ids=[],
+            token_usage=TokenUsage(operation="compact"),
+        )
+
+    async def _fetch_memory_bodies(self, memory_ids: list[str]) -> dict[str, str]:
+        """Fetch memory content by id from the store. Missing/failed ids are
+        skipped rather than aborting the whole compaction."""
+        bodies: dict[str, str] = {}
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+
+                async def fetch(mid: str) -> tuple[str, str | None]:
+                    try:
+                        response = await client.get(f"{self.store_url}/v1/memories/{mid}")
+                        if response.status_code >= 400:
+                            return mid, None
+                        content = response.json().get("content")
+                        if isinstance(content, str) and content.strip():
+                            return mid, content
+                    except Exception:
+                        pass
+                    return mid, None
+
+                # Fetch concurrently — sequential awaits would serialize N round trips.
+                for mid, content in await asyncio.gather(*(fetch(m) for m in memory_ids)):
+                    if content is not None:
+                        bodies[mid] = content
+        except Exception:
+            return bodies
+        return bodies
