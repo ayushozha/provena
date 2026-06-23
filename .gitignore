@@ -13,6 +13,9 @@ __pycache__/
 data/*.db
 loop/tmp/
 orchestration/target/
+cli/dist/
+cli/node_modules/
+cli/*.tgz
 sdk/typescript/dist/
 sdk/typescript/*.tgz
 sdk/python/.build-tmp/
