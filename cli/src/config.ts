@@ -11,6 +11,10 @@ export const PROVENA_DIR = ".provena";
 export const CONFIG_FILENAME = "config.json";
 /** Maps repo-relative paths to emitted memory IDs (PLAN-06/07/12). */
 export const INDEX_STATE_FILENAME = "index-state.json";
+/** Summary of the most recent `provena index` run (PLAN-09). */
+export const LAST_INDEX_FILENAME = "last-index.json";
+/** Per-file failures from indexing; run continues (PLAN-09). */
+export const INDEX_ERRORS_LOG = "index-errors.log";
 export const DEFAULT_DB_PATH = ".provena/provena.db";
 export const DEFAULT_STORE_URL = "http://127.0.0.1:18092";
 export const DEFAULT_INDEX_INCLUDE = ["**/*"] as const;
@@ -40,6 +44,8 @@ export interface ProvenaConfig {
   backend: "sqlite";
   database: ProvenaDatabase;
   store_url: string;
+  /** When set, memory writes use intelligence `POST /v1/pipeline/write` (PLAN-09). */
+  intelligence_url?: string;
   scope: ProvenaScope;
   index: ProvenaIndex;
 }
@@ -167,6 +173,14 @@ export function validateConfig(value: unknown): ProvenaConfig {
     throw new Error("config.store_url must be a non-empty string");
   }
 
+  let intelligenceUrl: string | undefined;
+  if (obj.intelligence_url !== undefined && obj.intelligence_url !== null) {
+    if (!isNonEmptyString(obj.intelligence_url)) {
+      throw new Error("config.intelligence_url must be a non-empty string when set");
+    }
+    intelligenceUrl = obj.intelligence_url;
+  }
+
   const database = obj.database;
   if (typeof database !== "object" || database === null) {
     throw new Error("config.database must be an object");
@@ -205,6 +219,7 @@ export function validateConfig(value: unknown): ProvenaConfig {
     backend: "sqlite",
     database: { path: dbPath },
     store_url: obj.store_url,
+    ...(intelligenceUrl ? { intelligence_url: intelligenceUrl } : {}),
     scope: {
       tenant_id: scopeObj.tenant_id,
       project_id: scopeObj.project_id,

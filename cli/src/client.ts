@@ -102,25 +102,76 @@ export interface SearchResponse {
   results: SearchResult[];
 }
 
+export interface PipelineWriteResult {
+  created: boolean;
+  memory: MemoryRecord;
+}
+
 export interface ProvenaClientOptions {
   storeUrl: string;
+  intelligenceUrl?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }
 
 export class ProvenaClient {
   private readonly baseUrl: string;
+  private readonly intelligenceUrl: string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
 
   constructor(options: ProvenaClientOptions) {
     this.baseUrl = options.storeUrl.replace(/\/$/, "");
+    this.intelligenceUrl = options.intelligenceUrl?.replace(/\/$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 30_000;
   }
 
   async createMemory(payload: MemoryCreate): Promise<MemoryWriteResult> {
+    if (this.intelligenceUrl) {
+      return this.pipelineWrite(payload);
+    }
     return this.postJson<MemoryWriteResult>("/v1/memories", payload);
+  }
+
+  /** Write via intelligence pipeline for embeddings (PLAN-09). */
+  async pipelineWrite(payload: MemoryCreate): Promise<MemoryWriteResult> {
+    const base = this.intelligenceUrl ?? this.baseUrl;
+    const response = await this.fetchImpl(`${base}/v1/pipeline/write`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Provena-Role": "editor",
+      },
+      body: JSON.stringify({
+        kind: payload.kind,
+        scope: payload.scope,
+        content: payload.content,
+        title: payload.title ?? "",
+        summary: payload.summary ?? "",
+        entity_keys: payload.entity_keys ?? [],
+        tags: payload.tags ?? [],
+        metadata: payload.metadata ?? {},
+        source_references: payload.source_references ?? [],
+      }),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(
+        `POST /v1/pipeline/write failed (${response.status}): ${detail.slice(0, 500)}`,
+      );
+    }
+
+    const body = (await response.json()) as {
+      created?: boolean;
+      memory?: MemoryRecord;
+    };
+    if (!body.memory?.memory_id) {
+      throw new Error("pipeline write response missing memory");
+    }
+    return { created: body.created ?? true, memory: body.memory };
   }
 
   async searchMemories(payload: SearchRequest): Promise<SearchResponse> {
@@ -129,6 +180,17 @@ export class ProvenaClient {
 
   async createRelation(payload: RelationWrite): Promise<void> {
     await this.postJsonNoBody("/v1/memories/relations", payload);
+  }
+
+  async upsertEntitiesBatch(payload: {
+    scope: ScopeEnvelope;
+    entities: Array<{
+      canonical_name: string;
+      entity_type: string;
+      aliases: string[];
+    }>;
+  }): Promise<{ upserted: number }> {
+    return this.postJson<{ upserted: number }>("/v1/admin/entities/batch", payload);
   }
 
   async getMemory(memoryId: string): Promise<MemoryRecord> {

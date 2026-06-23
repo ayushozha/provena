@@ -58,6 +58,7 @@ export interface EmitOptions {
   storeUrl: string;
   projectRoot: string;
   repoRoot?: string;
+  intelligenceUrl?: string;
   client?: ProvenaClient;
 }
 
@@ -307,7 +308,12 @@ export async function emitMemories(
     return { memoryIds: [], created: 0, skipped: 0 };
   }
 
-  const client = options.client ?? new ProvenaClient({ storeUrl: options.storeUrl });
+  const client =
+    options.client ??
+    new ProvenaClient({
+      storeUrl: options.storeUrl,
+      intelligenceUrl: options.intelligenceUrl,
+    });
   const repoRoot = options.repoRoot ?? options.projectRoot;
   const scopeEnvelope = scopeEnvelopeFromConfig(scope);
   const relativePath =
