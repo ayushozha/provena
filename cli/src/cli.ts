@@ -3,8 +3,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runConfigShow } from "./commands/config-show.js";
-import { runDiscover } from "./commands/discover.js";
+import { runDoctor } from "./commands/doctor.js";
 import { runInit } from "./commands/init.js";
+import { runServe } from "./commands/serve.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -20,8 +21,6 @@ const STUB_COMMANDS = [
   "status",
   "connect",
   "mcp",
-  "serve",
-  "doctor",
 ] as const;
 
 type StubCommand = (typeof STUB_COMMANDS)[number];
@@ -34,7 +33,8 @@ interface CommandInfo {
 const COMMANDS: CommandInfo[] = [
   { name: "init", description: "Initialize .provena/ config in a git repo" },
   { name: "config", description: "Show or manage local config" },
-  { name: "discover", description: "List indexable files (debug)" },
+  { name: "serve", description: "start local SQLite store (uvicorn)" },
+  { name: "doctor", description: "check config and store health" },
   ...STUB_COMMANDS.map((name) => ({
     name,
     description: "not implemented yet",
@@ -50,6 +50,10 @@ function printHelp(): void {
     "",
     "Commands:",
     ...COMMANDS.map((c) => `  ${c.name.padEnd(10)} ${c.description}`),
+    "",
+    "Serve options:",
+    "  --detach     Run store in background; write .provena/store.pid",
+    "  --stop       Stop detached store process",
     "",
     "Global options:",
     "  --version    Show package version",
@@ -119,12 +123,13 @@ function main(argv: string[]): void {
     process.exit(runConfigCommand(args));
   }
 
-  if (command === "discover") {
-    runDiscover(args.slice(1))
+  if (command === "serve" || command === "doctor") {
+    const run = command === "serve" ? runServe : runDoctor;
+    run(args.slice(1))
       .then(() => process.exit(0))
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
-        console.error(`provena discover: ${message}`);
+        console.error(`provena ${command}: ${message}`);
         process.exit(1);
       });
     return;
