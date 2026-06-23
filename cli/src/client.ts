@@ -102,6 +102,25 @@ export interface SearchResponse {
   results: SearchResult[];
 }
 
+export interface SearchExplainCandidate {
+  memory: MemoryRecord;
+  score: number;
+  reasons: string[];
+  rejection_reasons?: string[];
+  fts_rank?: number | null;
+  rank?: number | null;
+}
+
+export interface SearchExplainResponse {
+  query: string;
+  query_terms: string[];
+  candidate_strategy: string;
+  total_candidates: number;
+  returned: SearchExplainCandidate[];
+  not_returned?: SearchExplainCandidate[];
+  filtered_out?: SearchExplainCandidate[];
+}
+
 export interface PipelineWriteResult {
   created: boolean;
   memory: MemoryRecord;
@@ -113,6 +132,8 @@ export interface ProvenaClientOptions {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }
+
+const DEFAULT_SEARCH_LIMIT = 5;
 
 export class ProvenaClient {
   private readonly baseUrl: string;
@@ -176,6 +197,74 @@ export class ProvenaClient {
 
   async searchMemories(payload: SearchRequest): Promise<SearchResponse> {
     return this.postJson<SearchResponse>("/v1/memories/search", payload);
+  }
+
+  /** Search via intelligence pipeline when `intelligenceUrl` is configured (PLAN-10). */
+  async pipelineSearch(payload: SearchRequest): Promise<SearchResponse> {
+    const base = this.intelligenceUrl ?? this.baseUrl;
+    const response = await this.fetchImpl(`${base}/v1/pipeline/search`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Provena-Role": "editor",
+      },
+      body: JSON.stringify({
+        query: payload.query,
+        scope: payload.scope,
+        limit: payload.limit ?? DEFAULT_SEARCH_LIMIT,
+        tags: payload.tags ?? [],
+        entity_keys: payload.entity_keys ?? [],
+        include_relations: payload.include_relations ?? false,
+      }),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(
+        `POST /v1/pipeline/search failed (${response.status}): ${detail.slice(0, 500)}`,
+      );
+    }
+
+    const body = (await response.json()) as SearchResponse;
+    return normalizeSearchResponse(body);
+  }
+
+  /** Route to pipeline or direct store search per config (PLAN-10). */
+  async search(payload: SearchRequest): Promise<SearchResponse> {
+    if (this.intelligenceUrl) {
+      return this.pipelineSearch(payload);
+    }
+    return this.searchMemories(payload);
+  }
+
+  /**
+   * Optional explain payload from the store admin endpoint.
+   * Returns null when the endpoint is not exposed (404).
+   */
+  async explainSearch(payload: SearchRequest): Promise<SearchExplainResponse | null> {
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/v1/admin/memories/search/explain`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      },
+    );
+
+    if (response.status === 404) {
+      return null;
+    }
+
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(
+        `POST /v1/admin/memories/search/explain failed (${response.status}): ${detail.slice(0, 500)}`,
+      );
+    }
+
+    return (await response.json()) as SearchExplainResponse;
   }
 
   async createRelation(payload: RelationWrite): Promise<void> {
@@ -261,5 +350,16 @@ export function scopeEnvelopeFromConfig(scope: ProvenaScope): ScopeEnvelope {
   return {
     tenant_id: scope.tenant_id,
     project_id: scope.project_id,
+  };
+}
+
+function normalizeSearchResponse(body: SearchResponse): SearchResponse {
+  return {
+    results: (body.results ?? []).map((item) => ({
+      memory: item.memory,
+      score: item.score,
+      reasons: item.reasons ?? [],
+      related_memories: item.related_memories,
+    })),
   };
 }
