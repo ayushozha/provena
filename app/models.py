@@ -33,6 +33,7 @@ class RelationKind(str, Enum):
     RELATED_TO = "related_to"
     SUPPORTS = "supports"
     DERIVED_FROM = "derived_from"
+    DEFINED_IN = "defined_in"
     SUPERSEDES = "supersedes"
     CONFLICTS_WITH = "conflicts_with"
 

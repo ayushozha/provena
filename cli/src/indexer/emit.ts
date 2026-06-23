@@ -30,15 +30,19 @@ import type { CodeChunk, FileMeta } from "./types.js";
  *   "files": {
  *     "src/auth.ts": {
  *       "sha256": "abc…",
+ *       "artifactMemoryId": "mem_1",
  *       "memoryIds": ["mem_1", "mem_2"],
  *       "fingerprints": { "<sha256>": "mem_1" }
  *     }
- *   }
+ *   },
+ *   "chunks": { "src/auth.ts::authenticate": "mem_2" },
+ *   "relations": { "mem_2|defined_in|mem_1": true }
  * }
  * ```
  */
 export interface IndexStateFileEntry {
   sha256?: string;
+  artifactMemoryId?: string;
   memoryIds: string[];
   fingerprints: Record<string, string>;
 }
@@ -46,6 +50,8 @@ export interface IndexStateFileEntry {
 export interface IndexState {
   version: 1;
   files: Record<string, IndexStateFileEntry>;
+  chunks: Record<string, string>;
+  relations: Record<string, true>;
 }
 
 export interface EmitOptions {
@@ -71,12 +77,17 @@ const SEMANTIC_CHUNK_KINDS = new Set([
   "type_alias",
 ]);
 
+export function chunkSymbolKey(relativePath: string, chunk: CodeChunk): string {
+  const symbol = chunk.name ?? chunk.kind;
+  return `${relativePath}::${symbol}`;
+}
+
 export function indexStatePath(projectRoot: string): string {
   return resolve(provenaDir(projectRoot), INDEX_STATE_FILENAME);
 }
 
 export function emptyIndexState(): IndexState {
-  return { version: 1, files: {} };
+  return { version: 1, files: {}, chunks: {}, relations: {} };
 }
 
 export function loadIndexState(projectRoot: string): IndexState {
@@ -87,6 +98,12 @@ export function loadIndexState(projectRoot: string): IndexState {
   const raw = JSON.parse(readFileSync(path, "utf8")) as IndexState;
   if (raw.version !== 1 || typeof raw.files !== "object") {
     throw new Error(`invalid index state at ${path}`);
+  }
+  if (!raw.chunks || typeof raw.chunks !== "object") {
+    raw.chunks = {};
+  }
+  if (!raw.relations || typeof raw.relations !== "object") {
+    raw.relations = {};
   }
   return raw;
 }
@@ -314,6 +331,7 @@ export async function emitMemories(
   const artifact = buildFileArtifactMemory(chunks, fileMeta, scopeEnvelope, repoRoot);
   const artifactWrite = await writeMemory(client, artifact, entry.fingerprints);
   memoryIds.push(artifactWrite.memoryId);
+  entry.artifactMemoryId = artifactWrite.memoryId;
   if (artifactWrite.created) {
     created += 1;
   } else {
@@ -331,6 +349,7 @@ export async function emitMemories(
     const fact = buildChunkFactMemory(chunk, fileMeta, scopeEnvelope, repoRoot);
     const factWrite = await writeMemory(client, fact, entry.fingerprints);
     memoryIds.push(factWrite.memoryId);
+    indexState.chunks[chunkSymbolKey(relativePath, chunk)] = factWrite.memoryId;
     if (factWrite.created) {
       created += 1;
     } else {
