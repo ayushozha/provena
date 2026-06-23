@@ -126,11 +126,11 @@ class BenchmarkRunner:
         ingest (the primary memory_id plus any ADD-only extracted ids)."""
         id_map: dict[str, list[str]] = {}
         for mem in memories:
-            bench_id = str(mem.get("id", ""))
+            bench_id = str(mem.get("id") or "")
             payload = {
-                "kind": mem.get("kind", "fact"),
+                "kind": mem.get("kind") or "fact",
                 "scope": mem.get("scope") or _DEFAULT_SCOPE,
-                "content": mem.get("content", ""),
+                "content": mem.get("content") or "",
             }
             store_ids: list[str] = []
             try:
@@ -160,15 +160,15 @@ class BenchmarkRunner:
         skipped = 0
         for q in queries:
             relevant: set[str] = set()
-            for bid in q.get("relevant_ids", []):
+            for bid in q.get("relevant_ids") or []:
                 relevant.update(id_map.get(str(bid), []))
             if not relevant:
                 skipped += 1
                 continue
             payload = {
-                "query": q.get("query", ""),
+                "query": q.get("query") or "",
                 "scope": q.get("scope") or _DEFAULT_SCOPE,
-                "limit": int(q.get("limit", 10)),
+                "limit": int(q.get("limit") or 10),
             }
             retrieved: list[str] = []
             t0 = time.monotonic()
