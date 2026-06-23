@@ -35,8 +35,14 @@ verifies today.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `PROVENA_DB_PATH` | Yes | Path to the SQLite database file used by the standalone store. |
+| `PROVENA_DB_PATH` | Yes* | Path to the SQLite database file used by the standalone store. |
+| `PROVENA_DATABASE_URL` | Yes* | PostgreSQL connection URL (e.g. `postgresql://user:pass@host:5432/provena?sslmode=require`). When set, selects the Postgres backend and **takes precedence** over `PROVENA_DB_PATH`. |
 | `PROVENA_ENVIRONMENT` | No | Labels the deployment environment in `/healthz`. Defaults to `development`. |
+
+\* Configure **one** storage backend: either `PROVENA_DATABASE_URL` (PostgreSQL) or
+`PROVENA_DB_PATH` (SQLite). If both are set, `PROVENA_DATABASE_URL` wins.
+PostgreSQL migrations run automatically from `storage/migrations/001_postgres.sql`
+on startup. pgvector KNN is not enabled until PLAN-16; FTS uses `tsvector`.
 
 ### Start
 
