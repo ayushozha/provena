@@ -9,6 +9,8 @@ import { basename, join, resolve } from "node:path";
 
 export const PROVENA_DIR = ".provena";
 export const CONFIG_FILENAME = "config.json";
+/** Maps repo-relative paths to emitted memory IDs (PLAN-06/07/12). */
+export const INDEX_STATE_FILENAME = "index-state.json";
 export const DEFAULT_DB_PATH = ".provena/provena.db";
 export const DEFAULT_STORE_URL = "http://127.0.0.1:18092";
 export const DEFAULT_INDEX_INCLUDE = ["**/*"] as const;
