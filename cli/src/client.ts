@@ -62,18 +62,40 @@ export interface MemoryWriteResult {
   memory: MemoryRecord;
 }
 
+export type RelationKind =
+  | "related_to"
+  | "supports"
+  | "derived_from"
+  | "defined_in"
+  | "supersedes"
+  | "conflicts_with";
+
+export interface RelationWrite {
+  from_memory_id: string;
+  to_memory_id: string;
+  relation: RelationKind;
+  scope: ScopeEnvelope;
+}
+
+export interface RelatedMemory {
+  relation: RelationKind;
+  memory: MemoryRecord;
+}
+
 export interface SearchRequest {
   query: string;
   scope: ScopeEnvelope;
   limit?: number;
   tags?: string[];
   entity_keys?: string[];
+  include_relations?: boolean;
 }
 
 export interface SearchResult {
   memory: MemoryRecord;
   score: number;
   reasons: string[];
+  related_memories?: RelatedMemory[];
 }
 
 export interface SearchResponse {
@@ -103,6 +125,24 @@ export class ProvenaClient {
 
   async searchMemories(payload: SearchRequest): Promise<SearchResponse> {
     return this.postJson<SearchResponse>("/v1/memories/search", payload);
+  }
+
+  async createRelation(payload: RelationWrite): Promise<void> {
+    await this.postJsonNoBody("/v1/memories/relations", payload);
+  }
+
+  async getMemory(memoryId: string): Promise<MemoryRecord> {
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/v1/memories/${encodeURIComponent(memoryId)}`,
+      { signal: AbortSignal.timeout(this.timeoutMs) },
+    );
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(
+        `GET /v1/memories/${memoryId} failed (${response.status}): ${detail.slice(0, 500)}`,
+      );
+    }
+    return (await response.json()) as MemoryRecord;
   }
 
   async healthz(): Promise<boolean> {
@@ -136,6 +176,22 @@ export class ProvenaClient {
     }
 
     return (await response.json()) as T;
+  }
+
+  private async postJsonNoBody(path: string, body: unknown): Promise<void> {
+    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(
+        `POST ${path} failed (${response.status}): ${detail.slice(0, 500)}`,
+      );
+    }
   }
 }
 

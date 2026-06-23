@@ -49,6 +49,7 @@ export {
   buildChunkFactMemory,
   buildFileArtifactMemory,
   buildSourceReference,
+  chunkSymbolKey,
   emitMemories,
   emptyIndexState,
   fileUri,
@@ -61,5 +62,20 @@ export {
   type IndexState,
   type IndexStateFileEntry,
 } from "./indexer/emit.js";
+
+export {
+  emitRelations,
+  implementationPathForTest,
+  relationFingerprint,
+  type EmitRelationsOptions,
+  type EmitRelationsResult,
+} from "./indexer/relations.js";
+
+export {
+  isRelativeImport,
+  parseImportSpecifier,
+  resolveChunkImports,
+  resolveImportSpecifier,
+} from "./indexer/resolve-import.js";
 
 export type { CodeChunk, FileMeta } from "./indexer/types.js";
