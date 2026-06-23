@@ -7,7 +7,6 @@ from app.connector_scheduler import ConnectorSchedulerService
 from app.connector_worker import ConnectorExecutionService
 from app.models import (
     ConnectorConfig,
-    ConnectorProvider,
     ConnectorSourceBatch,
     ConnectorSourceRecord,
     DeleteResponse,
@@ -38,7 +37,6 @@ from app.models import (
     SourcePermissionGrant,
     SyncJob,
 )
-from app.slack_connector import SlackConnectorStubWorker
 from app.store import AccessContext, ProvenaStore
 
 
@@ -54,7 +52,6 @@ def create_app() -> FastAPI:
             store,
             app.state.connector_execution,
         )
-        app.state.connector_scheduler.register_worker(ConnectorProvider.SLACK, SlackConnectorStubWorker())
         try:
             yield
         finally:

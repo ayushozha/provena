@@ -10,13 +10,16 @@ from app.connector_worker import (
     ConnectorExecutionOutcome,
     ConnectorExecutionService,
     ConnectorRunContext,
-    ConnectorRunResult,
     ConnectorWorker,
 )
 from app.models import ConnectorConfig, ConnectorProvider, ConnectorStatus, SyncJob, SyncJobStatus, SyncJobType, utc_now
 
 if TYPE_CHECKING:
     from app.store import ProvenaStore
+
+
+class ProviderWorkerNotFoundError(KeyError):
+    pass
 
 
 class ConnectorScheduleConfig(BaseModel):
@@ -37,23 +40,6 @@ class ScheduledConnectorTick(BaseModel):
     skipped: list[ScheduledConnectorSkip] = Field(default_factory=list)
 
 
-class ScheduledSyncJobWorker:
-    def run(self, context: ConnectorRunContext) -> ConnectorRunResult:
-        schedule = ConnectorScheduleConfig.model_validate(context.metadata.get("scheduler") or {})
-        return ConnectorRunResult(
-            status=SyncJobStatus.QUEUED,
-            job_type=schedule.job_type,
-            cursor=context.cursor,
-            started_at=context.started_at,
-            stats={
-                "scheduler": "fixed_cadence",
-                "scheduled_only": True,
-                "cadence_seconds": schedule.cadence_seconds,
-                "trigger": context.trigger,
-            },
-        )
-
-
 class ConnectorSchedulerService:
     def __init__(
         self,
@@ -61,12 +47,10 @@ class ConnectorSchedulerService:
         execution: ConnectorExecutionService | None = None,
         *,
         clock: Callable[[], datetime] = utc_now,
-        default_worker: ConnectorWorker | None = None,
     ) -> None:
         self.store = store
         self.execution = execution or ConnectorExecutionService(store)
         self.clock = clock
-        self.default_worker = default_worker or ScheduledSyncJobWorker()
         self._provider_workers: dict[str, ConnectorWorker] = {}
 
     def register_worker(self, provider: ConnectorProvider | str, worker: ConnectorWorker) -> None:
@@ -75,7 +59,9 @@ class ConnectorSchedulerService:
 
     def worker_for(self, provider: ConnectorProvider | str) -> ConnectorWorker:
         key = provider.value if isinstance(provider, ConnectorProvider) else str(provider)
-        return self._provider_workers.get(key, self.default_worker)
+        if key not in self._provider_workers:
+            raise ProviderWorkerNotFoundError(key)
+        return self._provider_workers[key]
 
     def tick(
         self,
@@ -119,7 +105,17 @@ class ConnectorSchedulerService:
                     "scheduled_tick_at": tick_at.isoformat(),
                 },
             )
-            worker = self.worker_for(connector.provider)
+            try:
+                worker = self.worker_for(connector.provider)
+            except ProviderWorkerNotFoundError:
+                skipped.append(
+                    ScheduledConnectorSkip(
+                        connector_id=connector.connector_id,
+                        tenant_id=connector.tenant_id,
+                        reason="provider_not_implemented",
+                    )
+                )
+                continue
             scheduled.append(self.execution.execute(worker, context))
 
         return ScheduledConnectorTick(

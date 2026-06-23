@@ -78,8 +78,12 @@ python .\scripts\run_scheduler_tick.py --tenant-id tenant-prod
 
 That script evaluates connector records with
 `metadata.scheduler = {"enabled": true, "cadence_seconds": <seconds>}` and
-records sync jobs through the existing connector execution seam. It does not
-introduce a second public sync-write route.
+dispatches through the existing connector execution seam. It only runs
+providers that have a registered real sync worker; the bundled CLI registers
+none, so every eligible connector is reported as skipped with reason
+`provider_not_implemented` and nothing is written to the ledger. It does not
+introduce a second public sync-write route, and it does not fabricate sync
+jobs for providers that have no integration.
 
 ### Auth expectations
 

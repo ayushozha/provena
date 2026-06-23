@@ -50,7 +50,7 @@ flowchart TB
     end
 
     subgraph Integration["Integration plane"]
-        CR["Connector registry<br/>Slack, Drive, Notion, Jira, GitHub, CRM"]
+        CR["Connector registry<br/>Provider types (no shipped sync workers)"]
         SI["Source inventory<br/>Freshness + sync state"]
         PM["Principal mapping<br/>Users, groups, service accounts"]
         SG["Source permission grants<br/>Remote ACL -> local policy"]
@@ -170,11 +170,19 @@ Current shipped deployment shapes:
 Connected mode currently lands through the gateway and store surfaces rather
 than a separate binary. The integration-plane APIs own connector registry,
 source inventory, principal mapping, source permission grants, sync jobs, and
-tenant-level coverage summaries. Fixed-cadence sync scheduling also stays in
-that boundary today: `scripts/run_scheduler_tick.py` runs an internal scheduler
-tick against the store, reads per-connector `metadata.scheduler` settings, and
-records sync jobs through the shared connector execution contract instead of a
-second ad hoc sync-write API.
+tenant-level coverage summaries. Ingestion today is push-based: an external
+caller writes sources, principal mappings, permission grants, and sync-job
+ledger entries through those APIs. There are no first-party scheduled sync
+workers yet, so the connector registry stores provider *types* only and does
+not imply Provena can crawl those systems.
+
+`scripts/run_scheduler_tick.py` provides an optional fixed-cadence tick against
+the store. It reads per-connector `metadata.scheduler` settings and dispatches
+through the shared connector execution contract, but it only acts on providers
+that have a registered real worker. The tick raises `KeyError` for an
+unregistered provider and records the connector as skipped with reason
+`provider_not_implemented` (writing nothing). The bundled CLI registers no
+workers, so it is a no-op against the ledger today.
 
 ## Storage tier
 
