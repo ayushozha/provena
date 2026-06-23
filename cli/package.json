@@ -38,11 +38,16 @@
     "test": "npm run build && node tests/smoke.mjs && node tests/config.test.mjs",
     "test:smoke": "node tests/smoke.mjs",
     "test:discover": "node tests/discover.test.mjs",
-    "test:emit": "npm run build && node tests/emit.integration.mjs"
+    "test:chunk-typescript": "node tests/chunk-typescript.test.mjs",
+    "test:emit": "npm run build && node tests/emit.integration.mjs",
+    "test:index-e2e": "npm run build && node tests/index.e2e.mjs"
   },
   "dependencies": {
     "fast-glob": "^3.3.3",
-    "ignore": "^7.0.3"
+    "ignore": "^7.0.3",
+    "tree-sitter-javascript": "^0.23.1",
+    "tree-sitter-typescript": "^0.23.2",
+    "web-tree-sitter": "^0.26.9"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -7,7 +7,9 @@ export {
   DEFAULT_INDEX_EXCLUDE,
   DEFAULT_INDEX_INCLUDE,
   DEFAULT_STORE_URL,
+  INDEX_ERRORS_LOG,
   INDEX_STATE_FILENAME,
+  LAST_INDEX_FILENAME,
   PROVENA_DIR,
   configExists,
   configPath,
@@ -78,4 +80,24 @@ export {
   resolveImportSpecifier,
 } from "./indexer/resolve-import.js";
 
-export type { CodeChunk, FileMeta } from "./indexer/types.js";
+export {
+  discoverRepo,
+  enumerateFiles,
+  resolveRepoRoot,
+  type DiscoveredFile,
+  type DiscoverOptions,
+} from "./indexer/discover.js";
+
+export { chunkTypeScriptFile } from "./indexer/chunkers/typescript.js";
+export type { ChunkKind, CodeChunk, FileMeta } from "./indexer/types.js";
+
+export { runIndex, type IndexSummary, type RunIndexOptions, type RunIndexResult } from "./indexer/run.js";
+
+export {
+  buildEntityRecords,
+  upsertEntitiesFromChunks,
+  type EntityRecord,
+  type EntityType,
+  type UpsertEntitiesOptions,
+  type UpsertEntitiesResult,
+} from "./indexer/entities.js";

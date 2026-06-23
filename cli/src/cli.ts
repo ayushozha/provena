@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runConfigShow } from "./commands/config-show.js";
+import { runDiscover } from "./commands/discover.js";
 import { runDoctor } from "./commands/doctor.js";
+import { runIndexCommand } from "./commands/index.js";
 import { runInit } from "./commands/init.js";
 import { runServe } from "./commands/serve.js";
 
@@ -15,13 +17,7 @@ function readVersion(): string {
   return pkg.version;
 }
 
-const STUB_COMMANDS = [
-  "index",
-  "search",
-  "status",
-  "connect",
-  "mcp",
-] as const;
+const STUB_COMMANDS = ["search", "status", "connect", "mcp"] as const;
 
 type StubCommand = (typeof STUB_COMMANDS)[number];
 
@@ -33,6 +29,8 @@ interface CommandInfo {
 const COMMANDS: CommandInfo[] = [
   { name: "init", description: "Initialize .provena/ config in a git repo" },
   { name: "config", description: "Show or manage local config" },
+  { name: "discover", description: "List indexable files (debug)" },
+  { name: "index", description: "Index TS/JS repo into Provena memories" },
   { name: "serve", description: "start local SQLite store (uvicorn)" },
   { name: "doctor", description: "check config and store health" },
   ...STUB_COMMANDS.map((name) => ({
@@ -50,6 +48,10 @@ function printHelp(): void {
     "",
     "Commands:",
     ...COMMANDS.map((c) => `  ${c.name.padEnd(10)} ${c.description}`),
+    "",
+    "Index options:",
+    "  --dry-run    List TS/JS files without writing",
+    "  --path       Limit to a repo subtree (e.g. src/auth)",
     "",
     "Serve options:",
     "  --detach     Run store in background; write .provena/store.pid",
@@ -121,6 +123,28 @@ function main(argv: string[]): void {
 
   if (command === "config") {
     process.exit(runConfigCommand(args));
+  }
+
+  if (command === "discover") {
+    runDiscover(args.slice(1))
+      .then(() => process.exit(0))
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`provena discover: ${message}`);
+        process.exit(1);
+      });
+    return;
+  }
+
+  if (command === "index") {
+    runIndexCommand(args.slice(1))
+      .then((code) => process.exit(code))
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`provena index: ${message}`);
+        process.exit(1);
+      });
+    return;
   }
 
   if (command === "serve" || command === "doctor") {
