@@ -7,6 +7,7 @@ import { runDiscover } from "./commands/discover.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runIndexCommand } from "./commands/index.js";
 import { runInit } from "./commands/init.js";
+import { runSearchCommand } from "./commands/search.js";
 import { runServe } from "./commands/serve.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -17,7 +18,7 @@ function readVersion(): string {
   return pkg.version;
 }
 
-const STUB_COMMANDS = ["search", "status", "connect", "mcp"] as const;
+const STUB_COMMANDS = ["status", "connect", "mcp"] as const;
 
 type StubCommand = (typeof STUB_COMMANDS)[number];
 
@@ -31,6 +32,7 @@ const COMMANDS: CommandInfo[] = [
   { name: "config", description: "Show or manage local config" },
   { name: "discover", description: "List indexable files (debug)" },
   { name: "index", description: "Index TS/JS repo into Provena memories" },
+  { name: "search", description: "Search indexed memories in the local store" },
   { name: "serve", description: "start local SQLite store (uvicorn)" },
   { name: "doctor", description: "check config and store health" },
   ...STUB_COMMANDS.map((name) => ({
@@ -52,6 +54,11 @@ function printHelp(): void {
     "Index options:",
     "  --dry-run    List TS/JS files without writing",
     "  --path       Limit to a repo subtree (e.g. src/auth)",
+    "",
+    "Search options:",
+    "  --limit N    Maximum hits (default 5)",
+    "  --json       Machine-readable SearchResponse",
+    "  --explain    Include store explain payload when available",
     "",
     "Serve options:",
     "  --detach     Run store in background; write .provena/store.pid",
@@ -142,6 +149,17 @@ function main(argv: string[]): void {
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`provena index: ${message}`);
+        process.exit(1);
+      });
+    return;
+  }
+
+  if (command === "search") {
+    runSearchCommand(args.slice(1))
+      .then((code) => process.exit(code))
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`provena search: ${message}`);
         process.exit(1);
       });
     return;
