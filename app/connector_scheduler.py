@@ -18,6 +18,10 @@ if TYPE_CHECKING:
     from app.store import ProvenaStore
 
 
+class ProviderWorkerNotFoundError(KeyError):
+    pass
+
+
 class ConnectorScheduleConfig(BaseModel):
     enabled: bool = False
     cadence_seconds: int | None = None
@@ -55,10 +59,9 @@ class ConnectorSchedulerService:
 
     def worker_for(self, provider: ConnectorProvider | str) -> ConnectorWorker:
         key = provider.value if isinstance(provider, ConnectorProvider) else str(provider)
-        worker = self._provider_workers.get(key)
-        if worker is None:
-            raise KeyError(key)
-        return worker
+        if key not in self._provider_workers:
+            raise ProviderWorkerNotFoundError(key)
+        return self._provider_workers[key]
 
     def tick(
         self,
@@ -104,7 +107,7 @@ class ConnectorSchedulerService:
             )
             try:
                 worker = self.worker_for(connector.provider)
-            except KeyError:
+            except ProviderWorkerNotFoundError:
                 skipped.append(
                     ScheduledConnectorSkip(
                         connector_id=connector.connector_id,
