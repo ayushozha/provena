@@ -24,7 +24,7 @@ if (!/^\d+\.\d+\.\d+/.test(version)) {
 }
 
 const help = run(["--help"]);
-for (const cmd of ["init", "index", "search", "status"]) {
+for (const cmd of ["discover", "init", "index", "search", "status"]) {
   if (!help.includes(cmd)) {
     console.error(`help missing command: ${cmd}`);
     process.exit(1);
