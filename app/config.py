@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     service_name: str = "provena"
     environment: str = "development"
     db_path: str = "./data/provena.db"
+    # PostgreSQL connection URL (e.g. postgresql://user:pass@host:5432/db?sslmode=require).
+    # When set, takes precedence over db_path (SQLite). Mutually exclusive backends.
+    database_url: str | None = None
     default_limit: int = 10
     max_limit: int = 50
     # Dimension of the sqlite-vec KNN index. Must match the embedding model in
