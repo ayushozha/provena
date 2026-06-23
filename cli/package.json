@@ -35,7 +35,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node tests/smoke.mjs && node tests/config.test.mjs && node tests/index.concurrency.test.mjs",
+    "test": "npm run build && node tests/smoke.mjs && node tests/config.test.mjs && node tests/build-artifacts.test.mjs && node tests/cli-behavior.test.mjs && node tests/pack.test.mjs && node tests/index.concurrency.test.mjs",
     "test:smoke": "node tests/smoke.mjs",
     "test:discover": "node tests/discover.test.mjs",
     "test:chunk-typescript": "node tests/chunk-typescript.test.mjs",
