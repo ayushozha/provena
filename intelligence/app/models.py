@@ -20,20 +20,6 @@ class ModelTier(str, enum.Enum):
 
 
 # ---------------------------------------------------------------------------
-# Model routing
-# ---------------------------------------------------------------------------
-
-class ModelConfig(BaseModel):
-    model_id: str
-    provider: str
-    tier: ModelTier
-    max_tokens: int = 4096
-    cost_per_1k_input: float = 0.0
-    cost_per_1k_output: float = 0.0
-    capabilities: list[str] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
 # Pipeline trace
 # ---------------------------------------------------------------------------
 

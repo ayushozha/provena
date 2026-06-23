@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+
+logger = logging.getLogger(__name__)
 
 from app.config import settings
 from app.embeddings import EmbeddingManager
@@ -35,20 +38,16 @@ async def lifespan(app: FastAPI):
         base_url=settings.embedding_base_url,
         api_key=settings.embedding_api_key.get_secret_value(),
     )
-    model_router = ModelRouter()
+    model_router = ModelRouter.from_settings(settings)
+    if not model_router.enabled and (settings.llm_api_key.get_secret_value() or settings.llm_providers):
+        logger.warning(
+            "LLM endpoint/key configured but no model selected; set "
+            "PROVENA_INTEL_LLM_MODEL or PROVENA_INTEL_LLM_PROVIDERS. "
+            "LLM stages are running on deterministic heuristics."
+        )
     overview_generator = OverviewGenerator(store_url=settings.pipeline_url)
-    llm = LLMClient(
-        model_router=model_router,
-        base_url=settings.llm_base_url,
-        api_key=settings.llm_api_key.get_secret_value(),
-        model=settings.llm_model,
-    )
-    fact_extractor = FactExtractor(
-        model_router=model_router,
-        llm_api_key=settings.llm_api_key.get_secret_value(),
-        llm_model=settings.llm_model,
-        llm_base_url=settings.llm_base_url,
-    )
+    llm = LLMClient(model_router)
+    fact_extractor = FactExtractor(model_router)
     write_pipeline = WritePipeline(
         embedding_manager=embedding_manager,
         model_router=model_router,
@@ -201,13 +200,19 @@ def create_app() -> FastAPI:
         mr: ModelRouter = request.app.state.model_router
         task = body.get("task", "classify")
         tier_str = body.get("tier", "balanced")
-        input_tokens = body.get("input_tokens", 0)
         try:
             tier = ModelTier(tier_str)
         except ValueError:
             tier = ModelTier.BALANCED
-        result = mr.route(task=task, tier=tier, input_tokens=input_tokens)
-        return result.model_dump()
+        routed = mr.route(task=task, tier=tier)
+        if routed is None:
+            return {"enabled": mr.enabled, "routed": None}
+        return {
+            "enabled": mr.enabled,
+            "provider": routed.provider,
+            "model": routed.model,
+            "tier": routed.tier.value,
+        }
 
     # ------------------------------------------------------------------
     # Embeddings

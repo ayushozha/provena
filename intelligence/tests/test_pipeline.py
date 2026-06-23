@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -19,6 +20,31 @@ from app.read_pipeline import ReadPipeline
 from app.write_pipeline import WritePipeline, WritePipelineError
 from app.overview_generator import OverviewGenerator
 from eval.retrieval_quality import precision_at_k, recall_at_k, mrr
+
+
+def _router(
+    model: str = "test-model",
+    base_url: str = "http://llm.test/v1",
+    api_key: str = "dummy-key",
+    tier: str = "balanced",
+    tasks: list[str] | None = None,
+) -> ModelRouter:
+    """An enabled ModelRouter with one configured provider/model."""
+    providers = [
+        {
+            "name": "test",
+            "base_url": base_url,
+            "api_key": api_key,
+            "models": [
+                {
+                    "model": model,
+                    "tier": tier,
+                    "tasks": tasks or ["classify", "summarize", "extract", "rerank", "compact"],
+                }
+            ],
+        }
+    ]
+    return ModelRouter.from_settings(SimpleNamespace(llm_providers=json.dumps(providers)))
 
 
 class TestClassification(unittest.TestCase):
@@ -174,34 +200,33 @@ def _openai_payload(content: str = "", reasoning: str | None = None) -> dict:
 class TestLlmExtraction(unittest.TestCase):
     """The LLM extraction path: router-selected model + OpenAI-compatible call."""
 
-    def _run_with(self, payload: dict, capture: dict, **kwargs):
-        extractor = FactExtractor(
-            ModelRouter(),
-            llm_api_key="dummy-key",
-            llm_base_url="http://llm.test/v1",
-            **kwargs,
-        )
+    def _run_with(self, payload, capture, model="test-extractor", base_url="http://llm.test/v1", api_key="dummy-key"):
+        extractor = FactExtractor(_router(model=model, base_url=base_url, api_key=api_key))
         client = _FakeAsyncClient(_FakeResp(payload), capture)
         with patch("app.extract_facts.httpx.AsyncClient", return_value=client):
             return asyncio.run(extractor.extract("User: I love Postgres and Rust.", "t"))
 
-    def test_uses_router_selected_model_by_default(self) -> None:
+    def test_sends_configured_model(self) -> None:
         capture: dict = {}
-        facts = self._run_with(_openai_payload('{"facts":[{"content":"User likes Postgres"}]}'), capture)
-        # cheapest BALANCED model with the "extract" capability is balanced-rerank
-        self.assertEqual(capture["json"]["model"], "balanced-rerank")
+        facts = self._run_with(
+            _openai_payload('{"facts":[{"content":"User likes Postgres"}]}'), capture, model="my-extractor"
+        )
+        # The wire model is the operator-configured served model, never a placeholder id.
+        self.assertEqual(capture["json"]["model"], "my-extractor")
         self.assertTrue(capture["url"].endswith("/chat/completions"))
         self.assertEqual(capture["headers"]["Authorization"], "Bearer dummy-key")
         self.assertEqual([f.content for f in facts], ["User likes Postgres"])
 
-    def test_explicit_model_overrides_router(self) -> None:
+    def test_routes_to_provider_base_url(self) -> None:
         capture: dict = {}
         self._run_with(
             _openai_payload('{"facts":[{"content":"x is a fact here"}]}'),
             capture,
-            llm_model="qwen3",
+            base_url="http://other.test/v1",
+            model="qwen3",
         )
         self.assertEqual(capture["json"]["model"], "qwen3")
+        self.assertTrue(capture["url"].startswith("http://other.test/v1"))
 
     def test_reads_reasoning_field_when_content_empty(self) -> None:
         # Reasoning models return content="" with output in `reasoning`.
@@ -212,8 +237,8 @@ class TestLlmExtraction(unittest.TestCase):
         )
         self.assertEqual([f.content for f in facts], ["User uses Rust daily"])
 
-    def test_no_key_falls_back_to_local_without_network(self) -> None:
-        extractor = FactExtractor(ModelRouter(), llm_api_key="", llm_base_url="http://llm.test/v1")
+    def test_no_provider_falls_back_to_local_without_network(self) -> None:
+        extractor = FactExtractor(ModelRouter())
         self.assertFalse(extractor.llm_enabled)
         with patch("app.extract_facts.httpx.AsyncClient", side_effect=AssertionError("should not call LLM")):
             facts = asyncio.run(extractor.extract("User: I love Postgres.", "t"))
@@ -227,7 +252,7 @@ class TestLlmStages(unittest.TestCase):
         from app.llm import LLMClient
         from app.read_pipeline import ReadPipeline
 
-        llm = LLMClient(ModelRouter(), api_key="dummy")  # enabled
+        llm = LLMClient(_router())  # enabled
         llm.chat_json = AsyncMock(return_value=chat_return)
         return ReadPipeline(EmbeddingManager(), ModelRouter(), llm=llm)
 
@@ -277,7 +302,7 @@ class TestLlmStages(unittest.TestCase):
         from app.llm import LLMClient
         from app.write_pipeline import WritePipeline
 
-        llm = LLMClient(ModelRouter(), api_key="dummy")
+        llm = LLMClient(_router())
         llm.chat_json = AsyncMock(return_value={"summary": "Karan likes Rust and Postgres.", "title": "Prefs"})
         wp = WritePipeline(EmbeddingManager(), ModelRouter(), llm=llm)
         wp._fetch_memory_bodies = AsyncMock(return_value={"m1": "likes Rust", "m2": "likes Postgres"})
@@ -385,7 +410,7 @@ class TestWriteExtraction(unittest.TestCase):
         self.assertTrue(all(item.get("metadata", {}).get("extraction_source") == "add_only" for item in posted))
 
     def test_mocked_llm_extraction(self) -> None:
-        extractor = FactExtractor(ModelRouter(), llm_api_key="test-key")
+        extractor = FactExtractor(_router())
 
         async def _mock_llm(content: str, title: str = ""):
             return [
@@ -496,22 +521,59 @@ class TestWriteFailures(unittest.TestCase):
 
 
 class TestModelRouter(unittest.TestCase):
-    """Test ModelRouter.route."""
+    """Test ModelRouter.route over a configured multi-provider registry."""
 
     def setUp(self) -> None:
-        self.mr = ModelRouter()
+        # Two providers across tiers/costs to exercise real routing.
+        providers = [
+            {
+                "name": "cheap-local",
+                "base_url": "http://local.test/v1",
+                "api_key": "",
+                "models": [
+                    {"model": "local-fast", "tier": "fast", "tasks": ["classify"], "cost_per_1k_input": 0.0},
+                ],
+            },
+            {
+                "name": "cloud",
+                "base_url": "http://cloud.test/v1",
+                "api_key": "sk-test",
+                "models": [
+                    {"model": "cloud-cheap", "tier": "balanced", "tasks": ["classify", "compact"], "cost_per_1k_input": 0.001},
+                    {"model": "cloud-pricey", "tier": "balanced", "tasks": ["classify", "compact"], "cost_per_1k_input": 0.01},
+                    {"model": "cloud-quality", "tier": "quality", "tasks": ["compact"], "cost_per_1k_input": 0.02},
+                ],
+            },
+        ]
+        self.mr = ModelRouter.from_settings(SimpleNamespace(llm_providers=json.dumps(providers)))
 
-    def test_model_router_selects_cheapest(self) -> None:
-        result = self.mr.route("classify", ModelTier.FAST)
-        # local-classify has cost=0, cheapest in FAST tier for classify
-        self.assertEqual(result.model_id, "local-classify")
+    def test_selects_cheapest_at_tier(self) -> None:
+        routed = self.mr.route("classify", ModelTier.BALANCED)
+        # Two balanced models support classify; the cheaper wins, with its provider creds.
+        self.assertEqual(routed.model, "cloud-cheap")
+        self.assertEqual(routed.base_url, "http://cloud.test/v1")
+        self.assertEqual(routed.api_key, "sk-test")
 
-    def test_model_router_fallback_tier(self) -> None:
-        # "compact" is not available in FAST tier, should fall back
-        result = self.mr.route("compact", ModelTier.FAST)
-        # Should find a model with compact capability in BALANCED or QUALITY
-        self.assertIn("compact", result.capabilities)
-        self.assertNotEqual(result.tier, ModelTier.FAST)
+    def test_routes_fast_tier_to_local(self) -> None:
+        routed = self.mr.route("classify", ModelTier.FAST)
+        self.assertEqual(routed.model, "local-fast")
+        self.assertEqual(routed.base_url, "http://local.test/v1")
+        self.assertEqual(routed.api_key, "")
+
+    def test_tier_fallback_when_exact_missing(self) -> None:
+        # "compact" has no FAST model; fall back outward to a configured tier.
+        routed = self.mr.route("compact", ModelTier.FAST)
+        self.assertIsNotNone(routed)
+        self.assertNotEqual(routed.tier, ModelTier.FAST)
+        self.assertEqual(routed.model, "cloud-cheap")  # cheapest balanced compact
+
+    def test_unconfigured_task_returns_none(self) -> None:
+        # No provider declares "rerank" -> not routable -> caller uses heuristic.
+        self.assertIsNone(self.mr.route("rerank", ModelTier.BALANCED))
+
+    def test_disabled_router_routes_nothing(self) -> None:
+        self.assertFalse(ModelRouter().enabled)
+        self.assertIsNone(ModelRouter().route("classify"))
 
 
 class TestRetrievalMetrics(unittest.TestCase):
