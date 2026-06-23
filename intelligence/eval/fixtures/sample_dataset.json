@@ -1,0 +1,12 @@
+{
+  "_comment": "Normalized benchmark dataset schema. memories are ingested via /v1/pipeline/write; queries are scored against /v1/pipeline/search. relevant_ids reference memory ids in this file (mapped onto store-assigned ids at ingest).",
+  "memories": [
+    {"id": "m1", "content": "Karan prefers Rust for systems work.", "kind": "fact", "scope": {"tenant_id": "bench"}},
+    {"id": "m2", "content": "The team uses PostgreSQL as the primary database.", "kind": "fact", "scope": {"tenant_id": "bench"}},
+    {"id": "m3", "content": "Standup is at 9am Pacific on weekdays.", "kind": "fact", "scope": {"tenant_id": "bench"}}
+  ],
+  "queries": [
+    {"query": "What language does Karan prefer?", "relevant_ids": ["m1"], "limit": 10},
+    {"query": "Which database does the team use?", "relevant_ids": ["m2"], "limit": 10}
+  ]
+}
