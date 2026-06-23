@@ -22,6 +22,7 @@ export {
   type ProvenaIndex,
   type ProvenaScope,
 } from "./config.js";
+
 export {
   discoverRepo,
   enumerateFiles,
@@ -29,3 +30,6 @@ export {
   type DiscoveredFile,
   type DiscoverOptions,
 } from "./indexer/discover.js";
+
+export { chunkTypeScriptFile } from "./indexer/chunkers/typescript.js";
+export type { ChunkKind, CodeChunk } from "./indexer/types.js";
