@@ -86,7 +86,10 @@ at:
 
 1. First-party connectors for the highest-value systems:
    Slack, Google Drive, SharePoint/OneDrive, Notion, Confluence, Jira, GitHub,
-   Salesforce, and email/calendar surfaces.
+   Salesforce, and email/calendar surfaces. None of these ship today; the
+   provider list is a roadmap. Connected mode is currently push-based: an
+   external caller fetches upstream data and writes it through the
+   integration-plane batch and sync-job APIs.
 2. Identity sync and group sync:
    SCIM/SSO-aware mapping for users, groups, service accounts, and agents.
 3. Permission-preserving retrieval guarantees:

@@ -116,17 +116,36 @@ PM review -> tester execution cycle, updates `loop/qa_test_plan.json` and
 `loop/progress.txt`, and keeps idling for new stories until `loop/STOP` is
 created.
 
-## Connected-mode scheduler
+## Connected-mode ingestion
 
-Connected-mode sync jobs no longer have to come only from a direct
-`POST /v1/integrations/connectors/{connector_id}/sync-jobs` call. Provena now
-ships an internal fixed-cadence scheduler tick in
-`scripts/run_scheduler_tick.py`. The tick scans stored connectors, evaluates a
-per-connector schedule in `metadata.scheduler`, and records sync jobs through
-the shared `ConnectorExecutionService` contract so the normal sync-job ledger
-and coverage readbacks stay coherent.
+Connected mode today is **push-based**. There are no first-party scheduled
+sync workers yet. Data lands in Provena through the integration-plane batch
+APIs and the direct sync-job route, all driven by an external caller that has
+already fetched data from the upstream system:
 
-Use this metadata shape on a connector to opt it into scheduled ticks:
+- `POST /v1/integrations/connectors/{connector_id}/sources/batch`
+- `POST /v1/integrations/connectors/{connector_id}/principal-mappings/batch`
+- `POST /v1/integrations/connectors/{connector_id}/permissions/batch`
+- `POST /v1/integrations/connectors/{connector_id}/sync-jobs`
+
+The `ConnectorProvider` enum (Slack, Google Drive, Notion, etc.) only
+type-validates connector records on `POST /v1/integrations/connectors`. Listing
+a provider there does **not** mean Provena ships a sync worker that talks to
+that system.
+
+### Optional scheduler tick
+
+`scripts/run_scheduler_tick.py` exists as an internal operator entrypoint for
+fixed-cadence ticks, but it only runs providers that have a *registered real
+worker*. The tick scans stored connectors, evaluates each connector's
+`metadata.scheduler` config, and dispatches to a registered worker via the
+shared `ConnectorExecutionService` contract. The bundled CLI registers no
+workers, so every eligible connector is reported as skipped with reason
+`provider_not_implemented` and nothing is written to the ledger. Until a real
+worker is registered for a provider, scheduled ticks are a no-op for it.
+
+Use this metadata shape on a connector to mark it eligible for scheduled ticks
+(it still requires a registered worker to actually run):
 
 ```json
 {
@@ -144,12 +163,6 @@ Run one scheduler tick locally with:
 cd services/provena
 python .\scripts\run_scheduler_tick.py --tenant-id tenant-acme
 ```
-
-The script is an internal operator entrypoint for standalone or polyglot
-deployments. It complements the existing direct sync-job POST route instead of
-replacing it. Today the default scheduler worker records the sync-job ledger
-entry on cadence; provider-specific workers can plug into the same path to add
-source inventory, principal mappings, and permission grants in future stories.
 
 ## Integration-plane admin API
 

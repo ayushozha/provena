@@ -18,7 +18,6 @@ from app.models import (
     SyncJobStatus,
     SyncJobType,
 )
-from app.slack_connector import SlackConnectorStubWorker
 
 
 class ProvenaApiTests(unittest.TestCase):
@@ -1393,118 +1392,7 @@ class ProvenaApiTests(unittest.TestCase):
         self.assertEqual(outcome.coverage.principals_mapped, 0)
         self.assertEqual(outcome.coverage.grants_total, 0)
 
-    def test_shipped_slack_stub_execution_flows_through_store_and_integration_routes(self) -> None:
-        headers = self._admin_headers()
-        connector = {
-            "connector_id": "conn-worker-slack",
-            "tenant_id": "tenant-acme",
-            "provider": "slack",
-            "display_name": "Slack worker connector",
-            "remote_workspace_id": "T987",
-            "auth_type": "oauth",
-            "sync_mode": "hybrid",
-            "status": "active",
-            "principal_sync_enabled": True,
-            "acl_sync_enabled": True,
-            "freshness_sla_seconds": 900,
-            "last_synced_at": "2026-04-15T11:50:00Z",
-        }
-        save_connector = self.client.post(
-            "/v1/integrations/connectors",
-            json=connector,
-            headers=headers,
-        )
-        self.assertEqual(save_connector.status_code, 200)
-
-        context = ConnectorRunContext(
-            connector=ConnectorConfig.model_validate(connector),
-            job_id="sync-worker-slack-001",
-            job_type=SyncJobType.ACL_SYNC,
-            cursor="cursor-slack-001",
-        )
-        outcome = self.client.app.state.connector_execution.execute(SlackConnectorStubWorker(), context)
-        self.assertEqual(outcome.sync_job.status, SyncJobStatus.SUCCEEDED)
-        self.assertEqual(outcome.sync_job.job_type, SyncJobType.ACL_SYNC)
-        self.assertEqual(outcome.sync_job.cursor, "slack:T987:channels:v1")
-        self.assertEqual(outcome.sync_job.stats["sources_written"], 2)
-        self.assertEqual(outcome.sync_job.stats["principal_mappings_written"], 1)
-        self.assertEqual(outcome.sync_job.stats["permissions_written"], 2)
-        self.assertEqual(outcome.sync_job.stats["provider"], "slack")
-        self.assertTrue(outcome.sync_job.stats["stub"])
-        self.assertEqual(outcome.sync_job.stats["workspace_name"], "Slack worker connector")
-
-        list_connectors = self.client.get(
-            "/v1/integrations/connectors?tenant_id=tenant-acme&provider=slack",
-            headers=headers,
-        )
-        self.assertEqual(list_connectors.status_code, 200)
-        self.assertEqual(len(list_connectors.json()), 1)
-
-        list_sources = self.client.get(
-            "/v1/integrations/connectors/conn-worker-slack/sources?tenant_id=tenant-acme",
-            headers=headers,
-        )
-        self.assertEqual(list_sources.status_code, 200)
-        sources = list_sources.json()
-        self.assertEqual(len(sources), 2)
-        sources_by_id = {source["source_id"]: source for source in sources}
-        roadmap_source = sources_by_id["conn-worker-slack-roadmap"]
-        release_source = sources_by_id["conn-worker-slack-release-ops"]
-        self.assertEqual(roadmap_source["source_type"], "channel")
-        self.assertEqual(roadmap_source["path"], "/channels/roadmap")
-        self.assertEqual(roadmap_source["metadata"]["provider"], "slack")
-        self.assertTrue(roadmap_source["metadata"]["stub"])
-        self.assertEqual(roadmap_source["metadata"]["remote_workspace_id"], "T987")
-        self.assertEqual(release_source["path"], "/channels/release-ops")
-
-        list_mappings = self.client.get(
-            "/v1/integrations/connectors/conn-worker-slack/principal-mappings?tenant_id=tenant-acme",
-            headers=headers,
-        )
-        self.assertEqual(list_mappings.status_code, 200)
-        self.assertEqual(list_mappings.json()[0]["remote_principal_id"], "U201")
-        self.assertEqual(list_mappings.json()[0]["remote_name"], "Slack worker connector PM")
-
-        roadmap_permissions = self.client.get(
-            "/v1/integrations/connectors/conn-worker-slack/permissions"
-            "?tenant_id=tenant-acme&source_id=conn-worker-slack-roadmap",
-            headers=headers,
-        )
-        self.assertEqual(roadmap_permissions.status_code, 200)
-        self.assertEqual(len(roadmap_permissions.json()), 1)
-        self.assertEqual(
-            roadmap_permissions.json()[0]["grant_id"],
-            "conn-worker-slack-roadmap-view",
-        )
-
-        list_jobs = self.client.get(
-            "/v1/integrations/connectors/conn-worker-slack/sync-jobs?tenant_id=tenant-acme",
-            headers=headers,
-        )
-        self.assertEqual(list_jobs.status_code, 200)
-        self.assertEqual(len(list_jobs.json()), 1)
-        self.assertEqual(list_jobs.json()[0]["job_id"], "sync-worker-slack-001")
-        self.assertEqual(list_jobs.json()[0]["status"], "succeeded")
-        self.assertEqual(list_jobs.json()[0]["stats"]["provider"], "slack")
-        self.assertNotIn("scheduled_only", list_jobs.json()[0]["stats"])
-
-        coverage = self.client.get(
-            "/v1/integrations/coverage?tenant_id=tenant-acme",
-            headers=headers,
-        )
-        self.assertEqual(coverage.status_code, 200)
-        summary = coverage.json()
-        self.assertEqual(summary["connectors_total"], 1)
-        self.assertEqual(summary["connectors_healthy"], 1)
-        self.assertEqual(summary["sources_total"], 2)
-        self.assertEqual(summary["sources_stale"], 1)
-        self.assertEqual(summary["sources_error"], 0)
-        self.assertEqual(summary["principals_mapped"], 1)
-        self.assertEqual(summary["grants_total"], 2)
-        self.assertEqual(summary["sync_jobs_running"], 0)
-        self.assertEqual(summary["missing_foundations"], [])
-
-    def test_shipped_slack_stub_is_registered_for_scheduler_routing_and_readbacks(self) -> None:
+    def test_scheduler_skips_active_connector_with_no_registered_worker(self) -> None:
         headers = self._admin_headers()
         connector = {
             "connector_id": "conn-scheduled-slack",
@@ -1533,62 +1421,43 @@ class ProvenaApiTests(unittest.TestCase):
         )
         self.assertEqual(save_connector.status_code, 200)
 
-        self.assertIsInstance(
-            self.client.app.state.connector_scheduler.worker_for(ConnectorProvider.SLACK),
-            SlackConnectorStubWorker,
-        )
+        scheduler = self.client.app.state.connector_scheduler
+        # No first-party Slack worker ships, so none is registered.
+        with self.assertRaises(KeyError):
+            scheduler.worker_for(ConnectorProvider.SLACK)
+
         scheduled_at = datetime(2026, 4, 15, 12, 30, tzinfo=UTC)
-        tick = self.client.app.state.connector_scheduler.tick(
+        tick = scheduler.tick(
             tenant_id="tenant-acme",
             evaluated_at=scheduled_at,
         )
 
-        self.assertEqual(len(tick.scheduled), 1)
-        self.assertEqual(len(tick.skipped), 0)
-        outcome = tick.scheduled[0]
-        self.assertEqual(outcome.sync_job.connector_id, "conn-scheduled-slack")
-        self.assertEqual(outcome.sync_job.status, SyncJobStatus.SUCCEEDED)
-        self.assertEqual(outcome.sync_job.job_type, SyncJobType.FULL)
-        self.assertEqual(outcome.sync_job.cursor, "slack:T901:channels:v1")
-        self.assertEqual(outcome.sync_job.stats["provider"], "slack")
-        self.assertEqual(outcome.sync_job.stats["scheduler"], "fixed_cadence")
-        self.assertEqual(outcome.sync_job.stats["sources_written"], 2)
-        self.assertEqual(outcome.sync_job.stats["principal_mappings_written"], 1)
-        self.assertEqual(outcome.sync_job.stats["permissions_written"], 2)
-        self.assertNotIn("scheduled_only", outcome.sync_job.stats)
-
-        connector_readback = self.client.get(
-            "/v1/integrations/connectors/conn-scheduled-slack?tenant_id=tenant-acme",
-            headers=headers,
-        )
-        self.assertEqual(connector_readback.status_code, 200)
-        self.assertEqual(
-            connector_readback.json()["last_synced_at"],
-            "2026-04-15T12:31:00Z",
-        )
+        # The connector is eligible (active + valid schedule) but has no worker,
+        # so it must be skipped and nothing written to the ledger.
+        self.assertEqual(len(tick.scheduled), 0)
+        skips = {item.connector_id: item.reason for item in tick.skipped}
+        self.assertEqual(skips["conn-scheduled-slack"], "provider_not_implemented")
 
         list_jobs = self.client.get(
             "/v1/integrations/connectors/conn-scheduled-slack/sync-jobs?tenant_id=tenant-acme",
             headers=headers,
         )
         self.assertEqual(list_jobs.status_code, 200)
-        jobs = list_jobs.json()
-        self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0]["status"], "succeeded")
-        self.assertEqual(jobs[0]["cursor"], "slack:T901:channels:v1")
-        self.assertEqual(jobs[0]["stats"]["provider"], "slack")
+        self.assertEqual(list_jobs.json(), [])
 
         list_sources = self.client.get(
             "/v1/integrations/connectors/conn-scheduled-slack/sources?tenant_id=tenant-acme",
             headers=headers,
         )
         self.assertEqual(list_sources.status_code, 200)
-        self.assertEqual(len(list_sources.json()), 2)
-        scheduled_sources = {source["source_id"]: source for source in list_sources.json()}
-        self.assertEqual(
-            scheduled_sources["conn-scheduled-slack-roadmap"]["path"],
-            "/channels/roadmap",
+        self.assertEqual(list_sources.json(), [])
+
+        connector_readback = self.client.get(
+            "/v1/integrations/connectors/conn-scheduled-slack?tenant_id=tenant-acme",
+            headers=headers,
         )
+        self.assertEqual(connector_readback.status_code, 200)
+        self.assertIsNone(connector_readback.json()["last_synced_at"])
 
         coverage = self.client.get(
             "/v1/integrations/coverage?tenant_id=tenant-acme",
@@ -1597,14 +1466,18 @@ class ProvenaApiTests(unittest.TestCase):
         self.assertEqual(coverage.status_code, 200)
         summary = coverage.json()
         self.assertEqual(summary["connectors_total"], 1)
-        self.assertEqual(summary["connectors_healthy"], 1)
-        self.assertEqual(summary["sources_total"], 2)
-        self.assertEqual(summary["sources_stale"], 1)
-        self.assertEqual(summary["principals_mapped"], 1)
-        self.assertEqual(summary["grants_total"], 2)
-        self.assertEqual(summary["sync_jobs_running"], 0)
-        self.assertEqual(summary["last_synced_at"], "2026-04-15T12:31:00Z")
-        self.assertEqual(summary["missing_foundations"], [])
+        self.assertEqual(summary["sources_total"], 0)
+        self.assertEqual(summary["principals_mapped"], 0)
+        self.assertEqual(summary["grants_total"], 0)
+        self.assertIsNone(summary["last_synced_at"])
+
+    def test_scheduler_has_no_default_worker_and_worker_for_raises_on_unregistered(self) -> None:
+        scheduler = self.client.app.state.connector_scheduler
+        self.assertFalse(hasattr(scheduler, "default_worker"))
+        with self.assertRaises(KeyError):
+            scheduler.worker_for(ConnectorProvider.SLACK)
+        with self.assertRaises(KeyError):
+            scheduler.worker_for("notion")
 
     def test_connector_scheduler_skips_not_due_in_progress_and_ineligible_connectors(self) -> None:
         class FastSlackWorker:
@@ -1669,6 +1542,16 @@ class ProvenaApiTests(unittest.TestCase):
                 "status": "active",
                 "metadata": {"scheduler": {"enabled": False, "cadence_seconds": 900, "job_type": "full"}},
             },
+            {
+                "connector_id": "conn-sched-no-worker",
+                "tenant_id": "tenant-acme",
+                "provider": "salesforce",
+                "display_name": "Salesforce connector without a worker",
+                "auth_type": "oauth",
+                "sync_mode": "poll",
+                "status": "active",
+                "metadata": {"scheduler": {"enabled": True, "cadence_seconds": 900, "job_type": "full"}},
+            },
         ]
         for connector in connectors:
             response = self.client.post(
@@ -1705,6 +1588,20 @@ class ProvenaApiTests(unittest.TestCase):
         self.assertEqual(first_skips["conn-sched-paused"], "connector_inactive")
         self.assertEqual(first_skips["conn-sched-missing"], "missing_cadence")
         self.assertEqual(first_skips["conn-sched-disabled"], "schedule_disabled")
+        # Active + valid schedule but no registered worker: skipped, no ledger write.
+        self.assertEqual(first_skips["conn-sched-no-worker"], "provider_not_implemented")
+        no_worker_jobs = self.client.get(
+            "/v1/integrations/connectors/conn-sched-no-worker/sync-jobs?tenant_id=tenant-acme",
+            headers=headers,
+        )
+        self.assertEqual(no_worker_jobs.status_code, 200)
+        self.assertEqual(no_worker_jobs.json(), [])
+        no_worker_sources = self.client.get(
+            "/v1/integrations/connectors/conn-sched-no-worker/sources?tenant_id=tenant-acme",
+            headers=headers,
+        )
+        self.assertEqual(no_worker_sources.status_code, 200)
+        self.assertEqual(no_worker_sources.json(), [])
 
         second_tick = self.client.app.state.connector_scheduler.tick(
             tenant_id="tenant-acme",
