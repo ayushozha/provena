@@ -5,7 +5,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 export const PROVENA_DIR = ".provena";
 export const CONFIG_FILENAME = "config.json";
@@ -48,6 +48,60 @@ export function provenaDir(projectRoot: string): string {
 
 export function configPath(projectRoot: string): string {
   return join(provenaDir(projectRoot), CONFIG_FILENAME);
+}
+
+export function pidFilePath(projectRoot: string): string {
+  return join(provenaDir(projectRoot), "store.pid");
+}
+
+export function resolveDbPath(config: ProvenaConfig, projectRoot: string): string {
+  const raw = process.env.PROVENA_DB_PATH ?? config.database.path;
+  return resolve(projectRoot, raw);
+}
+
+export interface StoreEndpoint {
+  host: string;
+  port: number;
+  healthUrl: string;
+}
+
+export function parseStoreUrl(storeUrl: string): StoreEndpoint {
+  const parsed = new URL(storeUrl);
+  if (!parsed.hostname) {
+    throw new Error(`invalid store_url host: ${storeUrl}`);
+  }
+  const port =
+    parsed.port !== ""
+      ? Number(parsed.port)
+      : parsed.protocol === "https:"
+        ? 443
+        : 80;
+  if (!Number.isFinite(port) || port <= 0) {
+    throw new Error(`invalid store_url port: ${storeUrl}`);
+  }
+  const host = parsed.hostname;
+  return {
+    host,
+    port,
+    healthUrl: `${parsed.protocol}//${host}:${port}/healthz`,
+  };
+}
+
+export interface LoadedConfig {
+  config: ProvenaConfig;
+  projectRoot: string;
+  configFile: string;
+}
+
+export function loadConfig(cwd: string = process.cwd()): LoadedConfig {
+  const projectRoot = getGitRoot(cwd);
+  const configFile = configPath(projectRoot);
+  if (!configExists(projectRoot)) {
+    throw new Error(
+      `no config at ${configFile}; run \`provena init\` in your repo first`,
+    );
+  }
+  return { config: readConfig(projectRoot), projectRoot, configFile };
 }
 
 export function getGitRoot(cwd: string): string {
