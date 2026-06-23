@@ -1,14 +1,16 @@
 """Shared OpenAI-compatible LLM client for the intelligence stages.
 
 One place that knows how to call a chat model and get JSON back, so every
-stage (fact extraction, rerank, contradiction detection, compaction) routes
-through the same provider-agnostic path. Works against Ollama, llama-server,
-OpenRouter, OpenAI, or an Anthropic OpenAI-compat shim — selected entirely via
-``settings.llm_base_url`` / ``llm_api_key`` / ``llm_model``.
+stage (rerank, contradiction detection, compaction) routes through the same
+path. The ``ModelRouter`` picks the provider + real served model for the
+task/tier and supplies its endpoint + key; this client just dispatches the
+OpenAI-compatible call. Works against Ollama, llama-server, OpenRouter, OpenAI,
+or any OpenAI-compatible endpoint.
 
-The client is best-effort: when no key is configured (``enabled`` is False) or
-any call/parse fails, ``chat_json`` returns ``None`` and the caller falls back
-to its deterministic heuristic. No stage hard-depends on an LLM being present.
+The client is best-effort: when nothing is configured (``enabled`` is False),
+the router has no model for the task, or any call/parse fails, ``chat_json``
+returns ``None`` and the caller falls back to its deterministic heuristic. No
+stage hard-depends on an LLM being present.
 """
 
 from __future__ import annotations
@@ -26,23 +28,13 @@ _FENCE = re.compile(r"```(?:json)?\s*(\{.*\}|\[.*\])\s*```", re.DOTALL)
 
 
 class LLMClient:
-    def __init__(
-        self,
-        model_router: ModelRouter,
-        base_url: str = "http://localhost:11434/v1",
-        api_key: str = "",
-        model: str = "",
-    ) -> None:
+    def __init__(self, model_router: ModelRouter) -> None:
         self.model_router = model_router
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
-        # Empty => use whatever model the router selects for the task.
-        self.model = model
 
     @property
     def enabled(self) -> bool:
-        # Local servers accept any bearer token, so set a dummy key to use one.
-        return bool(self.api_key)
+        # True when the router has at least one configured provider/model.
+        return self.model_router.enabled
 
     async def chat_json(
         self,
@@ -54,20 +46,22 @@ class LLMClient:
         max_tokens: int = 2048,
     ) -> Any | None:
         """OpenAI-compatible chat call returning parsed JSON, or None on any
-        failure/disabled. The router selects the model for *task*/*tier*; an
-        explicit configured model overrides it."""
-        if not self.enabled:
-            return None
+        failure. The router selects the provider + real served model for
+        *task*/*tier*; None routing (nothing configured for the task) returns
+        None so the caller degrades to its heuristic."""
         routed = self.model_router.route(task, tier)
-        model = self.model or routed.model_id
-        headers = {"content-type": "application/json", "Authorization": f"Bearer {self.api_key}"}
+        if routed is None:
+            return None
+        headers = {"content-type": "application/json"}
+        if routed.api_key:
+            headers["Authorization"] = f"Bearer {routed.api_key}"
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"{self.base_url}/chat/completions",
+                    f"{routed.base_url.rstrip('/')}/chat/completions",
                     headers=headers,
                     json={
-                        "model": model,
+                        "model": routed.model,
                         "max_tokens": max_tokens,
                         "temperature": 0,
                         "messages": [

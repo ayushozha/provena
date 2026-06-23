@@ -27,26 +27,14 @@ class ExtractedFact:
 class FactExtractor:
     """Mem0-style ADD extraction: accumulate atomic facts, never overwrite."""
 
-    def __init__(
-        self,
-        model_router: ModelRouter,
-        llm_api_key: str = "",
-        llm_model: str = "",
-        llm_base_url: str = "http://localhost:11434/v1",
-    ) -> None:
+    def __init__(self, model_router: ModelRouter) -> None:
         self.model_router = model_router
-        self.llm_api_key = llm_api_key or os.environ.get("PROVENA_INTEL_LLM_API_KEY", "")
-        # Empty => defer to whatever the router picks for the task.
-        self.llm_model = llm_model
-        self.llm_base_url = llm_base_url.rstrip("/")
 
     @property
     def llm_enabled(self) -> bool:
-        # Gate the LLM path on a configured key. Local servers (Ollama,
-        # llama-server) accept any bearer token, so to use one set a dummy
-        # PROVENA_INTEL_LLM_API_KEY alongside a localhost base_url. Without a
-        # key, extraction falls back to the deterministic local splitter.
-        return bool(self.llm_api_key)
+        # True when the router has at least one configured provider/model.
+        # Without one, extraction uses the deterministic local splitter.
+        return self.model_router.enabled
 
     @property
     def disabled(self) -> bool:
@@ -68,10 +56,10 @@ class FactExtractor:
         return self._local_extract(text, title)
 
     async def _llm_extract(self, content: str, title: str) -> list[ExtractedFact]:
-        # The router selects the model for this task/tier; its choice is the
-        # default model name, overridable by an explicit configured llm_model.
+        # The router selects the provider + real served model for this task.
         routed = self.model_router.route("extract", ModelTier.BALANCED)
-        model = self.llm_model or routed.model_id
+        if routed is None:
+            return []
         prompt = (
             "Extract atomic facts from the text below. ADD-only: output new facts only, "
             "never instructions to delete or replace prior knowledge. "
@@ -80,14 +68,14 @@ class FactExtractor:
             f"TEXT:\n{content}"
         )
         headers = {"content-type": "application/json"}
-        if self.llm_api_key:
-            headers["Authorization"] = f"Bearer {self.llm_api_key}"
+        if routed.api_key:
+            headers["Authorization"] = f"Bearer {routed.api_key}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{self.llm_base_url}/chat/completions",
+                f"{routed.base_url.rstrip('/')}/chat/completions",
                 headers=headers,
                 json={
-                    "model": model,
+                    "model": routed.model,
                     "max_tokens": 2048,
                     "temperature": 0,
                     "messages": [

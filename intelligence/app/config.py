@@ -31,14 +31,24 @@ class IntelligenceSettings(BaseSettings):
     pipeline_url: str = "http://localhost:8000"
     orchestration_url: str = "http://localhost:50051"
 
-    # LLM-backed extraction uses any OpenAI-compatible /chat/completions
-    # endpoint, selected via env (same pattern as embeddings). Point base_url
-    # at a local server (Ollama/llama-server), OpenRouter, OpenAI, or an
-    # Anthropic OpenAI-compat shim. llm_model="" => use the model the router
-    # selects for the task; set it to pin a concrete served model.
+    # LLM-backed stages (fact extraction, rerank, contradiction detection,
+    # compaction) call any OpenAI-compatible /chat/completions endpoint, selected
+    # via env. Two ways to configure, both honest about what is actually served:
+    #
+    #  * Single provider (shorthand): set llm_model to a REAL served model name,
+    #    plus llm_base_url / llm_api_key. That model serves every task and tier.
+    #    Without llm_model the LLM stages stay DISABLED (deterministic heuristics)
+    #    rather than firing requests with a placeholder model name.
+    #  * Multiple providers: set llm_providers to a JSON array of
+    #    {name, base_url, api_key, models:[{model, tier, tasks, cost_per_1k_input}]}.
+    #    The router picks the cheapest configured model for the task+tier and calls
+    #    that provider's endpoint with its own key. Takes precedence over the
+    #    shorthand. OpenRouter is one such provider that itself fans out to many
+    #    models behind a single key.
     llm_base_url: str = "http://localhost:11434/v1"
     llm_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
     llm_model: str = ""
+    llm_providers: str = ""
 
     store_db_path: str = "./data/provena.db"
     listen_port: int = 8081
