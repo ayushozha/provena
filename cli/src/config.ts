@@ -17,6 +17,62 @@ export const LAST_INDEX_FILENAME = "last-index.json";
 export const INDEX_ERRORS_LOG = "index-errors.log";
 export const DEFAULT_DB_PATH = ".provena/provena.db";
 export const DEFAULT_STORE_URL = "http://127.0.0.1:18092";
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+
+export function isInsecureBindAllowed(): boolean {
+  return process.env.PROVENA_INSECURE_BIND === "1";
+}
+
+function toPosixPath(filePath: string): string {
+  return filePath.replace(/\\/g, "/");
+}
+
+function normalizeHostname(hostname: string): string {
+  const lower = hostname.toLowerCase();
+  if (lower.startsWith("[") && lower.endsWith("]")) {
+    return lower.slice(1, -1);
+  }
+  return lower;
+}
+
+export function assertLoopbackStoreUrl(storeUrl: string): void {
+  if (isInsecureBindAllowed()) {
+    return;
+  }
+  const host = normalizeHostname(new URL(storeUrl).hostname);
+  if (!LOOPBACK_HOSTS.has(host)) {
+    throw new Error(
+      `config.store_url must use a loopback host (127.0.0.1, localhost, ::1); got ${host}`,
+    );
+  }
+}
+
+export function assertDatabasePathUnderProvena(dbPath: string): void {
+  const posix = toPosixPath(dbPath);
+  if (posix.startsWith("/") || /^[a-zA-Z]:/.test(posix)) {
+    throw new Error("config.database.path must be relative and stay under .provena/");
+  }
+
+  const segments: string[] = [];
+  for (const part of posix.split("/")) {
+    if (!part || part === ".") {
+      continue;
+    }
+    if (part === "..") {
+      if (segments.length === 0) {
+        throw new Error("config.database.path must stay under .provena/");
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(part);
+  }
+
+  if (segments.length === 0 || segments[0] !== PROVENA_DIR) {
+    throw new Error("config.database.path must stay under .provena/");
+  }
+}
+
 export const DEFAULT_INDEX_INCLUDE = ["**/*"] as const;
 export const DEFAULT_INDEX_EXCLUDE = [
   "node_modules/**",
@@ -172,6 +228,7 @@ export function validateConfig(value: unknown): ProvenaConfig {
   if (!isNonEmptyString(obj.store_url)) {
     throw new Error("config.store_url must be a non-empty string");
   }
+  assertLoopbackStoreUrl(obj.store_url);
 
   let intelligenceUrl: string | undefined;
   if (obj.intelligence_url !== undefined && obj.intelligence_url !== null) {
@@ -189,6 +246,7 @@ export function validateConfig(value: unknown): ProvenaConfig {
   if (!isNonEmptyString(dbPath)) {
     throw new Error("config.database.path must be a non-empty string");
   }
+  assertDatabasePathUnderProvena(dbPath);
 
   const scope = obj.scope;
   if (typeof scope !== "object" || scope === null) {
