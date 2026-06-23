@@ -229,6 +229,8 @@ class HealthResponse(BaseModel):
 
 
 class ConnectorProvider(str, Enum):
+    # Membership here only validates the provider field on connector records;
+    # it does NOT imply a shipped first-party sync worker for that provider.
     SLACK = "slack"
     GOOGLE_DRIVE = "google_drive"
     SHAREPOINT = "sharepoint"
