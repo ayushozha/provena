@@ -184,6 +184,27 @@ function filterGitIgnored(repoRoot: string, relativePaths: string[]): string[] {
   return relativePaths.filter((path) => !ignored.has(path));
 }
 
+/** Hard denylist: always excluded from indexing regardless of .gitignore. */
+export function isDeniedSecretPath(relativePath: string): boolean {
+  const posix = toPosixPath(relativePath);
+  const name = basename(posix);
+
+  if (posix.split("/").some((segment) => segment === ".aws")) {
+    return true;
+  }
+  if (name.startsWith(".env")) {
+    return true;
+  }
+  if (name === ".npmrc" || name === "credentials.json") {
+    return true;
+  }
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".pem") || lower.endsWith(".key")) {
+    return true;
+  }
+  return false;
+}
+
 function hasBlockedExtension(relativePath: string): boolean {
   const name = basename(relativePath);
   const dot = name.lastIndexOf(".");
@@ -267,6 +288,9 @@ export async function enumerateFiles(
   const discovered: DiscoveredFile[] = [];
 
   for (const relPath of notGitIgnored) {
+    if (isDeniedSecretPath(relPath)) {
+      continue;
+    }
     const absolutePath = join(repoRoot, ...relPath.split("/"));
 
     let sizeBytes: number;

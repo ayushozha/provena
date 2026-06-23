@@ -1,4 +1,5 @@
 import {
+  isInsecureBindAllowed,
   loadConfig,
   parseStoreUrl,
   pidFilePath,
@@ -46,6 +47,13 @@ export async function runServe(argv: string[]): Promise<void> {
   const { config, projectRoot } = loaded;
   const pidPath = pidFilePath(projectRoot);
   const endpoint = parseStoreUrl(config.store_url);
+
+  if (endpoint.host === "0.0.0.0" && !isInsecureBindAllowed()) {
+    console.error(
+      "provena serve: refusing bind to 0.0.0.0 (set PROVENA_INSECURE_BIND=1 to override)",
+    );
+    process.exit(1);
+  }
 
   if (stop) {
     const pid = readPidFile(pidPath);
