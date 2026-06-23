@@ -23,11 +23,16 @@ const SEMANTIC_CHUNK_KINDS = new Set([
   "type_alias",
 ]);
 
+export type RelationScope = "all" | "intra-file" | "cross-file";
+
 export interface EmitRelationsOptions {
   storeUrl: string;
   projectRoot: string;
   repoRoot?: string;
   client?: ProvenaClient;
+  indexState?: IndexState;
+  persistIndexState?: boolean;
+  relationScope?: RelationScope;
 }
 
 export interface EmitRelationsResult {
@@ -83,14 +88,13 @@ interface PendingRelation {
   relation: RelationKind;
 }
 
-function collectRelationsForFile(
+function collectIntraFileRelations(
   chunks: CodeChunk[],
   relativePath: string,
   indexState: IndexState,
 ): PendingRelation[] {
   const pending: PendingRelation[] = [];
   const fileArtifactId = fileArtifactMemoryId(indexState, relativePath);
-  const indexedPaths = Object.keys(indexState.files);
 
   for (const chunk of chunks) {
     if (chunk.kind === "module") {
@@ -113,6 +117,43 @@ function collectRelationsForFile(
       });
     }
 
+    if (chunk.parentSymbol) {
+      const parentKey = `${relativePath}::${chunk.parentSymbol}`;
+      const parentId = indexState.chunks[parentKey];
+      if (parentId) {
+        pending.push({
+          fromMemoryId: chunkId,
+          toMemoryId: parentId,
+          relation: "related_to",
+        });
+      }
+    }
+  }
+
+  return pending;
+}
+
+function collectCrossFileRelations(
+  chunks: CodeChunk[],
+  relativePath: string,
+  indexState: IndexState,
+): PendingRelation[] {
+  const pending: PendingRelation[] = [];
+  const indexedPaths = Object.keys(indexState.files);
+
+  for (const chunk of chunks) {
+    if (chunk.kind === "module") {
+      continue;
+    }
+    if (!SEMANTIC_CHUNK_KINDS.has(chunk.kind)) {
+      continue;
+    }
+
+    const chunkId = chunkMemoryId(indexState, relativePath, chunk);
+    if (!chunkId) {
+      continue;
+    }
+
     if (chunk.imports?.length) {
       const targets = resolveChunkImports(
         relativePath,
@@ -128,18 +169,6 @@ function collectRelationsForFile(
             relation: "derived_from",
           });
         }
-      }
-    }
-
-    if (chunk.parentSymbol) {
-      const parentKey = `${relativePath}::${chunk.parentSymbol}`;
-      const parentId = indexState.chunks[parentKey];
-      if (parentId) {
-        pending.push({
-          fromMemoryId: chunkId,
-          toMemoryId: parentId,
-          relation: "related_to",
-        });
       }
     }
   }
@@ -169,11 +198,24 @@ function collectRelationsForFile(
   return pending;
 }
 
-/**
- * Emit typed `memory_relations` edges for one indexed file.
- *
- * Requires prior `emitMemories` so index-state has artifact + chunk memory IDs.
- */
+function collectRelationsForFile(
+  chunks: CodeChunk[],
+  relativePath: string,
+  indexState: IndexState,
+  relationScope: RelationScope = "all",
+): PendingRelation[] {
+  if (relationScope === "intra-file") {
+    return collectIntraFileRelations(chunks, relativePath, indexState);
+  }
+  if (relationScope === "cross-file") {
+    return collectCrossFileRelations(chunks, relativePath, indexState);
+  }
+  return [
+    ...collectIntraFileRelations(chunks, relativePath, indexState),
+    ...collectCrossFileRelations(chunks, relativePath, indexState),
+  ];
+}
+
 export async function emitRelations(
   chunks: CodeChunk[],
   fileMeta: FileMeta,
@@ -186,8 +228,16 @@ export async function emitRelations(
   const relativePath =
     fileMeta.path || posixRelative(repoRoot, fileMeta.absolutePath);
 
-  const indexState = loadIndexState(options.projectRoot);
-  const pending = collectRelationsForFile(chunks, relativePath, indexState);
+  const indexState = options.indexState ?? loadIndexState(options.projectRoot);
+  const persistIndexState =
+    options.persistIndexState ?? options.indexState === undefined;
+  const relationScope = options.relationScope ?? "all";
+  const pending = collectRelationsForFile(
+    chunks,
+    relativePath,
+    indexState,
+    relationScope,
+  );
 
   let created = 0;
   let skipped = 0;
@@ -216,7 +266,9 @@ export async function emitRelations(
     relationKinds[edge.relation] = (relationKinds[edge.relation] ?? 0) + 1;
   }
 
-  saveIndexState(options.projectRoot, indexState);
+  if (persistIndexState) {
+    saveIndexState(options.projectRoot, indexState);
+  }
 
   return { created, skipped, relationKinds };
 }

@@ -9,13 +9,14 @@ import {
 } from "../config.js";
 import { chunkTypeScriptFile } from "./chunkers/typescript.js";
 import { discoverRepo, resolveRepoRoot, type DiscoveredFile } from "./discover.js";
-import { emitMemories } from "./emit.js";
+import { emitMemories, loadIndexState, saveIndexState } from "./emit.js";
 import { upsertEntitiesFromChunks } from "./entities.js";
 import { emitRelations } from "./relations.js";
 
 const TS_JS_LANGUAGES = new Set(["typescript", "tsx", "javascript", "jsx"]);
 const TS_JS_PATTERN = /\.(tsx?|jsx?|mtsx?|cjs)$/i;
-const DEFAULT_CONCURRENCY = 4;
+/** Parallel workers corrupt index-state without shared in-memory state; keep at 1 by default. */
+const DEFAULT_CONCURRENCY = 1;
 
 export interface RunIndexOptions {
   dryRun?: boolean;
@@ -204,6 +205,21 @@ export async function runIndex(
   };
 
   let filesDone = 0;
+  const indexState = loadIndexState(projectRoot);
+  const pipelineOpts = {
+    storeUrl: config.store_url,
+    intelligenceUrl: config.intelligence_url,
+    projectRoot,
+    repoRoot,
+    client,
+    indexState,
+    persistIndexState: false,
+  };
+
+  const indexedFiles: Array<{
+    chunks: Awaited<ReturnType<typeof chunkTypeScriptFile>>;
+    fileMeta: { path: string; absolutePath: string; sha256: string };
+  }> = [];
 
   await runPool(files, concurrency, async (file) => {
     try {
@@ -215,21 +231,13 @@ export async function runIndex(
         sha256: file.sha256,
       };
 
-      const emitResult = await emitMemories(chunks, fileMeta, config.scope, {
-        storeUrl: config.store_url,
-        intelligenceUrl: config.intelligence_url,
-        projectRoot,
-        repoRoot,
-        client,
-      });
+      const emitResult = await emitMemories(chunks, fileMeta, config.scope, pipelineOpts);
       stats.memoriesCreated += emitResult.created;
       stats.memoriesSkipped += emitResult.skipped;
 
       const relationResult = await emitRelations(chunks, fileMeta, config.scope, {
-        storeUrl: config.store_url,
-        projectRoot,
-        repoRoot,
-        client,
+        ...pipelineOpts,
+        relationScope: "intra-file",
       });
       stats.relationsCreated += relationResult.created;
 
@@ -241,6 +249,7 @@ export async function runIndex(
       );
       stats.entitiesUpserted += entityResult.upserted;
 
+      indexedFiles.push({ chunks, fileMeta });
       await registerTriggerPhrases();
 
       stats.filesIndexed += 1;
@@ -255,6 +264,23 @@ export async function runIndex(
   });
 
   process.stdout.write("\n");
+
+  for (const { chunks, fileMeta } of indexedFiles) {
+    try {
+      const crossFileResult = await emitRelations(chunks, fileMeta, config.scope, {
+        ...pipelineOpts,
+        relationScope: "cross-file",
+      });
+      stats.relationsCreated += crossFileResult.created;
+    } catch (error) {
+      logIndexError(projectRoot, fileMeta.path, error);
+      console.error(
+        `\nprovena index: cross-file relations failed ${fileMeta.path}: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+  }
+
+  saveIndexState(projectRoot, indexState);
 
   const summary: IndexSummary = {
     startedAt,

@@ -60,6 +60,10 @@ export interface EmitOptions {
   repoRoot?: string;
   intelligenceUrl?: string;
   client?: ProvenaClient;
+  /** Shared in-memory state; when set, disk is not read and save is deferred unless `persistIndexState`. */
+  indexState?: IndexState;
+  /** Persist index state after this file (default: true only when `indexState` is omitted). */
+  persistIndexState?: boolean;
 }
 
 export interface EmitResult {
@@ -319,7 +323,9 @@ export async function emitMemories(
   const relativePath =
     fileMeta.path || posixRelative(repoRoot, fileMeta.absolutePath);
 
-  const indexState = loadIndexState(options.projectRoot);
+  const indexState = options.indexState ?? loadIndexState(options.projectRoot);
+  const persistIndexState =
+    options.persistIndexState ?? options.indexState === undefined;
   const entry: IndexStateFileEntry = indexState.files[relativePath] ?? {
     sha256: fileMeta.sha256,
     memoryIds: [],
@@ -365,7 +371,9 @@ export async function emitMemories(
 
   entry.memoryIds = [...new Set(memoryIds)];
   indexState.files[relativePath] = entry;
-  saveIndexState(options.projectRoot, indexState);
+  if (persistIndexState) {
+    saveIndexState(options.projectRoot, indexState);
+  }
 
   return { memoryIds: entry.memoryIds, created, skipped };
 }
