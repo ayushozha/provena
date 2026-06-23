@@ -165,21 +165,32 @@ class ModelRouter:
             return []
         entries: list[_Entry] = []
         for provider in providers if isinstance(providers, list) else []:
+            if not isinstance(provider, dict):
+                continue
             name = str(provider.get("name") or "")
             base_url = str(provider.get("base_url") or "")
             api_key = str(provider.get("api_key") or "")
             if not base_url:
                 logger.warning("Skipping provider %r: no base_url.", name or "<unnamed>")
                 continue
-            for spec in provider.get("models") or []:
+            models = provider.get("models")
+            for spec in (models if isinstance(models, list) else []):
+                if not isinstance(spec, dict):
+                    continue
                 model = str(spec.get("model") or "")
                 if not model:
                     continue
                 try:
-                    tier = ModelTier(str(spec.get("tier", "balanced")))
+                    tier = ModelTier(str(spec.get("tier") or "balanced"))
                 except ValueError:
                     tier = ModelTier.BALANCED
-                tasks = spec.get("tasks") or list(ALL_TASKS)
+                tasks = spec.get("tasks")
+                if not isinstance(tasks, list):
+                    tasks = list(ALL_TASKS)
+                try:
+                    cost = float(spec.get("cost_per_1k_input") or 0.0)
+                except (ValueError, TypeError):
+                    cost = 0.0
                 entries.append(
                     _Entry(
                         provider=name or base_url,
@@ -188,7 +199,7 @@ class ModelRouter:
                         model=model,
                         tier=tier,
                         tasks=frozenset(str(t) for t in tasks),
-                        cost_per_1k_input=float(spec.get("cost_per_1k_input", 0.0)),
+                        cost_per_1k_input=cost,
                     )
                 )
         return entries

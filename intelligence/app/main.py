@@ -39,7 +39,8 @@ async def lifespan(app: FastAPI):
         api_key=settings.embedding_api_key.get_secret_value(),
     )
     model_router = ModelRouter.from_settings(settings)
-    if not model_router.enabled and (settings.llm_api_key.get_secret_value() or settings.llm_providers):
+    llm_key = settings.llm_api_key.get_secret_value() if settings.llm_api_key else ""
+    if not model_router.enabled and (llm_key or settings.llm_providers):
         logger.warning(
             "LLM endpoint/key configured but no model selected; set "
             "PROVENA_INTEL_LLM_MODEL or PROVENA_INTEL_LLM_PROVIDERS. "
@@ -198,8 +199,8 @@ def create_app() -> FastAPI:
     @app.post("/v1/model/route")
     async def model_route(request: Request, body: dict[str, Any]):
         mr: ModelRouter = request.app.state.model_router
-        task = body.get("task", "classify")
-        tier_str = body.get("tier", "balanced")
+        task = body.get("task") or "classify"
+        tier_str = body.get("tier") or "balanced"
         try:
             tier = ModelTier(tier_str)
         except ValueError:
