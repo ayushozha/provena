@@ -90,6 +90,7 @@ export {
   relationFingerprint,
   type EmitRelationsOptions,
   type EmitRelationsResult,
+  type RelationScope,
 } from "./indexer/relations.js";
 
 export {
