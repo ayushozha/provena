@@ -41,11 +41,30 @@ export {
   type MemoryWriteResult,
   type ProvenaClientOptions,
   type ScopeEnvelope,
+  type SearchExplainResponse,
   type SearchRequest,
   type SearchResponse,
   type SearchResult,
   type SourceReference,
 } from "./client.js";
+
+export {
+  colorEnabled,
+  formatLocation,
+  formatSearchJson,
+  formatSearchTable,
+  pickExcerpt,
+  spanToLineDisplay,
+  truncateExcerpt,
+} from "./format.js";
+
+export {
+  DEFAULT_SEARCH_LIMIT,
+  parseSearchArgs,
+  printSearchHelp,
+  runSearchCommand,
+  type SearchCommandOptions,
+} from "./commands/search.js";
 
 export {
   buildChunkFactMemory,

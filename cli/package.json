@@ -40,7 +40,8 @@
     "test:discover": "node tests/discover.test.mjs",
     "test:chunk-typescript": "node tests/chunk-typescript.test.mjs",
     "test:emit": "npm run build && node tests/emit.integration.mjs",
-    "test:index-e2e": "npm run build && node tests/index.e2e.mjs"
+    "test:index-e2e": "npm run build && node tests/index.e2e.mjs",
+    "test:search": "npm run build && node tests/search.test.mjs"
   },
   "dependencies": {
     "fast-glob": "^3.3.3",
