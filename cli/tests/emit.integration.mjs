@@ -74,15 +74,17 @@ async function startStore(port, dbPath) {
   ];
 
   const useShell =
-    runner.command === "uv" ||
-    runner.command === "python" ||
-    runner.command === "python3";
+    process.platform === "win32" &&
+    (runner.command === "uv" ||
+      runner.command === "python" ||
+      runner.command === "python3");
 
   const child = spawn(runner.command, args, {
     cwd: runner.storeRoot,
     env: { ...process.env, PROVENA_DB_PATH: dbPath },
     stdio: ["ignore", "pipe", "pipe"],
     shell: useShell,
+    detached: process.platform !== "win32",
   });
 
   child.stderr?.on("data", (chunk) => {
@@ -228,8 +230,12 @@ async function main() {
         spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
           stdio: "ignore",
         });
-      } else {
-        child.kill("SIGTERM");
+      } else if (child.pid) {
+        try {
+          process.kill(-child.pid, "SIGTERM");
+        } catch {
+          child.kill("SIGTERM");
+        }
       }
       setTimeout(resolvePromise, 3000);
     });
