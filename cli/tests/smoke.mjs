@@ -26,7 +26,8 @@ if (!/^\d+\.\d+\.\d+$/.test(version)) {
 }
 if (!/^0\.1\.\d+$/.test(version)) {
   console.error(
-    `pre-1.0 CLI releases stay on 0.1.x patch line (0.1.0, 0.1.1, …); got: ${version}`,
+    `CLI must stay on 0.1.x unless a major release explicitly bumps minor ` +
+      `(0.2.0+ requires updating this test); got: ${version}`,
   );
   process.exit(1);
 }

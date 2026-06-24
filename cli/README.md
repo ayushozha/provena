@@ -63,14 +63,26 @@ Built output lives under `dist/`. Package is not published to npm yet (plan 26).
 
 ## Versioning
 
-`@provena/cli` uses **full semver** (`MAJOR.MINOR.PATCH`). During the Indexer
-MVP line, stay on **`0.1.x`** and bump only the **patch** for each release:
+`@provena/cli` uses **full semver** (`MAJOR.MINOR.PATCH`).
 
-| Release kind | Example | Do not use |
-|--------------|---------|------------|
-| Indexer fix / docs / test gate | `0.1.0` → `0.1.1` | `0.1` → `0.2` (two-segment) |
-| Next indexer milestone | `0.2.0` (explicit bump) | Skipping patch subversions |
+### Rules (mandatory)
 
-- Current: `0.1.0` (see `package.json`)
+1. **Stay on `0.1.x` for all routine releases.** Bump **patch** only:
+   `0.1.0` → `0.1.1` → `0.1.2`. Never use two-segment versions (`0.1`, `0.2`).
+2. **`0.2.0` and higher minors are major releases only.** Do not move to `0.2.x`
+   for a feature slice, docs pass, or housekeeping PR. A minor bump requires an
+   explicit major-release decision (product + changelog), and updating
+   `cli/tests/smoke.mjs` to allow the new minor line.
+3. **First npm publish starts fresh at `0.1.0`.** The public package does not
+   inherit monorepo-internal version history; deployment begins at `0.1.0` on npm.
+
+| Release kind | Version | Allowed? |
+|--------------|---------|----------|
+| First npm publish / Indexer MVP | `0.1.0` | Yes — package start |
+| Fix, test, docs, small feature | `0.1.1`, `0.1.2`, … | Yes — patch only |
+| Major product milestone | `0.2.0` | Only with explicit major-release approval |
+| Casual minor bump | `0.1.x` → `0.2.0` | **No** |
+
+- Current: `0.1.0` (`package.json`)
 - npm git tags: `cli-v0.1.0`, `cli-v0.1.1`, …
 - CLI version is independent of the Python store / server version
