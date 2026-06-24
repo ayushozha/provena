@@ -134,6 +134,13 @@ function collectGitignoreFiles(repoRoot: string): string[] {
   return files;
 }
 
+export function buildRepoIgnoreMatcher(
+  repoRoot: string,
+): (relativePath: string) => boolean {
+  const ig = buildIgnoreFilter(repoRoot);
+  return (relativePath: string) => ig.ignores(toPosixPath(relativePath));
+}
+
 function buildIgnoreFilter(repoRoot: string): Ignore {
   const ig = ignore();
   for (const gitignorePath of collectGitignoreFiles(repoRoot)) {

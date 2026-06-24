@@ -34,7 +34,13 @@ Tag `cli-v0.1.0` after adding `NPM_TOKEN` to GitHub secrets.
 |------|-------|
 | 12 | SHA-256 diff skip, `--full`, delete-on-remove |
 
-**Next:** `roadmap/plan/13-provena-watch.md` or plan 11 multi-language chunking.
+## Watch mode (plan 13) — complete
+
+| Plan | Focus |
+|------|-------|
+| 13 | `provena watch` — chokidar + debounced incremental index |
+
+**Next:** `roadmap/plan/14-git-hook-integration.md` or plan 11 multi-language chunking.
 
 ## Server-side plans also landed (not moved here yet)
 

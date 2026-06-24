@@ -19,6 +19,7 @@ function run(args, expectStatus) {
 }
 
 run(["index"], 1);
+run(["watch"], 1);
 run(["not-a-command"], 1);
 run(["--help"], 0);
 run(["--version"], 0);
