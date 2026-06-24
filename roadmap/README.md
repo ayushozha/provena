@@ -10,8 +10,10 @@ This folder tracks work toward the grand vision:
 
 **Indexer MVP (plans 01–10): complete** on `main` — `provena init` → `serve` →
 `index` → `search` for TypeScript/JavaScript. Verify with `cd cli && npm test`.
-Completed plan files live in `completed/`; npm publish and fresh-machine
-quickstart remain plan 26.
+
+**npm quickstart (plan 26): publish-ready** at `@provena/cli@0.1.0` — see
+[docs/QUICKSTART.md](../docs/QUICKSTART.md). Tag `cli-v0.1.0` + `NPM_TOKEN` to
+publish; routine releases stay on `0.1.x` patches only.
 
 ## Layout
 
@@ -54,7 +56,7 @@ dependencies. Parallel work is fine when prerequisites do not overlap.
 | 23 | `23-mcp-config-generator.md` | `provena mcp` Cursor/Claude setup | Planned |
 | 24 | `24-index-status-and-health.md` | `provena status` operator view | Planned |
 | 25 | `25-code-recall-benchmark.md` | Eval harness for repo indexing quality | Planned |
-| 26 | `26-npm-publish-and-quickstart.md` | npm publish + landing quickstart docs | Planned |
+| 26 | `completed/26-…` | npm publish + quickstart | **Publish-ready** — tag `cli-v0.1.0` |
 
 ## Completion template
 

@@ -4,7 +4,25 @@ Index TypeScript and JavaScript repos into the Provena governed memory plane and
 search them from the terminal.
 
 **Indexer MVP (plans 01–10):** `init` → `serve` → `index` → `search` for TS/JS.
-See [roadmap/completed/](../roadmap/completed/) for shipped plan notes; [roadmap/plan/](../roadmap/plan/) for what is next.
+
+## npm install (your repo)
+
+```powershell
+npm install -D @provena/cli
+```
+
+You still need the Python store once — see [docs/QUICKSTART.md](../docs/QUICKSTART.md)
+(`PROVENA_STORE_ROOT` → clone of this repo + `pip install -e .`).
+
+```powershell
+npx provena init
+npx provena serve --detach
+npx provena index
+npx provena search "authentication"
+```
+
+**Publish:** tag `cli-v0.1.0` (patch: `cli-v0.1.1`, …). Requires `NPM_TOKEN` in GitHub
+secrets. First public version is always **`0.1.0`**.
 
 ## Monorepo quick start
 
@@ -59,7 +77,7 @@ Individual targets: `npm run test:discover`, `test:chunk-typescript`, `test:emit
 import { chunkTypeScriptFile, runIndex, ProvenaClient } from "@provena/cli";
 ```
 
-Built output lives under `dist/`. Package is not published to npm yet (plan 26).
+Built output lives under `dist/`.
 
 ## Versioning
 

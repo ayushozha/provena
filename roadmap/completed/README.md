@@ -20,7 +20,15 @@ Finished vertical slices live here with the original plan content plus a
 
 **Verify:** `cd cli && npm test`
 
-**Next:** `roadmap/plan/11-multi-language-chunking.md` and beyond, or plan 26 for npm publish.
+## npm publish (plan 26) — publish-ready
+
+| Plan | Focus |
+|------|-------|
+| 26 | Quickstart, pack-install test, `publish-cli.yml`, `@provena/cli@0.1.0` |
+
+Tag `cli-v0.1.0` after adding `NPM_TOKEN` to GitHub secrets.
+
+**Next:** `roadmap/plan/11-multi-language-chunking.md` or plan 12 incremental index.
 
 ## Server-side plans also landed (not moved here yet)
 

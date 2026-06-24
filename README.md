@@ -1,5 +1,8 @@
 # Provena
 
+[![npm @provena/cli](https://img.shields.io/npm/v/@provena/cli?label=%40provena%2Fcli)](https://www.npmjs.com/package/@provena/cli)
+[![CLI CI](https://github.com/ayushozha/provena/actions/workflows/ci-cli.yml/badge.svg)](https://github.com/ayushozha/provena/actions/workflows/ci-cli.yml)
+
 Provena is a provenance-first memory layer for LLM applications. It stores
 typed memories, source references, temporal validity, scoped recall, and
 explainable retrieval behind a small HTTP API. It now supports four runtime
@@ -35,8 +38,8 @@ The Provena-only autonomous loop is documented in [loop/README.md](./loop/README
 ## CLI indexer (MVP)
 
 Index TypeScript/JavaScript into local Provena memory and search from the terminal.
-Indexer MVP plans 01–10 are complete; see [cli/README.md](./cli/README.md) and
-[roadmap/completed/](./roadmap/completed/).
+**Quickstart:** [docs/QUICKSTART.md](./docs/QUICKSTART.md) · [cli/README.md](./cli/README.md) ·
+[roadmap/](./roadmap/README.md)
 
 ```powershell
 cd cli

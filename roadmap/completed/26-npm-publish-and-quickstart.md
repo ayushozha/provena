@@ -98,3 +98,9 @@ Grand vision MVP complete. Subsequent roadmap phases (not yet planned as files):
 - CI index job for GitHub Actions
 - VS Code extension
 - First-party connector workers (post push-based indexer)
+---
+## Completion
+- **Completed**: 2026-06-23
+- **PR**: feat/plan-26 (pending merge)
+- **Verified by**: `cd cli && npm test` green; `node tests/pack-install.test.mjs` ok
+- **Notes**: Publish-ready at `0.1.0`. Tag `cli-v0.1.0` + `NPM_TOKEN` secret triggers `publish-cli.yml`. Store still requires clone + `pip install -e .` until PyPI `provena` package ships.
