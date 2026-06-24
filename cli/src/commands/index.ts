@@ -23,6 +23,7 @@ export function printIndexHelp(): void {
   console.log("Options:");
   console.log("  --dry-run        List TS/JS files without writing");
   console.log("  --path <subdir>  Limit indexing to a repo subtree");
+  console.log("  --full           Re-index every file (ignore content-hash skip)");
   console.log("  --help, -h       Show this help");
 }
 
@@ -33,12 +34,14 @@ export async function runIndexCommand(args: string[]): Promise<number> {
   }
 
   const dryRun = hasFlag(args, "--dry-run");
+  const full = hasFlag(args, "--full");
   const pathPrefix = optionValue(args, "--path");
 
   const { config, projectRoot } = loadConfig();
 
   const result = await runIndex(config, projectRoot, {
     dryRun,
+    full,
     pathPrefix,
     cwd: process.cwd(),
   });
@@ -46,9 +49,19 @@ export async function runIndexCommand(args: string[]): Promise<number> {
   if (!dryRun) {
     const { summary } = result;
     const memories = summary.memoriesCreated + summary.memoriesSkipped;
-    console.log(
-      `Indexed ${summary.filesIndexed}/${summary.filesDiscovered} files, ${memories} memories, ${summary.relationsCreated} relations`,
-    );
+    const changed =
+      summary.filesAdded +
+      summary.filesChanged +
+      summary.filesRemoved;
+    if (changed === 0 && summary.filesUnchanged > 0) {
+      console.log(
+        `No file changes (${summary.filesUnchanged} unchanged), ${memories} memories, ${summary.relationsCreated} relations`,
+      );
+    } else {
+      console.log(
+        `Indexed ${summary.filesIndexed}/${summary.filesDiscovered} files (+${summary.filesAdded} ~${summary.filesChanged} -${summary.filesRemoved} =${summary.filesUnchanged}), ${memories} memories, ${summary.relationsCreated} relations`,
+      );
+    }
     if (summary.filesFailed > 0) {
       console.error(
         `provena index: ${summary.filesFailed} file(s) failed (see .provena/${"index-errors.log"})`,

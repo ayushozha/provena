@@ -54,6 +54,7 @@ function printHelp(): void {
     "Index options:",
     "  --dry-run    List TS/JS files without writing",
     "  --path       Limit to a repo subtree (e.g. src/auth)",
+    "  --full       Re-index every file (ignore content-hash skip)",
     "",
     "Search options:",
     "  --limit N    Maximum hits (default 5)",

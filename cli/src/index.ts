@@ -111,6 +111,16 @@ export {
 export { chunkTypeScriptFile } from "./indexer/chunkers/typescript.js";
 export type { ChunkKind, CodeChunk, FileMeta } from "./indexer/types.js";
 
+export {
+  computeIndexDiff,
+  filesToIndex,
+  incrementalCountsFromDiff,
+  purgeFileFromIndexState,
+  removeIndexedFile,
+  type IndexDiff,
+  type IncrementalCounts,
+} from "./indexer/incremental.js";
+
 export { runIndex, type IndexSummary, type RunIndexOptions, type RunIndexResult } from "./indexer/run.js";
 
 export {

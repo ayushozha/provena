@@ -9,8 +9,15 @@ import {
 } from "../config.js";
 import { chunkTypeScriptFile } from "./chunkers/typescript.js";
 import { discoverRepo, resolveRepoRoot, type DiscoveredFile } from "./discover.js";
-import { emitMemories, loadIndexState, saveIndexState } from "./emit.js";
+import { emitMemories, loadIndexState } from "./emit.js";
 import { upsertEntitiesFromChunks } from "./entities.js";
+import {
+  computeIndexDiff,
+  filesToIndex,
+  incrementalCountsFromDiff,
+  removeIndexedFile,
+  saveIndexStateAtomic,
+} from "./incremental.js";
 import { emitRelations } from "./relations.js";
 
 const TS_JS_LANGUAGES = new Set(["typescript", "tsx", "javascript", "jsx"]);
@@ -23,6 +30,8 @@ export interface RunIndexOptions {
   pathPrefix?: string;
   concurrency?: number;
   cwd?: string;
+  /** When true, re-process every discovered file (still removes deleted paths). */
+  full?: boolean;
 }
 
 export interface IndexSummary {
@@ -31,11 +40,17 @@ export interface IndexSummary {
   filesDiscovered: number;
   filesIndexed: number;
   filesFailed: number;
+  filesAdded: number;
+  filesChanged: number;
+  filesRemoved: number;
+  filesUnchanged: number;
   memoriesCreated: number;
   memoriesSkipped: number;
+  memoriesDeleted: number;
   relationsCreated: number;
   entitiesUpserted: number;
   dryRun: boolean;
+  fullReindex: boolean;
   pathPrefix?: string;
 }
 
@@ -49,6 +64,7 @@ interface MutableStats {
   filesFailed: number;
   memoriesCreated: number;
   memoriesSkipped: number;
+  memoriesDeleted: number;
   relationsCreated: number;
   entitiesUpserted: number;
 }
@@ -143,17 +159,23 @@ function emptySummary(
     filesDiscovered,
     filesIndexed: 0,
     filesFailed: 0,
+    filesAdded: 0,
+    filesChanged: 0,
+    filesRemoved: 0,
+    filesUnchanged: 0,
     memoriesCreated: 0,
     memoriesSkipped: 0,
+    memoriesDeleted: 0,
     relationsCreated: 0,
     entitiesUpserted: 0,
     dryRun: options.dryRun ?? false,
+    fullReindex: options.full ?? false,
     pathPrefix: options.pathPrefix,
   };
 }
 
 /**
- * End-to-end index pipeline: discover → chunk → emit → relations → entities.
+ * End-to-end index pipeline: discover → diff → chunk → emit → relations → entities.
  */
 export async function runIndex(
   config: ProvenaConfig,
@@ -164,6 +186,7 @@ export async function runIndex(
   const cwd = options.cwd ?? process.cwd();
   const repoRoot = resolveRepoRoot(cwd);
   const dryRun = options.dryRun ?? false;
+  const fullReindex = options.full ?? false;
   const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
 
   const discovered = await discoverRepo(config, {
@@ -195,17 +218,47 @@ export async function runIndex(
     return { exitCode: 1, summary };
   }
 
+  const indexState = loadIndexState(projectRoot);
+  const diff = computeIndexDiff(files, indexState, { pathPrefix: options.pathPrefix });
+  const incremental = incrementalCountsFromDiff(diff);
+
   const stats: MutableStats = {
     filesIndexed: 0,
     filesFailed: 0,
     memoriesCreated: 0,
     memoriesSkipped: 0,
+    memoriesDeleted: 0,
     relationsCreated: 0,
     entitiesUpserted: 0,
   };
 
+  for (const removedPath of diff.removed) {
+    try {
+      stats.memoriesDeleted += await removeIndexedFile(client, indexState, removedPath);
+    } catch (error) {
+      logIndexError(projectRoot, removedPath, error);
+      console.error(
+        `\nprovena index: failed removing ${removedPath}: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+  }
+
+  const worklist = fullReindex ? files : filesToIndex(diff);
+
+  if (!fullReindex) {
+    for (const file of diff.changed) {
+      try {
+        stats.memoriesDeleted += await removeIndexedFile(client, indexState, file.path);
+      } catch (error) {
+        logIndexError(projectRoot, file.path, error);
+        console.error(
+          `\nprovena index: failed clearing ${file.path}: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+    }
+  }
+
   let filesDone = 0;
-  const indexState = loadIndexState(projectRoot);
   const pipelineOpts = {
     storeUrl: config.store_url,
     intelligenceUrl: config.intelligence_url,
@@ -221,8 +274,15 @@ export async function runIndex(
     fileMeta: { path: string; absolutePath: string; sha256: string };
   }> = [];
 
-  await runPool(files, concurrency, async (file) => {
+  await runPool(worklist, concurrency, async (file) => {
     try {
+      if (fullReindex) {
+        const previous = indexState.files[file.path];
+        if (previous?.sha256 && previous.sha256 !== file.sha256) {
+          stats.memoriesDeleted += await removeIndexedFile(client, indexState, file.path);
+        }
+      }
+
       const content = readFileSync(file.absolutePath, "utf8");
       const chunks = await chunkTypeScriptFile(file.path, content);
       const fileMeta = {
@@ -259,11 +319,15 @@ export async function runIndex(
       console.error(`\nprovena index: failed ${file.path}: ${error instanceof Error ? error.message : error}`);
     } finally {
       filesDone += 1;
-      printProgress(filesDone, files.length, stats);
+      if (worklist.length > 0) {
+        printProgress(filesDone, worklist.length, stats);
+      }
     }
   });
 
-  process.stdout.write("\n");
+  if (worklist.length > 0) {
+    process.stdout.write("\n");
+  }
 
   for (const { chunks, fileMeta } of indexedFiles) {
     try {
@@ -280,7 +344,7 @@ export async function runIndex(
     }
   }
 
-  saveIndexState(projectRoot, indexState);
+  saveIndexStateAtomic(projectRoot, indexState);
 
   const summary: IndexSummary = {
     startedAt,
@@ -288,16 +352,26 @@ export async function runIndex(
     filesDiscovered: files.length,
     filesIndexed: stats.filesIndexed,
     filesFailed: stats.filesFailed,
+    filesAdded: incremental.filesAdded,
+    filesChanged: incremental.filesChanged,
+    filesRemoved: incremental.filesRemoved,
+    filesUnchanged: incremental.filesUnchanged,
     memoriesCreated: stats.memoriesCreated,
     memoriesSkipped: stats.memoriesSkipped,
+    memoriesDeleted: stats.memoriesDeleted,
     relationsCreated: stats.relationsCreated,
     entitiesUpserted: stats.entitiesUpserted,
     dryRun: false,
+    fullReindex,
     pathPrefix: options.pathPrefix,
   };
 
   writeLastIndexSummary(projectRoot, summary);
 
-  const exitCode = stats.filesIndexed > 0 ? 0 : 1;
+  const hadWork =
+    stats.filesIndexed > 0 ||
+    incremental.filesRemoved > 0 ||
+    incremental.filesUnchanged > 0;
+  const exitCode = stats.filesFailed > 0 ? 1 : hadWork ? 0 : 1;
   return { exitCode, summary };
 }
