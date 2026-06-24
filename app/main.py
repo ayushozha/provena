@@ -37,7 +37,8 @@ from app.models import (
     SourcePermissionGrant,
     SyncJob,
 )
-from app.store import AccessContext, ProvenaStore
+from app.store import AccessContext
+from app.store_factory import create_store
 
 
 def create_app() -> FastAPI:
@@ -45,7 +46,7 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        store = ProvenaStore(settings.resolved_db_path, vector_dimensions=settings.vector_dimensions)
+        store = create_store(settings)
         app.state.store = store
         app.state.connector_execution = ConnectorExecutionService(store)
         app.state.connector_scheduler = ConnectorSchedulerService(
