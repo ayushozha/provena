@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - "cli/**"
+      - "pyproject.toml"
       - ".github/workflows/ci-cli.yml"
   push:
     branches: [main]
     paths:
       - "cli/**"
+      - "pyproject.toml"
 
 jobs:
   test:
