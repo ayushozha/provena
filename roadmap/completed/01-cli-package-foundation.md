@@ -87,3 +87,9 @@ All commands exit 0.
 
 PLAN-02 (`provena init`) imports config helpers from `cli/src/config.ts` once
 that plan adds them. Keep `cli/src/` modular: one file per command eventually.
+---
+## Completion
+- **Completed**: 2026-06-23
+- **PR**: #27 (Indexer MVP stack on main)
+- **Verified by**: `cd cli && npm test` — full Indexer MVP suite green (smoke through index e2e + search)
+- **Notes**: Shipped on `main` via squashed merge #27; roadmap housekeeping in follow-up PR. TS/JS only until plan 11.

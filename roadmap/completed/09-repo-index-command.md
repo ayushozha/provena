@@ -78,3 +78,9 @@ node cli/tests/index.e2e.mjs
 
 PLAN-10 exposes search CLI on top of indexed data.
 PLAN-12 adds fingerprint skip for unchanged files.
+---
+## Completion
+- **Completed**: 2026-06-23
+- **PR**: #27 (Indexer MVP stack on main)
+- **Verified by**: `cd cli && npm test` — full Indexer MVP suite green (smoke through index e2e + search)
+- **Notes**: Shipped on `main` via squashed merge #27; roadmap housekeeping in follow-up PR. TS/JS only until plan 11.

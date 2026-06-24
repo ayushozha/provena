@@ -70,3 +70,9 @@ curl -X POST http://127.0.0.1:18092/v1/memories/search -d '{"query":"auth","scop
 
 PLAN-08 registers `entity_keys` into `entity_registry` for symbol canonicalization.
 PLAN-22 uses relations + temporal graph for navigation.
+---
+## Completion
+- **Completed**: 2026-06-23
+- **PR**: #27 (Indexer MVP stack on main)
+- **Verified by**: `cd cli && npm test` — full Indexer MVP suite green (smoke through index e2e + search)
+- **Notes**: Shipped on `main` via squashed merge #27; roadmap housekeeping in follow-up PR. TS/JS only until plan 11.

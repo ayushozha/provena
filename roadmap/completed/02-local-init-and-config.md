@@ -91,3 +91,9 @@ node ../cli/tests/config.test.mjs
 
 PLAN-03 reads `config.database.path` and `config.store_url` to bootstrap the
 SQLite store and optional local daemon.
+---
+## Completion
+- **Completed**: 2026-06-23
+- **PR**: #27 (Indexer MVP stack on main)
+- **Verified by**: `cd cli && npm test` — full Indexer MVP suite green (smoke through index e2e + search)
+- **Notes**: Shipped on `main` via squashed merge #27; roadmap housekeeping in follow-up PR. TS/JS only until plan 11.
