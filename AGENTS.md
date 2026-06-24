@@ -104,3 +104,15 @@ before implementation. If a story is too large or blocked, do not leave it in
 - Prefer edits inside `services/provena`.
 - Avoid repo-wide changes unless the current story explicitly requires them.
 - Do not change unrelated stories while working on one story.
+
+## `@provena/cli` versioning
+
+When touching `cli/package.json` version or preparing an npm publish:
+
+1. **First public package release is `0.1.0`** — start fresh on npm; do not carry
+   over internal monorepo version history.
+2. **Routine releases stay on `0.1.x`** — bump **patch** only (`0.1.0` → `0.1.1`).
+3. **Do not bump to `0.2.0` unless it is an approved major release** — minor
+   version increases are not for feature slices, docs, or housekeeping PRs.
+4. Full semver (`MAJOR.MINOR.PATCH`) always; never two-segment versions (`0.1`).
+5. See `cli/README.md` (Versioning) and `cli/tests/smoke.mjs` for enforcement.

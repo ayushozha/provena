@@ -86,3 +86,9 @@ curl http://127.0.0.1:18092/healthz
 
 PLAN-09 (`provena index`) assumes store is reachable at `config.store_url`.
 Document in each plan: run `provena serve --detach` before index.
+---
+## Completion
+- **Completed**: 2026-06-23
+- **PR**: #27 (Indexer MVP stack on main)
+- **Verified by**: `cd cli && npm test` — full Indexer MVP suite green (smoke through index e2e + search)
+- **Notes**: Shipped on `main` via squashed merge #27; roadmap housekeeping in follow-up PR. TS/JS only until plan 11.

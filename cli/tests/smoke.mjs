@@ -18,8 +18,17 @@ function run(args) {
 }
 
 const version = run(["--version"]).trim();
-if (!/^\d+\.\d+\.\d+/.test(version)) {
-  console.error(`unexpected version output: ${version}`);
+if (!/^\d+\.\d+\.\d+$/.test(version)) {
+  console.error(
+    `version must be full semver MAJOR.MINOR.PATCH (e.g. 0.1.0), got: ${version}`,
+  );
+  process.exit(1);
+}
+if (!/^0\.1\.\d+$/.test(version)) {
+  console.error(
+    `CLI must stay on 0.1.x unless a major release explicitly bumps minor ` +
+      `(0.2.0+ requires updating this test); got: ${version}`,
+  );
   process.exit(1);
 }
 

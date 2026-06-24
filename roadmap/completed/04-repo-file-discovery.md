@@ -70,3 +70,9 @@ node cli/dist/cli.js discover --json | Select-Object -First 5
 
 PLAN-05 consumes `DiscoveredFile[]` for TS/JS files only initially.
 PLAN-12 reuses `sha256` for incremental indexing.
+---
+## Completion
+- **Completed**: 2026-06-23
+- **PR**: #27 (Indexer MVP stack on main)
+- **Verified by**: `cd cli && npm test` — full Indexer MVP suite green (smoke through index e2e + search)
+- **Notes**: Shipped on `main` via squashed merge #27; roadmap housekeeping in follow-up PR. TS/JS only until plan 11.

@@ -85,3 +85,9 @@ node tests/chunk-typescript.test.mjs
 
 PLAN-06 maps `CodeChunk` â†’ Provena `MemoryCreate` payloads.
 PLAN-07 uses `imports` to build graph edges.
+---
+## Completion
+- **Completed**: 2026-06-23
+- **PR**: #27 (Indexer MVP stack on main)
+- **Verified by**: `cd cli && npm test` — full Indexer MVP suite green (smoke through index e2e + search)
+- **Notes**: Shipped on `main` via squashed merge #27; roadmap housekeeping in follow-up PR. TS/JS only until plan 11.

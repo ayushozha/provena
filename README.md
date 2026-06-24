@@ -1,5 +1,8 @@
 # Provena
 
+[![npm @provena/cli](https://img.shields.io/npm/v/@provena/cli?label=%40provena%2Fcli)](https://www.npmjs.com/package/@provena/cli)
+[![CLI CI](https://github.com/ayushozha/provena/actions/workflows/ci-cli.yml/badge.svg)](https://github.com/ayushozha/provena/actions/workflows/ci-cli.yml)
+
 Provena is a provenance-first memory layer for LLM applications. It stores
 typed memories, source references, temporal validity, scoped recall, and
 explainable retrieval behind a small HTTP API. It now supports four runtime
@@ -32,10 +35,27 @@ The Provena-only autonomous loop is documented in [loop/README.md](./loop/README
   status can be queried per tenant.
 - Local-first: SQLite is the default backend for fast local development.
 
+## CLI indexer (MVP)
+
+Index TypeScript/JavaScript into local Provena memory and search from the terminal.
+**Quickstart:** [docs/QUICKSTART.md](./docs/QUICKSTART.md) · [cli/README.md](./cli/README.md) ·
+[roadmap/](./roadmap/README.md)
+
+```powershell
+cd cli
+npm install
+npm test
+cd ..
+python -m uvicorn app.main:app --port 8092
+cd cli
+node dist/cli.js init
+node dist/cli.js index
+node dist/cli.js search "authentication"
+```
+
 ## Local run
 
 ```powershell
-cd services/provena
 $env:PROVENA_DB_PATH = ".\\data\\provena.db"
 python -m uvicorn app.main:app --reload --port 8092
 ```
