@@ -17,12 +17,12 @@ shutdown — separate from one-shot `index`.
 
 ## Success criteria
 
-- [ ] `provena watch` watches repo root respecting gitignore
-- [ ] Debounce 500ms after last change before indexing
-- [ ] Only changed files re-indexed (uses PLAN-12 diff)
-- [ ] Ctrl+C shuts down cleanly
-- [ ] `--interval 30s` optional polling fallback for environments without native watch
-- [ ] Logs each watch-triggered index to stdout with timestamp
+- [x] `provena watch` watches repo root respecting gitignore
+- [x] Debounce 500ms after last change before indexing
+- [x] Only changed files re-indexed (uses PLAN-12 diff)
+- [x] Ctrl+C shuts down cleanly
+- [x] `--interval 30s` optional polling fallback for environments without native watch
+- [x] Logs each watch-triggered index to stdout with timestamp
 
 ## Scope
 
@@ -67,3 +67,10 @@ provena watch
 ## Handoff to next plan
 
 PLAN-14 offers git hook for users who prefer commit-time indexing over watch.
+
+---
+## Completion
+- **Completed**: 2026-06-23
+- **PR**: (pending)
+- **Verified by**: `cd cli && npm test` — `watch.test.mjs` + full suite green
+- **Notes**: chokidar watcher with gitignore + config excludes; debounced incremental `runIndex`; `--interval` polling fallback; SIGINT/SIGTERM shutdown.
