@@ -24,7 +24,7 @@ so publish checklist, versioning, and onboarding copy get full attention.
 - [ ] Package bundles or clearly documents Python store dependency (`provena` pip package future OR `npx provena serve` downloads runtime — document chosen approach)
 - [ ] `docs/QUICKSTART.md` with 5-minute flow
 - [ ] README badge + link to `roadmap/`
-- [ ] Version tagging policy: cli version independent of server version
+- [ ] Version tagging policy: full semver `0.1.x` patch bumps (`0.1.0`, `0.1.1`, …) — do not use two-segment `0.1` → `0.2`; CLI version independent of server version; git tags `cli-v0.1.N`
 - [ ] `npm publish` dry-run + smoke on verdaccio or `npm pack` install test
 
 ## Scope
@@ -69,7 +69,7 @@ so publish checklist, versioning, and onboarding copy get full attention.
 |------|--------|
 | `docs/QUICKSTART.md` | create |
 | `cli/README.md` | create |
-| `cli/package.json` | version bump, repository field |
+| `cli/package.json` | patch bump only on `0.1.x` line (`0.1.0` → `0.1.1`), repository field |
 | `.github/workflows/publish-cli.yml` | create |
 | `README.md` | quickstart link |
 

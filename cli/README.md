@@ -60,3 +60,17 @@ import { chunkTypeScriptFile, runIndex, ProvenaClient } from "@provena/cli";
 ```
 
 Built output lives under `dist/`. Package is not published to npm yet (plan 26).
+
+## Versioning
+
+`@provena/cli` uses **full semver** (`MAJOR.MINOR.PATCH`). During the Indexer
+MVP line, stay on **`0.1.x`** and bump only the **patch** for each release:
+
+| Release kind | Example | Do not use |
+|--------------|---------|------------|
+| Indexer fix / docs / test gate | `0.1.0` → `0.1.1` | `0.1` → `0.2` (two-segment) |
+| Next indexer milestone | `0.2.0` (explicit bump) | Skipping patch subversions |
+
+- Current: `0.1.0` (see `package.json`)
+- npm git tags: `cli-v0.1.0`, `cli-v0.1.1`, …
+- CLI version is independent of the Python store / server version
