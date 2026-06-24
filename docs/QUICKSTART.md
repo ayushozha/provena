@@ -17,7 +17,7 @@ Index TypeScript/JavaScript into governed local memory and search from your term
 ```powershell
 git clone https://github.com/ayushozha/provena.git $env:USERPROFILE\provena-store
 cd $env:USERPROFILE\provena-store
-pip install -e .
+pip install -e .   # installs the ``app`` Python store package only
 ```
 
 Keep this path. The CLI finds `app/main.py` via `PROVENA_STORE_ROOT` or by walking up from your project.
