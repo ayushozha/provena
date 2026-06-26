@@ -64,6 +64,9 @@ settings = IntelligenceSettings()
 
 def _is_local_provider(url: str) -> bool:
     try:
+        # urlparse requires a scheme to detect hostname correctly
+        if "://" not in url:
+            url = "http://" + url
         parsed = urlparse(url)
         hostname = parsed.hostname or ""
         if not hostname:
@@ -77,18 +80,16 @@ def _is_local_provider(url: str) -> bool:
         return False
 
 
-# Patch None to empty string for local providers so downstream code doesn't
-# have to handle None. For non-local providers, log a warning and continue so
-# the app can start (the missing key will fail at the point of use, not at
-# import time).
+# Patch None to empty string so downstream code doesn't have to handle None.
+# For non-local providers, log a warning — the missing key will fail at the
+# point of use (clearer error) instead of crashing at import time.
 if settings.embedding_api_key is None:
-    if _is_local_provider(settings.embedding_base_url):
-        settings.embedding_api_key = SecretStr("")
-    else:
+    if not _is_local_provider(settings.embedding_base_url):
         logger.warning(
             "PROVENA_INTEL_EMBEDDING_API_KEY is required for non-local embedding providers. "
             "Embedding calls will fail until the key is configured."
         )
+    settings.embedding_api_key = SecretStr("")
 
 llm_enabled = bool(settings.llm_model or settings.llm_providers)
 if settings.llm_api_key is None:
@@ -97,5 +98,4 @@ if settings.llm_api_key is None:
             "PROVENA_INTEL_LLM_API_KEY is required for non-local LLM providers. "
             "LLM calls will fail until the key is configured."
         )
-    else:
-        settings.llm_api_key = SecretStr("")
+    settings.llm_api_key = SecretStr("")
