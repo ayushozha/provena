@@ -9,6 +9,7 @@ import { runIndexCommand } from "./commands/index.js";
 import { runInit } from "./commands/init.js";
 import { runSearchCommand } from "./commands/search.js";
 import { runServe } from "./commands/serve.js";
+import { runWatchCommand } from "./commands/watch.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -32,6 +33,7 @@ const COMMANDS: CommandInfo[] = [
   { name: "config", description: "Show or manage local config" },
   { name: "discover", description: "List indexable files (debug)" },
   { name: "index", description: "Index TS/JS repo into Provena memories" },
+  { name: "watch", description: "Watch repo and run incremental index on save" },
   { name: "search", description: "Search indexed memories in the local store" },
   { name: "serve", description: "start local SQLite store (uvicorn)" },
   { name: "doctor", description: "check config and store health" },
@@ -55,6 +57,9 @@ function printHelp(): void {
     "  --dry-run    List TS/JS files without writing",
     "  --path       Limit to a repo subtree (e.g. src/auth)",
     "  --full       Re-index every file (ignore content-hash skip)",
+    "",
+    "Watch options:",
+    "  --interval   Polling fallback (e.g. 30s) when native watch is unavailable",
     "",
     "Search options:",
     "  --limit N    Maximum hits (default 5)",
@@ -150,6 +155,17 @@ function main(argv: string[]): void {
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`provena index: ${message}`);
+        process.exit(1);
+      });
+    return;
+  }
+
+  if (command === "watch") {
+    runWatchCommand(args.slice(1))
+      .then((code) => process.exit(code))
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`provena watch: ${message}`);
         process.exit(1);
       });
     return;
