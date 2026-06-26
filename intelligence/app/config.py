@@ -1,7 +1,7 @@
 """Provena Intelligence layer configuration via Pydantic Settings."""
 
 import logging
-import sys
+from urllib.parse import urlparse
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings
@@ -63,24 +63,39 @@ settings = IntelligenceSettings()
 
 
 def _is_local_provider(url: str) -> bool:
-    return any(host in url for host in ("localhost", "127.0.0.1"))
+    try:
+        # urlparse requires a scheme to detect hostname correctly
+        if "://" not in url and not url.startswith("//"):
+            url = "//" + url
+        parsed = urlparse(url)
+        hostname = parsed.hostname or ""
+        if not hostname:
+            return False
+        return (
+            hostname in ("localhost", "127.0.0.1", "::1") or
+            hostname.endswith(".local") or
+            "." not in hostname  # Docker Compose service names (no TLD)
+        )
+    except Exception:
+        return False
 
 
-# Fail fast if required API keys are missing. Patch None to empty string for
-# local providers so downstream code doesn't have to handle None.
+# Patch None to empty string so downstream code doesn't have to handle None.
+# For non-local providers, log a warning — the missing key will fail at the
+# point of use (clearer error) instead of crashing at import time.
 if settings.embedding_api_key is None:
     if not _is_local_provider(settings.embedding_base_url):
-        logger.error(
-            "PROVENA_INTEL_EMBEDDING_API_KEY is required for non-local embedding providers"
+        logger.warning(
+            "PROVENA_INTEL_EMBEDDING_API_KEY is required for non-local embedding providers. "
+            "Embedding calls will fail until the key is configured."
         )
-        sys.exit(1)
     settings.embedding_api_key = SecretStr("")
 
 llm_enabled = bool(settings.llm_model or settings.llm_providers)
 if settings.llm_api_key is None:
     if llm_enabled and not _is_local_provider(settings.llm_base_url):
-        logger.error(
-            "PROVENA_INTEL_LLM_API_KEY is required for non-local LLM providers"
+        logger.warning(
+            "PROVENA_INTEL_LLM_API_KEY is required for non-local LLM providers. "
+            "LLM calls will fail until the key is configured."
         )
-        sys.exit(1)
     settings.llm_api_key = SecretStr("")
