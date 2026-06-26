@@ -87,7 +87,9 @@ def create_app() -> FastAPI:
 
     def require_admin(access: AccessContext | None) -> None:
         if access is None:
-            return
+            raise HTTPException(status_code=401, detail="authentication required")
+        if access.principal_id is None:
+            raise HTTPException(status_code=401, detail="authentication required")
         if access.role not in {"admin", "superadmin"}:
             raise HTTPException(status_code=403, detail="admin access required")
 

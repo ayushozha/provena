@@ -87,7 +87,7 @@ READABLE_PERMISSION_LEVELS = frozenset(level.value for level in PermissionLevel)
 @dataclass(slots=True)
 class AccessContext:
     tenant_id: str | None = None
-    role: str = "superadmin"
+    role: str = "viewer"
     principal_id: str | None = None
     key_id: str | None = None
     groups: list[str] = field(default_factory=list)

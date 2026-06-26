@@ -14,7 +14,8 @@ services:
     environment:
       - RUST_LOG=info
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:50051/healthz"]
+      # gRPC server — curl cannot speak gRPC. Use TCP connectivity check.
+      test: ["CMD", "sh", "-c", "nc -z localhost 50051 || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -30,7 +31,9 @@ services:
       args:
         CMD: gateway
     ports:
-      - "${PROVENA_GATEWAY_HOST_PORT:-8080}:8080"
+      # Local dev only: binds to localhost. For production, enable auth
+      # (PROVENA_AUTH_ENABLED=true) and place the gateway behind a reverse proxy.
+      - "127.0.0.1:${PROVENA_GATEWAY_HOST_PORT:-8080}:8080"
     environment:
       - PROVENA_LISTEN_ADDR=:8080
       - PROVENA_ORCHESTRATION_URL=http://orchestration:50051
@@ -137,7 +140,7 @@ services:
       - PROVENA_INTEL_PIPELINE_URL=http://store:8000
       - PROVENA_INTEL_ORCHESTRATION_URL=http://orchestration:50051
       - PROVENA_INTEL_EMBEDDING_PROVIDER=local
-      - PROVENA_INTEL_EMBEDDING_DIMENSIONS=384
+      - PROVENA_INTEL_EMBEDDING_DIMENSIONS=768
     depends_on:
       store:
         condition: service_healthy

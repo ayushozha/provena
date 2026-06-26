@@ -1,7 +1,12 @@
 """Provena Intelligence layer configuration via Pydantic Settings."""
 
+import logging
+import sys
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
 
 
 class IntelligenceSettings(BaseSettings):
@@ -24,7 +29,7 @@ class IntelligenceSettings(BaseSettings):
     embedding_model: str = "nomic-embed-text"
     embedding_dimensions: int = 768
     embedding_base_url: str = "http://localhost:11434/v1"
-    embedding_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    embedding_api_key: SecretStr | None = Field(default=None, repr=False)
 
     model_router_default_tier: str = "balanced"
 
@@ -46,7 +51,7 @@ class IntelligenceSettings(BaseSettings):
     #    shorthand. OpenRouter is one such provider that itself fans out to many
     #    models behind a single key.
     llm_base_url: str = "http://localhost:11434/v1"
-    llm_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    llm_api_key: SecretStr | None = Field(default=None, repr=False)
     llm_model: str = ""
     llm_providers: str = ""
 
@@ -55,3 +60,27 @@ class IntelligenceSettings(BaseSettings):
 
 
 settings = IntelligenceSettings()
+
+
+def _is_local_provider(url: str) -> bool:
+    return any(host in url for host in ("localhost", "127.0.0.1"))
+
+
+# Fail fast if required API keys are missing. Patch None to empty string for
+# local providers so downstream code doesn't have to handle None.
+if settings.embedding_api_key is None:
+    if not _is_local_provider(settings.embedding_base_url):
+        logger.error(
+            "PROVENA_INTEL_EMBEDDING_API_KEY is required for non-local embedding providers"
+        )
+        sys.exit(1)
+    settings.embedding_api_key = SecretStr("")
+
+llm_enabled = bool(settings.llm_model or settings.llm_providers)
+if settings.llm_api_key is None:
+    if llm_enabled and not _is_local_provider(settings.llm_base_url):
+        logger.error(
+            "PROVENA_INTEL_LLM_API_KEY is required for non-local LLM providers"
+        )
+        sys.exit(1)
+    settings.llm_api_key = SecretStr("")
