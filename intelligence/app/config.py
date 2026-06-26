@@ -65,8 +65,8 @@ settings = IntelligenceSettings()
 def _is_local_provider(url: str) -> bool:
     try:
         # urlparse requires a scheme to detect hostname correctly
-        if "://" not in url:
-            url = "http://" + url
+        if "://" not in url and not url.startswith("//"):
+            url = "//" + url
         parsed = urlparse(url)
         hostname = parsed.hostname or ""
         if not hostname:
