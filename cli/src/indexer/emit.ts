@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
@@ -113,10 +114,21 @@ export function loadIndexState(projectRoot: string): IndexState {
   return raw;
 }
 
-export function saveIndexState(projectRoot: string, state: IndexState): void {
+export function saveIndexState(
+  projectRoot: string,
+  state: IndexState,
+  options: { atomic?: boolean } = {},
+): void {
   const path = indexStatePath(projectRoot);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  const payload = `${JSON.stringify(state, null, 2)}\n`;
+  if (!options.atomic) {
+    writeFileSync(path, payload, "utf8");
+    return;
+  }
+  const tempPath = `${path}.tmp`;
+  writeFileSync(tempPath, payload, "utf8");
+  renameSync(tempPath, path);
 }
 
 /** Mirrors ProvenaStore._fingerprint for local deduplication. */

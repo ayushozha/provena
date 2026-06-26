@@ -17,12 +17,12 @@ delete/supersede semantics and must be correct in isolation.
 
 ## Success criteria
 
-- [ ] Second `provena index` on unchanged repo completes in <5s with "0 files changed"
-- [ ] Editing one file re-indexes only that file (+ relation updates)
-- [ ] Deleted file triggers memory soft-delete or supersede for its artifact + chunks
-- [ ] `--full` flag forces complete re-index
-- [ ] Index state tracks `{ path, sha256, memoryIds[], relationIds[] }`
-- [ ] Tests: modify fixture file → only that path re-indexed
+- [x] Second `provena index` on unchanged repo completes in <5s with "0 files changed"
+- [x] Editing one file re-indexes only that file (+ relation updates)
+- [x] Deleted file triggers memory delete for its artifact + chunks
+- [x] `--full` flag forces complete re-index
+- [x] Index state tracks `{ path, sha256, memoryIds[], relationIds[] }`
+- [x] Tests: modify fixture file → only that path re-indexed
 
 ## Scope
 
@@ -70,3 +70,10 @@ node cli/tests/incremental.test.mjs
 ## Handoff to next plan
 
 PLAN-13 watch mode calls incremental index on file events.
+
+---
+## Completion
+- **Completed**: 2026-06-23
+- **PR**: (pending)
+- **Verified by**: `cd cli && npm test` — `incremental.test.mjs` green with full suite
+- **Notes**: Default `provena index` skips unchanged sha256; `--full` re-processes all discovered files; removed paths delete store memories via `DELETE /v1/memories/{id}`.

@@ -296,6 +296,28 @@ export class ProvenaClient {
     return (await response.json()) as MemoryRecord;
   }
 
+  async deleteMemory(memoryId: string, hardDelete = false): Promise<boolean> {
+    const query = hardDelete ? "?hard_delete=true" : "";
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/v1/memories/${encodeURIComponent(memoryId)}${query}`,
+      {
+        method: "DELETE",
+        signal: AbortSignal.timeout(this.timeoutMs),
+      },
+    );
+    if (response.status === 404) {
+      return false;
+    }
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(
+        `DELETE /v1/memories/${memoryId} failed (${response.status}): ${detail.slice(0, 500)}`,
+      );
+    }
+    const body = (await response.json()) as { deleted?: boolean };
+    return body.deleted === true;
+  }
+
   async healthz(): Promise<boolean> {
     try {
       const response = await this.fetchImpl(`${this.baseUrl}/healthz`, {

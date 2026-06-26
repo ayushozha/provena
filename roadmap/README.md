@@ -42,7 +42,7 @@ dependencies. Parallel work is fine when prerequisites do not overlap.
 |---|------|-------|--------|
 | 01–10 | `completed/01-…` through `10-…` | Indexer MVP (CLI init → search) | **Done** — see `completed/` |
 | 11 | `11-multi-language-chunking.md` | Python, Go, Rust chunkers | Planned |
-| 12 | `12-incremental-index-fingerprints.md` | Re-index only changed files | Planned |
+| 12 | `completed/12-incremental-index-fingerprints.md` | Re-index only changed files | **Done** |
 | 13 | `13-provena-watch.md` | File watcher + debounced re-index | Planned |
 | 14 | `14-git-hook-integration.md` | Optional pre-commit index hook | Planned |
 | 15 | `15-postgres-store-backend.md` | `PostgresStore` implementing store contract | Landed (#22); housekeeping pending |

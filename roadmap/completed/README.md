@@ -28,7 +28,13 @@ Finished vertical slices live here with the original plan content plus a
 
 Tag `cli-v0.1.0` after adding `NPM_TOKEN` to GitHub secrets.
 
-**Next:** `roadmap/plan/11-multi-language-chunking.md` or plan 12 incremental index.
+## Incremental index (plan 12) — complete
+
+| Plan | Focus |
+|------|-------|
+| 12 | SHA-256 diff skip, `--full`, delete-on-remove |
+
+**Next:** `roadmap/plan/13-provena-watch.md` or plan 11 multi-language chunking.
 
 ## Server-side plans also landed (not moved here yet)
 
