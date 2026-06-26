@@ -862,6 +862,7 @@ class ProvenaApiTests(unittest.TestCase):
                 "workspace_id": "ws-growth",
                 "user_id": "pm-1",
             },
+            headers=self._admin_headers(),
         )
         self.assertEqual(erase_response.status_code, 200)
         self.assertEqual(erase_response.json()["deleted_memories"], 1)
@@ -930,6 +931,7 @@ class ProvenaApiTests(unittest.TestCase):
                 },
                 "reason": "litigation freeze",
             },
+            headers=self._admin_headers(),
         )
         self.assertEqual(hold_response.status_code, 200)
 
@@ -953,7 +955,8 @@ class ProvenaApiTests(unittest.TestCase):
         self.assertEqual(held.json()["status"], "held")
 
         release = self.client.delete(
-            "/v1/admin/legal-hold/hold-growth?tenant_id=tenant-acme"
+            "/v1/admin/legal-hold/hold-growth?tenant_id=tenant-acme",
+            headers=self._admin_headers(),
         )
         self.assertEqual(release.status_code, 200)
 
