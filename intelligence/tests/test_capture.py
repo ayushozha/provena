@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 from typing import Any
 
-from app.capture import CaptureEngine, CaptureSignal
+from app.capture import CaptureEngine, CaptureSignal, FailureStateStore
 
 
 class MockStore:
@@ -40,8 +42,13 @@ class MockStore:
 class TestCaptureEngine(unittest.TestCase):
     def setUp(self) -> None:
         self.store = MockStore()
-        self.engine = CaptureEngine(self.store)
+        self._tmpdir = tempfile.TemporaryDirectory()
+        failure_path = Path(self._tmpdir.name) / "failures.json"
+        self.engine = CaptureEngine(self.store, failure_state=FailureStateStore(path=failure_path))
         self.scope = {"tenant_id": "test", "project_id": "provena"}
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
 
     def _run(self, coro):
         return asyncio.run(coro)
@@ -56,7 +63,8 @@ class TestCaptureEngine(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertTrue(results[0].created)
         self.assertEqual(results[0].kind, "workflow")
-        self.assertEqual(self.store.writes[0]["kind"], "workflow")
+        self.assertEqual(self.store.writes[0]["kind"], "instruction")
+        self.assertEqual(self.store.writes[0]["metadata"]["capture_kind"], "workflow")
         self.assertIn("pnpm", self.store.writes[0]["summary"].lower())
 
     def test_preference_correction_yields_preference_memory(self) -> None:
@@ -69,7 +77,7 @@ class TestCaptureEngine(unittest.TestCase):
             text="TypeError: cannot read property 'foo' of undefined",
             signal_type="tool_failure",
             scope=self.scope,
-            error_signature="err-ts-foo",
+            error_signature="err-ts-foo-unit-test",
         )
         first = self._run(self.engine.capture_failure(signal))
         self.assertIsNotNone(first)
@@ -88,7 +96,9 @@ class TestCaptureEngine(unittest.TestCase):
         assert third is not None
         self.assertFalse(third.created)
 
-        mistake_writes = [w for w in self.store.writes if w["kind"] == "mistake"]
+        mistake_writes = [
+            w for w in self.store.writes if w.get("metadata", {}).get("capture_kind") == "mistake"
+        ]
         self.assertEqual(len(mistake_writes), 1)
 
     def test_decision_capture(self) -> None:
@@ -105,6 +115,16 @@ class TestCaptureEngine(unittest.TestCase):
         result = self._run(self.engine.capture_handoff(signal))
         self.assertTrue(result.created)
         self.assertEqual(result.kind, "handoff")
+
+    def test_secret_redaction_before_store_write(self) -> None:
+        signal = CaptureSignal(
+            text="Use sk-EVALTEST-TOKEN not ghp_EVALTESTTOKEN for deploys",
+            scope=self.scope,
+        )
+        result = self._run(self.engine.capture_correction(signal))
+        self.assertTrue(result.created)
+        self.assertNotIn("sk-EVALTEST", self.store.writes[-1]["content"])
+        self.assertIn("[REDACTED]", self.store.writes[-1]["content"])
 
     def test_supersede_on_similar_workflow(self) -> None:
         self.store.memories.append(

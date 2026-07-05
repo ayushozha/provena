@@ -1,20 +1,14 @@
 #!/usr/bin/env python3
-"""Git post-commit hook — extract commit decision and POST to Provena store.
-
-Fail-open: never blocks git; logs and exits 0 on store failure.
-Idempotent per commit SHA via ~/.provena/hook-state/commits.json.
-"""
+"""Git post-commit hook — extract commit decision and POST to capture API."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
-from _common import default_scope, post_memory, setup_logging, store_url
+from _common import default_scope, post_capture, setup_logging
 
 _STATE = Path.home() / ".provena" / "hook-state" / "commits.json"
 
@@ -50,11 +44,12 @@ def _git(args: list[str]) -> str:
 
 
 def _latest_commit() -> dict[str, str]:
-    sha = _git(["rev-parse", "HEAD"])
-    subject = _git(["log", "-1", "--pretty=%s"])
-    body = _git(["log", "-1", "--pretty=%b"])
-    diff_stat = _git(["show", "--stat", "--oneline", "-1"])
-    return {"sha": sha, "subject": subject, "body": body, "diff_stat": diff_stat}
+    return {
+        "sha": _git(["rev-parse", "HEAD"]),
+        "subject": _git(["log", "-1", "--pretty=%s"]),
+        "body": _git(["log", "-1", "--pretty=%b"]),
+        "diff_stat": _git(["show", "--stat", "--oneline", "-1"]),
+    }
 
 
 def _decision_summary(commit: dict[str, str]) -> str:
@@ -64,7 +59,7 @@ def _decision_summary(commit: dict[str, str]) -> str:
         parts.append(body.splitlines()[0])
     diff = commit.get("diff_stat", "").strip()
     if diff:
-        parts.append(diff.splitlines()[-1] if diff else "")
+        parts.append(diff.splitlines()[-1])
     return " | ".join(p for p in parts if p)[:400]
 
 
@@ -72,20 +67,15 @@ def main() -> int:
     setup_logging()
     commit = _latest_commit()
     sha = commit.get("sha", "")
-    if not sha:
-        return 0
-    if _load_seen().get(sha):
+    if not sha or _load_seen().get(sha):
         return 0
 
     summary = _decision_summary(commit)
-    scope = default_scope()
-    ok = post_memory(
+    response = post_capture(
         {
-            "kind": "decision",
-            "scope": scope,
-            "content": summary,
-            "title": commit.get("subject") or f"Commit {sha[:8]}",
-            "summary": f"Decision from commit {sha[:8]}: {summary}",
+            "text": summary,
+            "signal_type": "message",
+            "scope": default_scope(),
             "source_references": [
                 {
                     "source_type": "git",
@@ -95,10 +85,9 @@ def main() -> int:
                 }
             ],
             "metadata": {"commit_sha": sha, "capture_source": "post_commit_hook"},
-        },
-        store=store_url(),
+        }
     )
-    if ok:
+    if response is not None:
         _mark_seen(sha)
     return 0
 

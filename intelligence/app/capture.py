@@ -4,13 +4,31 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
+
+# Store MemoryKind enum (codex) may not yet include workflow/mistake; map to
+# accepted kinds and preserve the logical kind in metadata.capture_kind.
+STORE_KIND_MAP: dict[str, str] = {
+    "workflow": "instruction",
+    "mistake": "artifact",
+    "handoff": "episode",
+    "preference": "preference",
+    "decision": "decision",
+}
+
+_SECRET_PATTERNS = (
+    re.compile(r"sk-[a-zA-Z0-9-]{8,19}"),
+    re.compile(r"ghp_[a-zA-Z0-9_]{8,19}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"-----BEGIN (?:RSA )?PRIVATE KEY-----"),
+)
 
 _CORRECTION_MARKERS = (
     "use ",
@@ -29,6 +47,21 @@ _CORRECTION_MARKERS = (
 _PREFERENCE_MARKERS = ("prefer", "like better", "favorite", "rather than")
 _DECISION_MARKERS = ("decided", "decision:", "chose", "going with", "we will")
 _HANDOFF_MARKERS = ("handoff", "hand off", "passing to", "next owner", "context for")
+
+
+def redact_secrets(text: str) -> str:
+    redacted = text
+    for pattern in _SECRET_PATTERNS:
+        redacted = pattern.sub("[REDACTED]", redacted)
+    return redacted
+
+
+def normalize_scope(scope: dict[str, Any]) -> dict[str, Any]:
+    tenant = str(scope.get("tenant_id") or "local").strip() or "local"
+    normalized = {**scope, "tenant_id": tenant}
+    if normalized.get("project_id") is None and scope.get("project_id") is None:
+        normalized["project_id"] = "default"
+    return normalized
 
 
 class StoreClient(Protocol):
@@ -60,6 +93,33 @@ class CaptureResult:
     reason: str = ""
 
 
+class FailureStateStore:
+    """Persistent failure counts shared across hook invocations and API calls."""
+
+    def __init__(self, path: Path | None = None) -> None:
+        if path is None:
+            env_path = os.environ.get("PROVENA_CAPTURE_FAILURE_STATE", "").strip()
+            path = Path(env_path) if env_path else Path.home() / ".provena" / "capture-state" / "failures.json"
+        self.path = path
+
+    def load(self) -> dict[str, int]:
+        if not self.path.is_file():
+            return {}
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            return {str(k): int(v) for k, v in data.items()}
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return {}
+
+    def increment(self, signature: str) -> int:
+        counts = self.load()
+        count = counts.get(signature, 0) + 1
+        counts[signature] = count
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(counts, indent=2), encoding="utf-8")
+        return count
+
+
 class HttpStoreClient:
     """Thin HTTP client for Contract B store writes."""
 
@@ -74,9 +134,10 @@ class HttpStoreClient:
         *,
         kind: str | None = None,
     ) -> list[dict[str, Any]]:
-        payload: dict[str, Any] = {"query": query, "scope": scope, "limit": 10}
-        if kind:
-            payload["kinds"] = [kind]
+        payload: dict[str, Any] = {"query": query, "scope": normalize_scope(scope), "limit": 10}
+        store_kind = STORE_KIND_MAP.get(kind or "", kind)
+        if store_kind:
+            payload["kinds"] = [store_kind]
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(f"{self.store_url}/v1/memories/search", json=payload)
             if response.status_code >= 400:
@@ -86,7 +147,8 @@ class HttpStoreClient:
     async def write(self, payload: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(f"{self.store_url}/v1/memories", json=payload)
-            response.raise_for_status()
+            if response.status_code >= 400:
+                return {"created": False, "memory": payload, "error": response.text}
             body = response.json()
             memory = body.get("memory") or payload
             return {"created": bool(body.get("created", True)), "memory": memory}
@@ -95,9 +157,14 @@ class HttpStoreClient:
 class CaptureEngine:
     """Turn corrections, failures, decisions, and handoffs into store memories."""
 
-    def __init__(self, store: StoreClient) -> None:
+    def __init__(
+        self,
+        store: StoreClient,
+        *,
+        failure_state: FailureStateStore | None = None,
+    ) -> None:
         self.store = store
-        self._failure_counts: dict[str, int] = {}
+        self.failure_state = failure_state or FailureStateStore()
         self._mistake_written: set[str] = set()
         self._session_fingerprints: set[str] = set()
 
@@ -106,7 +173,7 @@ class CaptureEngine:
         if not text:
             return []
 
-        if signal.signal_type == "tool_failure" or signal.error_signature:
+        if signal.signal_type in {"tool_failure", "mistake"} or signal.error_signature:
             result = await self._capture_repeated_failure(signal)
             return [result] if result else []
 
@@ -137,8 +204,7 @@ class CaptureEngine:
         if not signature:
             return None
 
-        count = self._failure_counts.get(signature, 0) + 1
-        self._failure_counts[signature] = count
+        count = self.failure_state.increment(signature)
         if count < 2 or signature in self._mistake_written:
             return CaptureResult(created=False, kind="mistake", reason="awaiting_second_occurrence")
 
@@ -165,23 +231,25 @@ class CaptureEngine:
         kind: str,
         summary: str,
     ) -> CaptureResult:
-        fingerprint = self._content_fingerprint(kind, summary, signal.scope)
+        scope = normalize_scope(signal.scope)
+        fingerprint = self._content_fingerprint(kind, summary, scope)
         if fingerprint in self._session_fingerprints:
             return CaptureResult(created=False, kind=kind, reason="session_duplicate")
 
-        superseded_id = await self._find_supersede_target(kind, summary, signal.scope)
+        superseded_id = await self._find_supersede_target(kind, summary, scope)
         memory_id = str(uuid.uuid4())
+        content = redact_secrets(signal.text.strip())
+        store_kind = STORE_KIND_MAP.get(kind, kind)
         payload = {
             "memory_id": memory_id,
-            "kind": kind,
-            "scope": signal.scope,
-            "content": signal.text.strip(),
+            "kind": store_kind,
+            "scope": scope,
+            "content": content,
             "title": summary[:120],
             "summary": summary,
             "source_references": signal.source_references,
-            "metadata": signal.metadata,
+            "metadata": {**signal.metadata, "capture_kind": kind},
             "supersedes_memory_id": superseded_id,
-            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         stored = await self.store.write(payload)
         created = bool(stored.get("created", True))
@@ -203,12 +271,13 @@ class CaptureEngine:
         scope: dict[str, Any],
     ) -> str | None:
         candidates = await self.store.search(summary, scope, kind=kind)
-        if not candidates:
-            candidates = await self.store.search(kind, scope, kind=kind)
         summary_terms = {t for t in summary.lower().split() if len(t) > 3}
         best_id: str | None = None
         best_overlap = 0
         for memory in candidates:
+            meta_kind = (memory.get("metadata") or {}).get("capture_kind")
+            if meta_kind and meta_kind != kind:
+                continue
             existing = (memory.get("summary") or memory.get("content") or "").lower()
             if not existing:
                 continue

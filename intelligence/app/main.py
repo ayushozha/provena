@@ -17,7 +17,11 @@ from app.embeddings import EmbeddingManager
 from app.extract_facts import FactExtractor
 from app.llm import LLMClient
 from app.model_router import ModelRouter
+from app.capture import CaptureEngine, CaptureSignal, HttpStoreClient
 from app.models import (
+    CaptureRequest,
+    CaptureResponse,
+    CaptureResultItem,
     CompactRequest,
     ModelTier,
     ReadSearchRequest,
@@ -71,6 +75,7 @@ async def lifespan(app: FastAPI):
     app.state.write_pipeline = write_pipeline
     app.state.read_pipeline = read_pipeline
     app.state.overview_generator = overview_generator
+    app.state.capture_engine = CaptureEngine(HttpStoreClient(store_url=settings.pipeline_url))
 
     yield
 
@@ -95,6 +100,44 @@ def create_app() -> FastAPI:
         role = (request.headers.get("X-Provena-Role") or "").strip().lower()
         if role and role not in {"editor", "admin", "superadmin"}:
             raise HTTPException(status_code=403, detail="write access required")
+
+    # ------------------------------------------------------------------
+    # Living-memory capture
+    # ------------------------------------------------------------------
+
+    @app.post("/v1/capture/process", response_model=CaptureResponse)
+    async def capture_process(request: Request, body: CaptureRequest) -> CaptureResponse:
+        require_write(request)
+        engine: CaptureEngine = request.app.state.capture_engine
+        refs: list[dict[str, Any]] = []
+        for source in body.source_references:
+            if hasattr(source, "model_dump"):
+                refs.append(source.model_dump())
+            elif isinstance(source, dict):
+                refs.append(source)
+            elif isinstance(source, str):
+                refs.append({"source_type": "uri", "source_id": source, "uri": source})
+        signal = CaptureSignal(
+            text=body.text,
+            signal_type=body.signal_type,
+            scope=body.scope,
+            source_references=refs,
+            metadata=body.metadata,
+            error_signature=body.error_signature,
+        )
+        results = await engine.process(signal)
+        return CaptureResponse(
+            results=[
+                CaptureResultItem(
+                    created=r.created,
+                    kind=r.kind,
+                    memory_id=r.memory_id,
+                    superseded_id=r.superseded_id,
+                    reason=r.reason,
+                )
+                for r in results
+            ]
+        )
 
     # ------------------------------------------------------------------
     # Write pipeline

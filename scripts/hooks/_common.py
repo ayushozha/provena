@@ -14,6 +14,10 @@ from typing import Any
 LOG = logging.getLogger("provena.hooks")
 
 
+def capture_url() -> str:
+    return os.environ.get("PROVENA_CAPTURE_URL", "http://127.0.0.1:8081/v1/capture/process").strip()
+
+
 def store_url() -> str:
     """Resolve store URL from env or .provena/config.json."""
     env = os.environ.get("PROVENA_STORE_URL", "").strip()
@@ -37,22 +41,24 @@ def default_scope() -> dict[str, Any]:
     return {"tenant_id": tenant, "project_id": project}
 
 
-def post_memory(payload: dict[str, Any], *, store: str | None = None) -> bool:
-    """POST a memory to the store. Returns True on success; never raises."""
-    url = f"{(store or store_url()).rstrip('/')}/v1/memories"
+def post_capture(payload: dict[str, Any], *, url: str | None = None) -> dict[str, Any] | None:
+    """POST to intelligence capture API. Returns parsed JSON on success, else None."""
+    target = (url or capture_url()).strip()
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
-        url,
+        target,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "X-Provena-Role": "editor"},
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            return 200 <= response.status < 300
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        LOG.warning("store write failed (fail-open): %s", exc)
-        return False
+        with urllib.request.urlopen(request, timeout=8) as response:
+            if response.status >= 400:
+                return None
+            return json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        LOG.warning("capture API failed (fail-open): %s", exc)
+        return None
 
 
 def setup_logging() -> None:
