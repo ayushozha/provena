@@ -24,7 +24,7 @@ dev = ["fakeredis>=2.26.0"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*"]
+include = ["app*", "evals*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

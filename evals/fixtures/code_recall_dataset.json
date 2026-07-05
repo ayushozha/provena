@@ -1,0 +1,54 @@
+{
+  "queries": [
+    {
+      "query": "Where is sqlite-vec used for vector search?",
+      "relevant_paths": ["app/store.py"],
+      "relevant_symbols": ["VectorIndex"]
+    },
+    {
+      "query": "How does the intelligence layer classify memory kinds on write?",
+      "relevant_paths": ["intelligence/app/write_pipeline.py"],
+      "relevant_symbols": ["_classify"]
+    },
+    {
+      "query": "Where is workflow and mistake capture implemented?",
+      "relevant_paths": ["intelligence/app/capture.py"],
+      "relevant_symbols": ["CaptureEngine"]
+    },
+    {
+      "query": "Where are git post-commit capture hooks?",
+      "relevant_paths": ["scripts/hooks/post_commit.py"],
+      "relevant_symbols": ["main"]
+    },
+    {
+      "query": "Where is the eval scorecard runner?",
+      "relevant_paths": ["evals/run.py"],
+      "relevant_symbols": ["run_scorecard"]
+    },
+    {
+      "query": "How is Redis hot cache wired for search?",
+      "relevant_paths": ["app/redis_cache.py"],
+      "relevant_symbols": ["RedisHotCache"]
+    },
+    {
+      "query": "Where is MemoryKind defined?",
+      "relevant_paths": ["app/models.py"],
+      "relevant_symbols": ["MemoryKind"]
+    },
+    {
+      "query": "Where is connector scheduling implemented?",
+      "relevant_paths": ["app/connector_scheduler.py"],
+      "relevant_symbols": ["ConnectorSchedulerService"]
+    },
+    {
+      "query": "Where is retrieval quality MRR computed?",
+      "relevant_paths": ["intelligence/eval/retrieval_quality.py"],
+      "relevant_symbols": ["mrr"]
+    },
+    {
+      "query": "Where is the Provena CLI benchmark plan documented?",
+      "relevant_paths": ["roadmap/plan/25-code-recall-benchmark.md"],
+      "relevant_symbols": []
+    }
+  ]
+}

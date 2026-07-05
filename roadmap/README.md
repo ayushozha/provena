@@ -11,6 +11,10 @@ This folder tracks work toward the grand vision:
 **Indexer MVP (plans 01–10): complete** on `main` — `provena init` → `serve` →
 `index` → `search` for TypeScript/JavaScript. Verify with `cd cli && npm test`.
 
+**Living memory + evals (grok track):** `intelligence/app/capture.py`,
+`scripts/hooks/`, and `python -m evals.run` scorecard — see
+[docs/POSITIONING.md](../docs/POSITIONING.md) for wedge vs enterprise scope.
+
 **npm quickstart (plan 26): publish-ready** at `@provena/cli@0.1.0` — see
 [docs/QUICKSTART.md](../docs/QUICKSTART.md). Tag `cli-v0.1.0` + `NPM_TOKEN` to
 publish; routine releases stay on `0.1.x` patches only.
@@ -41,21 +45,21 @@ dependencies. Parallel work is fine when prerequisites do not overlap.
 | # | Plan | Focus | Status |
 |---|------|-------|--------|
 | 01–10 | `completed/01-…` through `10-…` | Indexer MVP (CLI init → search) | **Done** — see `completed/` |
-| 11 | `11-multi-language-chunking.md` | Python, Go, Rust chunkers | Planned |
+| 11 | `11-multi-language-chunking.md` | Python, Go, Rust chunkers | **Shipped** (claude track — Python/Go/Rust chunkers in CLI) |
 | 12 | `completed/12-incremental-index-fingerprints.md` | Re-index only changed files | **Done** |
 | 13 | `completed/13-provena-watch.md` | File watcher + debounced re-index | **Done** (stacked on plan 12) |
 | 14 | `14-git-hook-integration.md` | Optional pre-commit index hook | Planned |
-| 15 | `15-postgres-store-backend.md` | `PostgresStore` implementing store contract | Landed (#22); housekeeping pending |
+| 15 | `completed/15-postgres-store-backend.md` | `PostgresStore` implementing store contract | **Done** |
 | 16 | `16-pgvector-migration.md` | Postgres schema + pgvector KNN | Planned |
 | 17 | `17-provena-connect-postgres.md` | `provena connect` + env-based backend switch | Planned |
-| 18 | `18-redis-hot-cache.md` | `RedisHotCache` for search responses | Landed (#31); housekeeping pending |
+| 18 | `completed/18-redis-hot-cache.md` | `RedisHotCache` for search responses | **Done** |
 | 19 | `19-redis-embedding-cache.md` | Embedding cache by content hash | Planned |
 | 20 | `20-compose-redis-wire-up.md` | Redis in docker-compose polyglot stack | Planned |
 | 21 | `21-trigger-phrases-from-code.md` | Register symbol names in orchestration | Planned |
 | 22 | `22-temporal-graph-code-navigation.md` | Graph traversal API for code symbols | Planned |
-| 23 | `23-mcp-config-generator.md` | `provena mcp` Cursor/Claude setup | Planned |
+| 23 | `23-mcp-config-generator.md` | `provena mcp` Cursor/Claude setup | **Superseded** — Node stdio MCP in CLI is primary for local product |
 | 24 | `24-index-status-and-health.md` | `provena status` operator view | Planned |
-| 25 | `25-code-recall-benchmark.md` | Eval harness for repo indexing quality | Planned |
+| 25 | `25-code-recall-benchmark.md` | Eval harness for repo indexing quality | **Done** (grok track — `evals/` scorecard + `code_recall`) |
 | 26 | `completed/26-…` | npm publish + quickstart | **Publish-ready** — tag `cli-v0.1.0` |
 
 ## Completion template

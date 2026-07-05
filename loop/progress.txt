@@ -1,4 +1,5 @@
 # Provena loop progress
+[2026-07-05T00:00:00Z] GROK living-memory track: shipped intelligence/app/capture.py, scripts/hooks/, evals/ scorecard; reconciled PROVENA-001 passes=false and PROVENA-008 to blocked/red; added docs/POSITIONING.md.
 [2026-04-15T07:15:32Z] TESTER-PLAN iteration 1 failed for PROVENA-001 with exit code 2.
 [2026-04-15T07:15:35Z] TESTER-PLAN iteration 2 failed for PROVENA-001 with exit code 2.
 [2026-04-15T07:15:37Z] TESTER-PLAN iteration 3 failed for PROVENA-001 with exit code 2.

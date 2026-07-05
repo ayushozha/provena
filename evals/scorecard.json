@@ -1,0 +1,54 @@
+{
+  "timestamp": "2026-07-05T08:08:58.994041+00:00",
+  "scope": {
+    "tenant_id": "eval",
+    "project_id": "provena"
+  },
+  "benchmarks": {
+    "code_recall": {
+      "hit_rate@1": 0.2,
+      "hit_rate@5": 0.4,
+      "mrr": 0.2667,
+      "avg_tokens": 12100,
+      "queries_scored": 10,
+      "files_indexed": 666
+    },
+    "agent_in_the_loop": {
+      "without_brain_avg": 0.0,
+      "with_brain_avg": 1.0,
+      "lift_delta": 1.0,
+      "tasks_scored": 2,
+      "judge": "heuristic"
+    },
+    "mistake_recall": {
+      "mistake_recalled_first": true,
+      "top_kind": "mistake",
+      "top_memory_id": "04722f23-dbba-48a5-a937-f3d0ee1ef700",
+      "pass": true
+    },
+    "stale_fact_suppression": {
+      "stale_excluded": true,
+      "active_results": 1,
+      "pass": true
+    },
+    "secret_not_stored": {
+      "redacted": true,
+      "stored_excerpt": "Deploy key [REDACTED] and token [REDACTED]",
+      "pass": true
+    },
+    "cold_start": {
+      "metrics": {
+        "entity_recall": 1.0,
+        "decision_recall": 1.0,
+        "summary_quality": 1.0
+      },
+      "skipped": false
+    }
+  },
+  "elapsed_seconds": 1.039,
+  "headline": {
+    "brain_lift_delta": 1.0,
+    "mistake_recall_pass": true,
+    "code_recall_hit_rate@5": 0.4
+  }
+}
