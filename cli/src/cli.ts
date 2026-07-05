@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runBrainCommand } from "./commands/brain.js";
 import { runConfigShow } from "./commands/config-show.js";
 import { runDiscover } from "./commands/discover.js";
 import { runDoctor } from "./commands/doctor.js";
@@ -30,6 +31,7 @@ interface CommandInfo {
 
 const COMMANDS: CommandInfo[] = [
   { name: "init", description: "Initialize .provena/ config in a git repo" },
+  { name: "brain", description: "Generate repo.brain.md bootloader + repo.map.json" },
   { name: "config", description: "Show or manage local config" },
   { name: "discover", description: "List indexable files (debug)" },
   { name: "index", description: "Index TS/JS repo into Provena memories" },
@@ -166,6 +168,17 @@ function main(argv: string[]): void {
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`provena watch: ${message}`);
+        process.exit(1);
+      });
+    return;
+  }
+
+  if (command === "brain") {
+    runBrainCommand(args.slice(1))
+      .then((code) => process.exit(code))
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`provena brain: ${message}`);
         process.exit(1);
       });
     return;
