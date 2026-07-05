@@ -71,7 +71,7 @@ Emit the two files in Contract D. `repo.brain.md` is the **bootloader the first 
 4. **Entrypoints** — where execution starts.
 5. **Commands** — test / build / run / deploy.
 6. **Conventions** — package manager, language(s), test framework, notable patterns.
-7. **How to get more** — "call `provena` MCP tools (`get_context_pack`, `search_memory`) or `npx provena search <q>` for deeper context; do not read the whole tree."
+7. **How to get more** — call the `provena` MCP tools (`get_context_pack`, `search_memory`) or run `npx provena search <q>`; do not read the whole tree.
 `repo.map.json` is the machine-readable twin (Contract D schema).
 
 ### A4 — `init` upgrade — agent wiring
