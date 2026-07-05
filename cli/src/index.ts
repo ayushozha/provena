@@ -112,6 +112,31 @@ export { chunkTypeScriptFile } from "./indexer/chunkers/typescript.js";
 export type { ChunkKind, CodeChunk, FileMeta } from "./indexer/types.js";
 
 export {
+  classifyFile,
+  classifyFiles,
+  classifyRole,
+  type ClassifiedFile,
+  type ClassifyOptions,
+  type FileRole,
+} from "./indexer/classify.js";
+
+export { detectRepoIntelligence, type RepoCommands, type RepoIntelligence } from "./brain/detect.js";
+
+export {
+  REPO_BRAIN_FILENAME,
+  REPO_MAP_FILENAME,
+  brainExists,
+  buildRepoMap,
+  renderBrainMarkdown,
+  writeBrain,
+  type RepoMap,
+  type TopDirectory,
+  type WriteBrainResult,
+} from "./brain/brain.js";
+
+export { printBrainHelp, runBrainCommand } from "./commands/brain.js";
+
+export {
   computeIndexDiff,
   filesToIndex,
   incrementalCountsFromDiff,
