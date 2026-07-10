@@ -44,6 +44,7 @@ function testMemoryCredentialGuard() {
 
 async function testSecretDenylistRegardlessOfGitignore() {
   const root = mkdtempSync(join(tmpdir(), "provena-security-denylist-"));
+  let testError;
   try {
     mkdirSync(join(root, "src"), { recursive: true });
     writeFileSync(join(root, "src", "ok.ts"), "export const ok = 1;\n", "utf8");
@@ -59,9 +60,23 @@ async function testSecretDenylistRegardlessOfGitignore() {
     assert.ok(!paths.includes("secret.pem"));
     assert.ok(!paths.includes(".env.production"));
     assert.ok(!paths.includes(".npmrc"));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+  } catch (error) {
+    testError = error;
   }
+  try {
+    rmSync(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50,
+    });
+  } catch (cleanupError) {
+    if (testError) {
+      throw new AggregateError([testError, cleanupError], "security test and cleanup failed");
+    }
+    throw cleanupError;
+  }
+  if (testError) throw testError;
 }
 
 function testLoopbackStoreUrlValidation() {
