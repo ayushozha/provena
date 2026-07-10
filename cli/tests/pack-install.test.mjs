@@ -33,6 +33,23 @@ function run(command, args, cwd) {
   });
 }
 
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function waitForExit(pids, attempts = 20) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (![...pids].some(processAlive)) return true;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  }
+  return ![...pids].some(processAlive);
+}
+
 const pack = run("npm", ["pack", "--silent"], cliRoot);
 assert.equal(pack.status, 0, pack.stderr || pack.stdout);
 
@@ -40,6 +57,9 @@ const tarball = readdirSync(cliRoot).find((f) => f.endsWith(".tgz"));
 assert.ok(tarball, "npm pack did not create a tarball");
 
 const scratch = mkdtempSync(join(tmpdir(), "provena-pack-install-"));
+const cliBin = join(scratch, "node_modules", "@provena", "cli", "dist", "cli.js");
+const daemonPids = new Set();
+let testError;
 try {
   run("npm", ["init", "-y"], scratch);
   assert.equal(run("git", ["init", "--quiet"], scratch).status, 0);
@@ -66,7 +86,6 @@ try {
     "tarball install did not add @provena/cli",
   );
 
-  const cliBin = join(scratch, "node_modules", "@provena/cli", "dist", "cli.js");
   const versionRun = spawnSync(process.execPath, [cliBin, "--version"], {
     cwd: scratch,
     encoding: "utf8",
@@ -219,6 +238,8 @@ try {
   const daemonBeforeRepair = JSON.parse(
     readFileSync(join(scratch, ".provena", "daemon.pid"), "utf8"),
   );
+  assert.ok(Number.isSafeInteger(daemonBeforeRepair.pid) && daemonBeforeRepair.pid > 0);
+  daemonPids.add(daemonBeforeRepair.pid);
   const persistedBrainModule = join(persistedPackage, "dist", "brain", "index.js");
   writeFileSync(
     persistedBrainModule,
@@ -235,22 +256,25 @@ try {
   const daemonAfterRepair = JSON.parse(
     readFileSync(join(scratch, ".provena", "daemon.pid"), "utf8"),
   );
+  assert.ok(Number.isSafeInteger(daemonAfterRepair.pid) && daemonAfterRepair.pid > 0);
+  daemonPids.add(daemonAfterRepair.pid);
   assert.notEqual(
     daemonAfterRepair.pid,
     daemonBeforeRepair.pid,
     "a live daemon must restart onto the repaired runtime",
   );
   assert.equal(daemonAfterRepair.intervalMs, 10_000, "runtime upgrade preserves cadence");
-  try {
-    assert.equal(run(process.execPath, [cliBin, "daemon", "status"], scratch).status, 0);
-  } finally {
-    run(process.execPath, [cliBin, "daemon", "stop"], scratch);
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      if (run(process.execPath, [cliBin, "daemon", "status"], scratch).status !== 0) break;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
-    }
-  }
+  assert.equal(
+    processAlive(daemonBeforeRepair.pid),
+    false,
+    "runtime repair must stop the prior daemon process",
+  );
+  daemonPids.delete(daemonBeforeRepair.pid);
+  assert.equal(run(process.execPath, [cliBin, "daemon", "status"], scratch).status, 0);
+  assert.equal(run(process.execPath, [cliBin, "daemon", "stop"], scratch).status, 0);
+  assert.equal(waitForExit(new Set([daemonAfterRepair.pid])), true, "daemon must exit after stop");
   assert.equal(run(process.execPath, [cliBin, "daemon", "status"], scratch).status, 1);
+  daemonPids.delete(daemonAfterRepair.pid);
   renameSync(join(scratch, "node_modules", "@provena", "cli"), join(scratch, "node_modules", "@provena", "cli-disabled"));
   const portableRun = run(
     process.execPath,
@@ -258,9 +282,52 @@ try {
     scratch,
   );
   assert.equal(portableRun.status, 0, portableRun.stderr || portableRun.stdout);
-} finally {
-  rmSync(scratch, { recursive: true, force: true });
-  rmSync(join(cliRoot, tarball), { force: true });
+} catch (error) {
+  testError = error;
 }
+
+const cleanupErrors = [];
+try {
+  const daemonState = join(scratch, ".provena", "daemon.pid");
+  if (existsSync(daemonState)) {
+    const pid = JSON.parse(readFileSync(daemonState, "utf8")).pid;
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
+      throw new Error(`packed-install daemon state has invalid pid: ${String(pid)}`);
+    }
+    daemonPids.add(pid);
+  }
+  if (existsSync(cliBin) && [...daemonPids].some(processAlive)) {
+    spawnSync(process.execPath, [cliBin, "daemon", "stop"], {
+      cwd: scratch,
+      encoding: "utf8",
+      shell: false,
+      timeout: 5_000,
+    });
+  }
+  if (!waitForExit(daemonPids)) {
+    throw new Error(`packed-install daemon remained alive: ${[...daemonPids].filter(processAlive).join(", ")}`);
+  }
+  rmSync(scratch, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 50,
+  });
+} catch (error) {
+  cleanupErrors.push(error);
+}
+try {
+  rmSync(join(cliRoot, tarball), { force: true });
+} catch (error) {
+  cleanupErrors.push(error);
+}
+const cleanupError = cleanupErrors.length > 1
+  ? new AggregateError(cleanupErrors, "packed-install cleanup failed")
+  : cleanupErrors[0];
+if (testError && cleanupError) {
+  throw new AggregateError([testError, cleanupError], "packed-install test and cleanup failed");
+}
+if (testError) throw testError;
+if (cleanupError) throw cleanupError;
 
 console.log("pack-install.test: ok");
