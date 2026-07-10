@@ -25,7 +25,7 @@ const runCli = (args) => new Promise((resolvePromise) => {
   let stderr = "";
   child.stdout.on("data", (chunk) => { stdout += chunk; });
   child.stderr.on("data", (chunk) => { stderr += chunk; });
-  child.once("exit", (code) => resolvePromise({ code, stdout, stderr }));
+  child.once("close", (code) => resolvePromise({ code, stdout, stderr }));
 });
 const processAlive = (pid) => {
   try {
@@ -113,7 +113,16 @@ try {
   spawnedPid = current.pid;
   assert.notEqual(current.token, staleToken);
   assert.notEqual(current.pid, process.pid);
-  assert.equal(readDaemonStatus(root).running, true);
+  assert.equal(Number(starts[0]), current.pid, "the sole started daemon must own the state file");
+  const heartbeat = JSON.parse(
+    readFileSync(join(root, ".provena", "daemon.heartbeat"), "utf8"),
+  );
+  const directlyAlive = processAlive(current.pid);
+  assert.equal(
+    readDaemonStatus(root).running,
+    true,
+    `daemon state was not authoritative: ${JSON.stringify({ current, heartbeat, directlyAlive })}`,
+  );
 
   assert.equal(runDaemonCommand(["stop"], root), 0);
   const stop = JSON.parse(readFileSync(join(root, ".provena", "daemon.stop"), "utf8"));
