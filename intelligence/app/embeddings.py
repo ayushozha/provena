@@ -21,7 +21,7 @@ class EmbeddingManager:
     def __init__(
         self,
         provider: str = "local",
-        model_id: str = "local-minilm",
+        model_id: str = "",
         dimensions: int = 384,
         base_url: str = "http://localhost:11434/v1",
         api_key: str = "",
@@ -31,6 +31,8 @@ class EmbeddingManager:
         self.dimensions = dimensions
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        if self.provider != "local" and not self.model_id.strip():
+            raise ValueError("model_id must be configured for non-local embedding providers")
         # Lazily created persistent client so the per-request embedding call
         # reuses one connection pool instead of a fresh TCP/TLS handshake each time.
         self._client: httpx.Client | None = None
@@ -43,7 +45,7 @@ class EmbeddingManager:
         """Generate an embedding vector for *text*.
 
         The ``openai`` provider produces real semantic embeddings from any
-        OpenAI-compatible embeddings endpoint (the default runtime path),
+        OpenAI-compatible embeddings endpoint when configured,
         pointed by env vars. The ``local`` provider produces deterministic
         SHA-256 pseudo-embeddings with no semantic signal -- retained only
         for offline/unit tests.
@@ -84,7 +86,7 @@ class EmbeddingManager:
             dimensions=self.dimensions,
             max_tokens=512,
             version="1.0",
-            is_default=(self.model_id == "local-minilm"),
+            is_default=True,
         )
 
     def detect_drift(

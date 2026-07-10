@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import {
-  appendFileSync,
   cpSync,
   mkdtempSync,
   mkdirSync,
@@ -158,7 +157,102 @@ async function main() {
     assert.ok(elapsedMs < 5000, `unchanged re-index should be fast (${elapsedMs}ms)`);
 
     const authPath = join(projectRoot, "src", "auth.ts");
-    appendFileSync(authPath, "\n// incremental-test-edit\n", "utf8");
+    const stateBeforeReplacement = JSON.parse(
+      readFileSync(join(projectRoot, ".provena", "index-state.json"), "utf8"),
+    );
+    const oldAuthMemoryId = stateBeforeReplacement.chunks["src/auth.ts::authenticate"];
+    assert.ok(oldAuthMemoryId, "precondition: authenticate memory should be indexed");
+    writeFileSync(
+      authPath,
+      readFileSync(authPath, "utf8").replace('name: "tester"', 'name: "replacement-user"'),
+      "utf8",
+    );
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.endsWith("/v1/admin/entities/batch")) {
+        return new Response('{"detail":"forced replacement failure"}', {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return originalFetch(input, init);
+    };
+    let failedReplacement;
+    try {
+      failedReplacement = await runIndex(config, projectRoot, { cwd: projectRoot });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    assert.equal(failedReplacement.exitCode, 1, "forced replacement should fail");
+    assert.equal(failedReplacement.summary.filesFailed, 1);
+    const stateAfterFailure = JSON.parse(
+      readFileSync(join(projectRoot, ".provena", "index-state.json"), "utf8"),
+    );
+    assert.equal(
+      stateAfterFailure.files["src/auth.ts"].sha256,
+      stateBeforeReplacement.files["src/auth.ts"].sha256,
+      "failed replacement must preserve the prior local index entry",
+    );
+    const client = new ProvenaClient({ storeUrl });
+    const oldSearch = await client.searchMemories({
+      query: "tester",
+      scope: {
+        tenant_id: config.scope.tenant_id,
+        project_id: config.scope.project_id,
+      },
+      limit: 10,
+    });
+    assert.ok(
+      oldSearch.results.some((result) => result.memory.memory_id === oldAuthMemoryId),
+      "failed replacement must leave the prior store memory searchable",
+    );
+
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (
+        init?.method === "DELETE" &&
+        url.includes(`/v1/memories/${encodeURIComponent(oldAuthMemoryId)}`)
+      ) {
+        return new Response('{"detail":"forced cleanup failure"}', {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return originalFetch(input, init);
+    };
+    let failedCleanup;
+    try {
+      failedCleanup = await runIndex(config, projectRoot, { cwd: projectRoot });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    assert.equal(failedCleanup.exitCode, 1, "failed obsolete-memory cleanup should fail the file");
+    assert.equal(failedCleanup.summary.filesFailed, 1);
+    const stateAfterCleanupFailure = JSON.parse(
+      readFileSync(join(projectRoot, ".provena", "index-state.json"), "utf8"),
+    );
+    assert.equal(
+      stateAfterCleanupFailure.files["src/auth.ts"].sha256,
+      stateBeforeReplacement.files["src/auth.ts"].sha256,
+      "cleanup failure must retain the prior local index entry for retry",
+    );
+    const oldSearchAfterCleanupFailure = await client.searchMemories({
+      query: "tester",
+      scope: {
+        tenant_id: config.scope.tenant_id,
+        project_id: config.scope.project_id,
+      },
+      limit: 10,
+    });
+    assert.ok(
+      oldSearchAfterCleanupFailure.results.some(
+        (result) => result.memory.memory_id === oldAuthMemoryId,
+      ),
+      "cleanup failure must not forget a still-live obsolete memory",
+    );
 
     const third = await runIndex(config, projectRoot, { cwd: projectRoot });
     assert.equal(third.exitCode, 0, "single-file change index should succeed");
@@ -169,6 +263,85 @@ async function main() {
       readFileSync(join(projectRoot, ".provena", "index-state.json"), "utf8"),
     );
     assert.ok(stateAfterEdit.files["src/auth.ts"]?.sha256, "auth.ts sha256 should be tracked");
+    const newAuthMemoryId = stateAfterEdit.chunks["src/auth.ts::authenticate"];
+    assert.notEqual(newAuthMemoryId, oldAuthMemoryId, "changed function needs a new memory");
+    const testMemoryId = stateAfterEdit.chunks["src/auth.test.ts::import"];
+    const authArtifactId = stateAfterEdit.files["src/auth.ts"].artifactMemoryId;
+    assert.ok(
+      stateAfterEdit.relations[`${testMemoryId}|derived_from|${authArtifactId}`],
+      "an unchanged test import must be rewired to the changed implementation artifact",
+    );
+    await assert.rejects(
+      () => client.getMemory(oldAuthMemoryId),
+      /failed \(404\)/,
+      "obsolete generated memory should be hard-deleted after successful replacement",
+    );
+
+    writeFileSync(
+      authPath,
+      readFileSync(authPath, "utf8").replace("replacement-user", "Replacement-User"),
+      "utf8",
+    );
+    const caseOnly = await runIndex(config, projectRoot, { cwd: projectRoot });
+    assert.equal(caseOnly.exitCode, 0, "case-only source change should succeed");
+    assert.equal(caseOnly.summary.filesChanged, 1);
+    const stateAfterCaseOnly = JSON.parse(
+      readFileSync(join(projectRoot, ".provena", "index-state.json"), "utf8"),
+    );
+    const caseChangedAuthMemoryId = stateAfterCaseOnly.chunks["src/auth.ts::authenticate"];
+    assert.notEqual(
+      caseChangedAuthMemoryId,
+      newAuthMemoryId,
+      "generated memory identity must preserve source case",
+    );
+    assert.ok(
+      stateAfterCaseOnly.relations[
+        `${testMemoryId}|derived_from|${stateAfterCaseOnly.files["src/auth.ts"].artifactMemoryId}`
+      ],
+      "incoming import edge must survive a case-only target update",
+    );
+
+    const typesPath = join(projectRoot, "src", "types.ts");
+    writeFileSync(typesPath, `// shifted source span\n${readFileSync(typesPath, "utf8")}`, "utf8");
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input.url;
+      const body = typeof init?.body === "string" ? init.body : "";
+      if (url.endsWith("/v1/memories/relations") && body.includes('"relation":"derived_from"')) {
+        return new Response('{"detail":"forced cross-file relation failure"}', {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return originalFetch(input, init);
+    };
+    let failedCrossFile;
+    try {
+      failedCrossFile = await runIndex(config, projectRoot, { cwd: projectRoot });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    assert.equal(failedCrossFile.exitCode, 1, "cross-file edge failure must fail the run");
+    assert.ok(failedCrossFile.summary.filesFailed >= 1);
+    const stateAfterCrossFailure = JSON.parse(
+      readFileSync(join(projectRoot, ".provena", "index-state.json"), "utf8"),
+    );
+    assert.equal(
+      stateAfterCrossFailure.files["src/auth.ts"].sha256,
+      "",
+      "failed unchanged importer must be marked for retry",
+    );
+
+    const crossRetry = await runIndex(config, projectRoot, { cwd: projectRoot });
+    assert.equal(crossRetry.exitCode, 0, "cross-file edge retry should succeed");
+    const stateAfterCrossRetry = JSON.parse(
+      readFileSync(join(projectRoot, ".provena", "index-state.json"), "utf8"),
+    );
+    const importMemoryId = stateAfterCrossRetry.chunks["src/auth.ts::import"];
+    const typesArtifactId = stateAfterCrossRetry.files["src/types.ts"].artifactMemoryId;
+    assert.ok(
+      stateAfterCrossRetry.relations[`${importMemoryId}|derived_from|${typesArtifactId}`],
+      "unchanged importer must point to the changed target after retry",
+    );
 
     unlinkSync(join(projectRoot, "src", "types.ts"));
 

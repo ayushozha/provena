@@ -1,9 +1,10 @@
 {
   "name": "@provena/cli",
   "version": "0.1.0",
+  "license": "UNLICENSED",
   "type": "module",
   "private": false,
-  "description": "CLI for indexing repos into the Provena governed memory plane.",
+  "description": "One-click living repository memory, context, graph, and MCP layer for coding agents.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ayushozha/provena.git",
@@ -28,7 +29,7 @@
   "types": "./dist/index.d.ts",
   "sideEffects": false,
   "engines": {
-    "node": ">=18"
+    "node": ">=18.14.1"
   },
   "publishConfig": {
     "access": "public"
@@ -37,14 +38,19 @@
     "provena",
     "memory",
     "cli",
-    "codebase-index"
+    "codebase-index",
+    "mcp",
+    "repo-graph",
+    "coding-agents"
   ],
   "files": [
     "dist"
   ],
+  "bundleDependencies": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node tests/smoke.mjs && node tests/config.test.mjs && node tests/build-artifacts.test.mjs && node tests/cli-behavior.test.mjs && node tests/pack.test.mjs && node tests/pack-install.test.mjs && node tests/security.test.mjs && node tests/discover.test.mjs && node tests/chunk-typescript.test.mjs && node tests/emit.integration.mjs && node tests/relations.test.mjs && node tests/index.e2e.mjs && node tests/incremental.test.mjs && node tests/watch.test.mjs && node tests/search.test.mjs && node tests/index.concurrency.test.mjs",
+    "prepack": "npm run build",
+    "test": "npm run build && node tests/smoke.mjs && node tests/config.test.mjs && node tests/build-artifacts.test.mjs && node tests/cli-behavior.test.mjs && node tests/repo-brain-kernel.test.mjs && node tests/repo-brain-lock.test.mjs && node tests/repo-brain-events.test.mjs && node tests/repo-graph-algorithms.test.mjs && node tests/context-packet.test.mjs && node tests/agents.test.mjs && node tests/install-integrations.test.mjs && node tests/filesystem-safety.test.mjs && node tests/daemon-state.test.mjs && node tests/mcp-server.test.mjs && node tests/neo4j-adapter.test.mjs && node tests/pack.test.mjs && node tests/pack-install.test.mjs && node tests/security.test.mjs && node tests/discover.test.mjs && node tests/chunk-typescript.test.mjs && node tests/emit.integration.mjs && node tests/relations.test.mjs && node tests/index.e2e.mjs && node tests/incremental.test.mjs && node tests/watch.test.mjs && node tests/search.test.mjs && node tests/index.concurrency.test.mjs",
     "test:smoke": "node tests/smoke.mjs",
     "test:discover": "node tests/discover.test.mjs",
     "test:chunk-typescript": "node tests/chunk-typescript.test.mjs",
@@ -53,12 +59,15 @@
     "test:search": "npm run build && node tests/search.test.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "chokidar": "^4.0.3",
     "fast-glob": "^3.3.3",
     "ignore": "^7.0.3",
+    "neo4j-driver": "^6.2.0",
     "tree-sitter-javascript": "^0.23.1",
     "tree-sitter-typescript": "^0.23.2",
-    "web-tree-sitter": "^0.26.9"
+    "web-tree-sitter": "^0.26.9",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

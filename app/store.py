@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import struct
 import uuid
@@ -208,19 +209,38 @@ class ProvenaStore:
         payload: MemoryCreate,
         access: AccessContext | None = None,
     ) -> MemoryWriteResult:
-        fingerprint = self._fingerprint(payload.scope, payload.kind.value, payload.title, payload.content)
+        if (
+            access is not None
+            and access.role != "superadmin"
+            and access.tenant_id not in {None, payload.scope.tenant_id}
+        ):
+            raise ValueError("memory scope tenant does not match access tenant")
+        fingerprint = self._fingerprint(
+            payload.scope,
+            payload.kind.value,
+            payload.title,
+            payload.content,
+            payload.metadata,
+        )
         existing = self.conn.execute(
-            "SELECT memory_id FROM memories WHERE fingerprint = ?",
+            "SELECT * FROM memories WHERE fingerprint = ?",
             (fingerprint,),
         ).fetchone()
         if existing:
-            record = self.get_memory(existing["memory_id"], access=access)
+            old_record = self._row_to_record(existing)
+            if not self._can_read_memory(old_record, access):
+                raise ValueError("memory not found")
+            if existing["status"] == MemoryStatus.DELETED.value:
+                raise ValueError(
+                    "memory fingerprint is tombstoned; deleted memories require an explicit restore workflow"
+                )
+            record = self.get_memory(
+                existing["memory_id"],
+                access=access,
+                enforce_source_grants=True,
+            )
             if record is None:
-                row = self.conn.execute(
-                    "SELECT * FROM memories WHERE memory_id = ?",
-                    (existing["memory_id"],),
-                ).fetchone()
-                record = self._row_to_record(row)
+                raise ValueError("memory not found")
             return MemoryWriteResult(created=False, memory=record)
 
         now = self._iso_now()
@@ -347,7 +367,13 @@ class ProvenaStore:
         next_acl = payload.acl if payload.acl is not None else existing.acl
         next_sources = payload.source_references if payload.source_references is not None else existing.source_references
         next_triggers = payload.trigger_phrases if payload.trigger_phrases is not None else existing.trigger_phrases
-        next_fingerprint = self._fingerprint(existing.scope, next_kind.value, next_title, next_content)
+        next_fingerprint = self._fingerprint(
+            existing.scope,
+            next_kind.value,
+            next_title,
+            next_content,
+            next_metadata,
+        )
         old_snapshot = existing.model_dump(mode="json")
         now = self._iso_now()
 
@@ -3219,9 +3245,20 @@ class ProvenaStore:
             return MemoryLayer.USER
         return MemoryLayer.ORGANIZATION
 
-    def _fingerprint(self, scope: ScopeEnvelope, kind: str, title: str | None, content: str) -> str:
+    def _fingerprint(
+        self,
+        scope: ScopeEnvelope,
+        kind: str,
+        title: str | None,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
         scope_json = self._to_json(scope.model_dump(exclude_none=True))
-        value = "|".join([scope_json, kind, (title or "").strip().lower(), content.strip().lower()])
+        generated = (metadata or {}).get("provena_generated_fingerprint")
+        if isinstance(generated, str) and re.fullmatch(r"[0-9a-f]{64}", generated):
+            value = "|".join([scope_json, "provena-generated-v1", generated])
+        else:
+            value = "|".join([scope_json, kind, (title or "").strip().lower(), content.strip().lower()])
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
     def _scope_matches(self, record_scope: ScopeEnvelope, request_scope: ScopeEnvelope) -> bool:

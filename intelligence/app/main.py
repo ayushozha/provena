@@ -36,7 +36,11 @@ async def lifespan(app: FastAPI):
         model_id=settings.embedding_model,
         dimensions=settings.embedding_dimensions,
         base_url=settings.embedding_base_url,
-        api_key=settings.embedding_api_key.get_secret_value(),
+        api_key=(
+            settings.embedding_api_key.get_secret_value()
+            if settings.embedding_api_key
+            else ""
+        ),
     )
     model_router = ModelRouter.from_settings(settings)
     llm_key = settings.llm_api_key.get_secret_value() if settings.llm_api_key else ""

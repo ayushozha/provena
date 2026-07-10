@@ -111,7 +111,7 @@ class WritePipeline:
         update_overview: bool,
         fact_count: int = 1,
     ) -> WriteResponse:
-        fingerprint = self._fingerprint(request.content, request.scope)
+        fingerprint = self._fingerprint(request.content, request.scope, request.metadata)
         is_dup, dup_id = self._deduplicate(fingerprint)
         if is_dup:
             return WriteResponse(created=False, memory={"duplicate_of": dup_id}, pipeline_trace=trace)
@@ -220,10 +220,19 @@ class WritePipeline:
             return "fact"
         return "fact"
 
-    def _fingerprint(self, content: str, scope: dict[str, Any]) -> str:
-        normalised = content.strip().lower()
+    def _fingerprint(
+        self,
+        content: str,
+        scope: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        generated = (metadata or {}).get("provena_generated_fingerprint")
         scope_str = json.dumps(scope, sort_keys=True)
-        return hashlib.sha256(f"{normalised}|{scope_str}".encode()).hexdigest()
+        if isinstance(generated, str) and re.fullmatch(r"[0-9a-f]{64}", generated):
+            value = f"{scope_str}|provena-generated-v1|{generated}"
+        else:
+            value = f"{content.strip().lower()}|{scope_str}"
+        return hashlib.sha256(value.encode()).hexdigest()
 
     def _deduplicate(self, fingerprint: str) -> tuple[bool, str | None]:
         if fingerprint in self._fingerprints:

@@ -236,6 +236,144 @@ class ProvenaApiTests(unittest.TestCase):
             self.client.get(f"/v1/memories/{mem_id}", headers=headers).status_code, 404
         )
 
+    def test_duplicate_create_respects_soft_delete_tombstone(self) -> None:
+        headers = self._admin_headers()
+        payload = {
+            "kind": "fact",
+            "scope": {"tenant_id": "tenant-acme", "workspace_id": "ws-growth"},
+            "title": "Restorable repository fact",
+            "content": "The generated index can safely restore this exact fact.",
+            "tags": ["indexed"],
+        }
+        created = self.client.post("/v1/memories", json=payload, headers=headers)
+        self.assertEqual(created.status_code, 200)
+        memory_id = created.json()["memory"]["memory_id"]
+
+        deleted = self.client.delete(f"/v1/memories/{memory_id}", headers=headers)
+        self.assertEqual(deleted.status_code, 200)
+        hidden = self.client.post(
+            "/v1/memories/search",
+            json={
+                "query": "Restorable repository fact",
+                "scope": payload["scope"],
+                "limit": 5,
+            },
+            headers=headers,
+        )
+        self.assertEqual(hidden.json()["results"], [])
+
+        repeated = self.client.post("/v1/memories", json=payload, headers=headers)
+        self.assertEqual(repeated.status_code, 409)
+        self.assertIn("tombstoned", repeated.text)
+
+        visible = self.client.post(
+            "/v1/memories/search",
+            json={
+                "query": "Restorable repository fact",
+                "scope": payload["scope"],
+                "limit": 5,
+            },
+            headers=headers,
+        )
+        self.assertEqual(visible.json()["results"], [])
+
+        hard_deleted = self.client.delete(
+            f"/v1/memories/{memory_id}",
+            params={"hard_delete": "true"},
+            headers=headers,
+        )
+        self.assertEqual(hard_deleted.status_code, 200)
+        recreated = self.client.post("/v1/memories", json=payload, headers=headers)
+        self.assertEqual(recreated.status_code, 200)
+        self.assertTrue(recreated.json()["created"])
+        self.assertNotEqual(recreated.json()["memory"]["memory_id"], memory_id)
+
+    def test_generated_memory_fingerprint_tracks_source_identity(self) -> None:
+        base = {
+            "kind": "fact",
+            "scope": {"tenant_id": "tenant-acme", "project_id": "repo-brain"},
+            "title": "src/example.ts::run",
+            "content": "export function run() { return true; }",
+            "metadata": {"provena_generated_fingerprint": "a" * 64},
+        }
+        first = self.client.post("/v1/memories", json=base)
+        self.assertEqual(first.status_code, 200)
+        first_id = first.json()["memory"]["memory_id"]
+
+        moved = {
+            **base,
+            "metadata": {"provena_generated_fingerprint": "b" * 64},
+        }
+        second = self.client.post("/v1/memories", json=moved)
+        self.assertEqual(second.status_code, 200)
+        self.assertTrue(second.json()["created"])
+        self.assertNotEqual(second.json()["memory"]["memory_id"], first_id)
+
+        duplicate = self.client.post("/v1/memories", json=moved)
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertFalse(duplicate.json()["created"])
+        self.assertEqual(
+            duplicate.json()["memory"]["memory_id"],
+            second.json()["memory"]["memory_id"],
+        )
+
+    def test_duplicate_create_cannot_cross_tenant_or_acl_boundary(self) -> None:
+        owner_headers = self._admin_headers("tenant-acme")
+        payload = {
+            "kind": "fact",
+            "scope": {"tenant_id": "tenant-acme", "workspace_id": "ws-growth"},
+            "title": "Tenant-private restorable fact",
+            "content": "Only an authorized tenant principal may restore this fact.",
+        }
+        created = self.client.post("/v1/memories", json=payload, headers=owner_headers)
+        self.assertEqual(created.status_code, 200)
+        memory_id = created.json()["memory"]["memory_id"]
+
+        active_duplicate = self.client.post(
+            "/v1/memories",
+            json=payload,
+            headers=self._viewer_headers("tenant-acme", "unauthorized-viewer"),
+        )
+        self.assertEqual(active_duplicate.status_code, 404)
+        self.assertNotIn(memory_id, active_duplicate.text)
+
+        self.assertEqual(
+            self.client.delete(f"/v1/memories/{memory_id}", headers=owner_headers).status_code,
+            200,
+        )
+        cross_tenant_restore = self.client.post(
+            "/v1/memories",
+            json=payload,
+            headers=self._admin_headers("tenant-other"),
+        )
+        self.assertEqual(cross_tenant_restore.status_code, 403)
+        self.assertNotIn(memory_id, cross_tenant_restore.text)
+
+        still_hidden = self.client.post(
+            "/v1/memories/search",
+            json={"query": payload["title"], "scope": payload["scope"], "limit": 5},
+            headers=owner_headers,
+        )
+        self.assertEqual(still_hidden.status_code, 200)
+        self.assertEqual(still_hidden.json()["results"], [])
+
+        owner_replay = self.client.post("/v1/memories", json=payload, headers=owner_headers)
+        self.assertEqual(owner_replay.status_code, 409)
+        self.assertIn("tombstoned", owner_replay.text)
+
+    def test_create_rejects_scope_tenant_mismatch(self) -> None:
+        response = self.client.post(
+            "/v1/memories",
+            json={
+                "kind": "fact",
+                "scope": {"tenant_id": "tenant-other", "workspace_id": "ws-growth"},
+                "title": "Cross-tenant create",
+                "content": "Must not be created under a mismatched access tenant.",
+            },
+            headers=self._admin_headers("tenant-acme"),
+        )
+        self.assertEqual(response.status_code, 403)
+
     def test_update_history_and_feedback_roundtrip(self) -> None:
         headers = self._admin_headers()
         created = self.client.post(
@@ -470,6 +608,21 @@ class ProvenaApiTests(unittest.TestCase):
             headers=self._viewer_headers(principal_id="pm-1"),
         )
         self.assertEqual(blocked_get.status_code, 404)
+        blocked_duplicate = self.client.post(
+            "/v1/memories",
+            json={
+                "kind": "artifact",
+                "scope": {"tenant_id": "tenant-acme", "workspace_id": "ws-growth"},
+                "title": "Blocked roadmap memory",
+                "content": "Permission smoke roadmap notes should stay hidden without a matching grant.",
+                "source_references": [
+                    {"source_type": "channel", "source_id": "src-private-user"}
+                ],
+            },
+            headers=self._viewer_headers(principal_id="pm-1"),
+        )
+        self.assertEqual(blocked_duplicate.status_code, 404)
+        self.assertNotIn(blocked_memory, blocked_duplicate.text)
 
     def test_connected_source_group_grants_filter_mixed_and_related_results(self) -> None:
         self._register_connected_fixture(

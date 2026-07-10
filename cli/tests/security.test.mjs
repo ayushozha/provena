@@ -9,6 +9,7 @@ import {
   validateConfig,
 } from "../dist/config.js";
 import { enumerateFiles, isDeniedSecretPath } from "../dist/indexer/discover.js";
+import { assertNoSecretMaterial } from "../dist/security/memory.js";
 
 function testSecretDenylistPatterns() {
   assert.equal(isDeniedSecretPath(".env"), true);
@@ -19,6 +20,26 @@ function testSecretDenylistPatterns() {
   assert.equal(isDeniedSecretPath(".npmrc"), true);
   assert.equal(isDeniedSecretPath(".aws/credentials"), true);
   assert.equal(isDeniedSecretPath("src/foo.ts"), false);
+}
+
+function testMemoryCredentialGuard() {
+  const credentials = [
+    ["sk", "proj", "abcdefghijklmnopqrstuv"].join("-"),
+    ["sk", "ant", "api03", "abcdefghijklmnopqrstuv"].join("-"),
+    ["ghp", "abcdefghijklmnopqrstuvwxyz123456"].join("_"),
+    ["github", "pat", "abcdefghijklmnopqrstuvwxyz123456"].join("_"),
+    ["xoxb", "1234567890", "abcdefghijklmnop"].join("-"),
+    ["ASIA", "ABCDEFGHIJKLMNOP"].join(""),
+    ["glpat", "abcdefghijklmnopqrstuv"].join("-"),
+    ["sk", "live", "abcdefghijklmnopqrstuv"].join("_"),
+    ["AI", "za", "abcdefghijklmnopqrstuvwxyz1234567890"].join(""),
+    ["eyJabcdefghijk", "abcdefghijklmnop", "abcdefghijklmnop"].join("."),
+    `${"postgresql"}://${"admin"}:${"correct-horse-battery"}@db.example.test/app`,
+  ];
+  for (const credential of credentials) {
+    assert.throws(() => assertNoSecretMaterial(credential), /credential|private key/);
+  }
+  assert.doesNotThrow(() => assertNoSecretMaterial("Use the OPENAI_API_KEY environment variable."));
 }
 
 async function testSecretDenylistRegardlessOfGitignore() {
@@ -107,6 +128,7 @@ function testDatabasePathValidation() {
 }
 
 testSecretDenylistPatterns();
+testMemoryCredentialGuard();
 await testSecretDenylistRegardlessOfGitignore();
 testLoopbackStoreUrlValidation();
 testDatabasePathValidation();
