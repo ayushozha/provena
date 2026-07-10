@@ -13,8 +13,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { readDaemonStatus, runDaemonCommand } from "../dist/commands/daemon.js";
+import { getGitRoot } from "../dist/config.js";
 
-const root = mkdtempSync(join(tmpdir(), "provena-daemon-state-"));
+let root = mkdtempSync(join(tmpdir(), "provena-daemon-state-"));
 const cliEntry = resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist", "cli.js");
 const runCli = (args) => new Promise((resolvePromise) => {
   const child = spawn(process.execPath, [cliEntry, ...args], {
@@ -39,6 +40,7 @@ let spawnedPid;
 let daemonStopped = false;
 try {
   assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: root }).status, 0);
+  root = getGitRoot(root);
   const runtimeRoot = join(root, ".provena", "runtime");
   mkdirSync(runtimeRoot, { recursive: true });
   const runner = join(runtimeRoot, "runtime.mjs");
