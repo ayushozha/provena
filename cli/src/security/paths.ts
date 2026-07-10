@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 function contained(root: string, target: string): boolean {
@@ -22,12 +22,23 @@ export function assertSafeRepoPath(repoRoot: string, target: string): void {
   let cursor = root;
   for (const segment of rel.split(/[\\/]+/).filter(Boolean)) {
     cursor = resolve(cursor, segment);
-    if (!existsSync(cursor)) continue;
-    const info = lstatSync(cursor);
+    let info;
+    try {
+      info = lstatSync(cursor);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
     if (info.isSymbolicLink()) {
       throw new Error(`refusing repository write through symlink/junction: ${cursor}`);
     }
-    const actual = realpathSync(cursor);
+    let actual;
+    try {
+      actual = realpathSync(cursor);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
     if (!contained(realRoot, actual)) {
       throw new Error(`repository path escapes through a reparse point: ${cursor}`);
     }

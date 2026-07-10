@@ -19,9 +19,13 @@ const cliEntry = resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist", 
 const runCli = (args) => new Promise((resolvePromise) => {
   const child = spawn(process.execPath, [cliEntry, ...args], {
     cwd: root,
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  child.once("exit", (code) => resolvePromise(code));
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.once("exit", (code) => resolvePromise({ code, stdout, stderr }));
 });
 const processAlive = (pid) => {
   try {
@@ -80,12 +84,18 @@ try {
     })}\n`,
   );
   assert.deepEqual(readDaemonStatus(root), { running: false });
+  const startResults = await Promise.all([
+    runCli(["daemon", "start", "--interval", "10s"]),
+    runCli(["daemon", "start", "--interval", "10s"]),
+  ]);
+  const statePath = join(root, ".provena", "daemon.pid");
+  if (existsSync(statePath)) {
+    spawnedPid = JSON.parse(readFileSync(statePath, "utf8")).pid;
+  }
   assert.deepEqual(
-    await Promise.all([
-      runCli(["daemon", "start", "--interval", "10s"]),
-      runCli(["daemon", "start", "--interval", "10s"]),
-    ]),
+    startResults.map(({ code }) => code),
     [0, 0],
+    `concurrent start failure: ${JSON.stringify(startResults)}`,
   );
   for (
     let attempt = 0;
@@ -99,7 +109,7 @@ try {
     .split(/\r?\n/)
     .filter(Boolean);
   assert.equal(starts.length, 1, "concurrent starts must create exactly one daemon process");
-  const current = JSON.parse(readFileSync(join(root, ".provena", "daemon.pid"), "utf8"));
+  const current = JSON.parse(readFileSync(statePath, "utf8"));
   spawnedPid = current.pid;
   assert.notEqual(current.token, staleToken);
   assert.notEqual(current.pid, process.pid);
