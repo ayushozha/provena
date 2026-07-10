@@ -22,6 +22,8 @@ export interface RuntimeInstallResult {
   reused: boolean;
 }
 
+const NPM_COMMAND_TIMEOUT_MS = 5 * 60 * 1_000;
+
 function packageRoot(): string {
   // dist/integrations/runtime.js -> package root
   return resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -285,7 +287,7 @@ export function installPortableRuntime(repoRoot: string): RuntimeInstallResult {
       cwd,
       encoding: "utf8",
       shell: false,
-      timeout: 180_000,
+      timeout: NPM_COMMAND_TIMEOUT_MS,
     });
   let backedUp = false;
   try {
