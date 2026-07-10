@@ -23,7 +23,16 @@ const runCli = (args) => new Promise((resolvePromise) => {
   });
   child.once("exit", (code) => resolvePromise(code));
 });
+const processAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 let spawnedPid;
+let daemonStopped = false;
 try {
   assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: root }).status, 0);
   const runtimeRoot = join(root, ".provena", "runtime");
@@ -104,18 +113,32 @@ try {
     await delay(50);
   }
   assert.equal(readDaemonStatus(root).running, false);
+  daemonStopped = true;
 } finally {
-  if (spawnedPid) {
+  if (!daemonStopped && spawnedPid && processAlive(spawnedPid)) {
     try {
-      process.kill(spawnedPid);
+      process.kill(spawnedPid, "SIGKILL");
     } catch {}
   }
-  rmSync(root, {
-    recursive: true,
-    force: true,
-    maxRetries: 20,
-    retryDelay: 100,
-  });
+  for (let attempt = 0; attempt < 100 && spawnedPid && processAlive(spawnedPid); attempt += 1) {
+    await delay(50);
+  }
+  if (spawnedPid && processAlive(spawnedPid)) {
+    throw new Error(`daemon-state.test: daemon ${spawnedPid} remained alive; temp repo retained at ${root}`);
+  }
+  let cleaned = false;
+  for (let attempt = 0; attempt < 50 && !cleaned; attempt += 1) {
+    try {
+      rmSync(root, { recursive: true, force: true });
+      cleaned = true;
+    } catch (error) {
+      if (!["EBUSY", "EPERM", "ENOTEMPTY"].includes(error?.code)) throw error;
+      await delay(100);
+    }
+  }
+  if (!cleaned) {
+    console.warn(`daemon-state.test: temp cleanup deferred for ${root}`);
+  }
 }
 
 console.log("daemon-state.test: ok");
