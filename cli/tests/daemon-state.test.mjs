@@ -110,7 +110,12 @@ try {
       process.kill(spawnedPid);
     } catch {}
   }
-  rmSync(root, { recursive: true, force: true });
+  rmSync(root, {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 100,
+  });
 }
 
 console.log("daemon-state.test: ok");
