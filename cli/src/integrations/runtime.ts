@@ -145,7 +145,13 @@ if (command === "refresh") {
   });
   process.once("SIGINT", () => process.exit(0));
   process.once("SIGTERM", () => process.exit(0));
+  const stopIfRequested = () => {
+    const stop = readJson(stopPath);
+    if (stop?.token === token && stop?.pid === process.pid) process.exit(0);
+  };
   setInterval(heartbeat, 2000);
+  stopIfRequested();
+  setInterval(stopIfRequested, 1000);
   await tick();
   let ticking = false;
   setInterval(async () => {
@@ -153,10 +159,6 @@ if (command === "refresh") {
     ticking = true;
     try { await tick(); } finally { ticking = false; }
   }, interval);
-  setInterval(() => {
-    const stop = readJson(stopPath);
-    if (stop?.token === token && stop?.pid === process.pid) process.exit(0);
-  }, 1000);
 } else {
   throw new Error(\`unknown portable runtime command: \${command}\`);
 }

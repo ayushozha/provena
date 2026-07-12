@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync, rmSync } from "node:fs";
 import { mkdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -15,6 +16,35 @@ interface LockOwner {
   pid: number;
   acquiredAt: string;
 }
+
+interface ActiveLock {
+  repoRoot: string;
+  path: string;
+  owner: LockOwner;
+}
+
+const activeLocks = new Map<string, ActiveLock>();
+
+function releaseActiveLockSync(lock: ActiveLock): void {
+  const ownerPath = join(lock.path, "owner.json");
+  assertSafeRepoPath(lock.repoRoot, ownerPath);
+  const current = JSON.parse(readFileSync(ownerPath, "utf8")) as Partial<LockOwner>;
+  if (current.pid !== lock.owner.pid || current.token !== lock.owner.token) return;
+  assertSafeRepoPath(lock.repoRoot, lock.path);
+  rmSync(lock.path, { recursive: true, force: true });
+  activeLocks.delete(lock.path);
+}
+
+process.once("exit", () => {
+  for (const lock of activeLocks.values()) {
+    try {
+      releaseActiveLockSync(lock);
+    } catch {
+      // Exit cleanup is best effort and must never delete a lock whose current
+      // token and PID could not be verified synchronously.
+    }
+  }
+});
 
 async function ownerAt(path: string): Promise<LockOwner | null> {
   try {
@@ -150,13 +180,15 @@ export async function withRepoMemoryLock<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   const lock = await acquire(repoRoot);
+  activeLocks.set(lock.path, { repoRoot, ...lock });
   try {
     return await operation();
   } finally {
     const current = await ownerAt(lock.path);
-    if (current?.token === lock.owner.token) {
+    if (current?.pid === lock.owner.pid && current.token === lock.owner.token) {
       assertSafeRepoPath(repoRoot, lock.path);
       await rm(lock.path, { recursive: true, force: true });
     }
+    activeLocks.delete(lock.path);
   }
 }

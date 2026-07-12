@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -22,6 +23,25 @@ try {
     ),
   );
   assert.equal(maximum, 1, "repository memory mutations must be serialized");
+
+  const lockModuleUrl = new URL("../dist/brain/lock.js", import.meta.url).href;
+  const forcedExit = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `import { withRepoMemoryLock } from ${JSON.stringify(lockModuleUrl)};
+await withRepoMemoryLock(${JSON.stringify(root)}, async () => process.exit(0));`,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(forcedExit.status, 0, forcedExit.stderr || forcedExit.stdout);
+  await assert.rejects(
+    stat(lockPath),
+    (error) => error?.code === "ENOENT",
+    "forced process exit must synchronously release an owned repo-memory lock",
+  );
+  await withRepoMemoryLock(root, async () => undefined);
 
   await mkdir(lockPath, { recursive: true });
   await writeFile(

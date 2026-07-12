@@ -43,12 +43,22 @@ function processAlive(pid) {
   }
 }
 
-function waitForExit(pids, attempts = 20) {
+function waitFor(check, attempts = 20) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (![...pids].some(processAlive)) return true;
+    try {
+      if (check()) return true;
+    } catch {}
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
   }
-  return ![...pids].some(processAlive);
+  try {
+    return check();
+  } catch {
+    return false;
+  }
+}
+
+function waitForExit(pids, attempts = 20) {
+  return waitFor(() => ![...pids].some(processAlive), attempts);
 }
 
 const pack = run("npm", ["pack", "--silent"], cliRoot);
@@ -60,6 +70,7 @@ assert.ok(tarball, "npm pack did not create a tarball");
 const scratch = mkdtempSync(join(tmpdir(), "provena-pack-install-"));
 const cliBin = join(scratch, "node_modules", "@provena", "cli", "dist", "cli.js");
 const daemonPids = new Set();
+let heldRepoMemoryLock;
 let testError;
 try {
   run("npm", ["init", "-y"], scratch);
@@ -279,6 +290,30 @@ try {
   );
   assert.ok(Number.isSafeInteger(daemonBeforeRepair.pid) && daemonBeforeRepair.pid > 0);
   daemonPids.add(daemonBeforeRepair.pid);
+  const daemonLog = join(scratch, ".provena", "daemon.log");
+  assert.equal(
+    waitFor(() => / refreshed\r?\n/.test(readFileSync(daemonLog, "utf8")), 40),
+    true,
+    "daemon must complete its first refresh before the blocked-restart fixture",
+  );
+  heldRepoMemoryLock = join(
+    scratch,
+    ".provena",
+    "cache",
+    "locks",
+    "repo-memory.lock",
+  );
+  mkdirSync(dirname(heldRepoMemoryLock), { recursive: true });
+  mkdirSync(heldRepoMemoryLock);
+  writeFileSync(
+    join(heldRepoMemoryLock, "owner.json"),
+    `${JSON.stringify({
+      token: "packed-install-live-owner",
+      pid: process.pid,
+      acquiredAt: new Date().toISOString(),
+    })}\n`,
+    "utf8",
+  );
   const persistedBrainModule = join(persistedPackage, "dist", "brain", "index.js");
   writeFileSync(
     persistedBrainModule,
@@ -311,7 +346,21 @@ try {
   daemonPids.delete(daemonBeforeRepair.pid);
   assert.equal(run(process.execPath, [cliBin, "daemon", "status"], scratch).status, 0);
   assert.equal(run(process.execPath, [cliBin, "daemon", "stop"], scratch).status, 0);
-  assert.equal(waitForExit(new Set([daemonAfterRepair.pid])), true, "daemon must exit after stop");
+  const stoppedDuringInitialRefresh = waitForExit(new Set([daemonAfterRepair.pid]));
+  rmSync(heldRepoMemoryLock, { recursive: true, force: true });
+  heldRepoMemoryLock = undefined;
+  assert.equal(
+    stoppedDuringInitialRefresh,
+    true,
+    "daemon must honor stop while its initial refresh is blocked",
+  );
+  for (const stateFile of ["daemon.pid", "daemon.heartbeat", "daemon.stop"]) {
+    assert.equal(
+      existsSync(join(scratch, ".provena", stateFile)),
+      false,
+      `${stateFile} must be removed after daemon stop`,
+    );
+  }
   assert.equal(run(process.execPath, [cliBin, "daemon", "status"], scratch).status, 1);
   daemonPids.delete(daemonAfterRepair.pid);
   renameSync(join(scratch, "node_modules", "@provena", "cli"), join(scratch, "node_modules", "@provena", "cli-disabled"));
@@ -326,6 +375,14 @@ try {
 }
 
 const cleanupErrors = [];
+try {
+  if (heldRepoMemoryLock) {
+    rmSync(heldRepoMemoryLock, { recursive: true, force: true });
+    heldRepoMemoryLock = undefined;
+  }
+} catch (error) {
+  cleanupErrors.push(error);
+}
 try {
   const daemonState = join(scratch, ".provena", "daemon.pid");
   if (existsSync(daemonState)) {
