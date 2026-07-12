@@ -11,7 +11,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertSafeRepoPath } from "../security/paths.js";
 
@@ -177,7 +177,8 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function runtimeTreeSha256(root: string): string {
+export function runtimeTreeSha256(root: string): string {
+  const resolvedRoot = resolve(root);
   const hash = createHash("sha256");
   const visit = (directory: string, prefix: string): void => {
     const entries = readdirSync(directory, { withFileTypes: true })
@@ -190,11 +191,11 @@ function runtimeTreeSha256(root: string): string {
       if (info.isSymbolicLink()) {
         const target = readlinkSync(absolutePath);
         const resolvedTarget = resolve(directory, target);
-        const relativeTarget = resolvedTarget.slice(resolve(root).length);
+        const relativeTarget = relative(resolvedRoot, resolvedTarget);
         if (
-          resolve(resolvedTarget) !== resolve(root) &&
-          !relativeTarget.startsWith("\\") &&
-          !relativeTarget.startsWith("/")
+          relativeTarget === ".." ||
+          relativeTarget.startsWith(`..${sep}`) ||
+          isAbsolute(relativeTarget)
         ) {
           throw new Error(`portable runtime symlink escapes its root: ${relativePath}`);
         }

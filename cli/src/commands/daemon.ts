@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { getGitRoot } from "../config.js";
+import { isProcessRunning } from "../process.js";
 import { assertSafeRepoPath } from "../security/paths.js";
 
 const DEFAULT_INTERVAL_MS = 15 * 60 * 1000;
@@ -68,15 +69,6 @@ function valueAfter(args: string[], flag: string): string | undefined {
   return at >= 0 ? args[at + 1] : undefined;
 }
 
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function daemonPaths(repoRoot: string) {
   const root = join(repoRoot, ".provena");
   return {
@@ -122,7 +114,7 @@ function withDaemonStartLock<T>(
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
         continue;
       }
-      if (!owner || !alive(owner.pid)) {
+      if (!owner || !isProcessRunning(owner.pid)) {
         const quarantine = `${lockPath}.stale-${randomUUID()}`;
         assertSafeRepoPath(repoRoot, lockPath);
         assertSafeRepoPath(repoRoot, quarantine);
@@ -217,7 +209,7 @@ export function readDaemonStatus(repoRoot: string): DaemonStatus {
     resolve(state.runner) === resolve(paths.runner) &&
     heartbeat.pid === state.pid &&
     heartbeat.token === state.token &&
-    alive(state.pid);
+    isProcessRunning(state.pid);
   if (running) {
     return {
       running: true,

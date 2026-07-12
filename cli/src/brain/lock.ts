@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { isProcessRunning } from "../process.js";
 import { assertSafeRepoPath } from "../security/paths.js";
 
 const LOCK_PATH = ".provena/cache/locks/repo-memory.lock";
@@ -13,15 +14,6 @@ interface LockOwner {
   token: string;
   pid: number;
   acquiredAt: string;
-}
-
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function ownerAt(path: string): Promise<LockOwner | null> {
@@ -46,7 +38,7 @@ async function stale(path: string): Promise<{ owner: LockOwner | null } | null> 
   // A slow refresh must never lose its lock merely because it exceeded a
   // wall-clock timeout. Reclaim only when the owner is confirmed dead (or no
   // owner was ever written) and the grace period has elapsed.
-  return age > STALE_MS && (!owner || !processAlive(owner.pid)) ? { owner } : null;
+  return age > STALE_MS && (!owner || !isProcessRunning(owner.pid)) ? { owner } : null;
 }
 
 async function reclaimStaleLock(repoRoot: string, path: string): Promise<boolean> {

@@ -18,6 +18,7 @@ import {
   refreshRepoBrain,
 } from "../dist/index.js";
 import { runStatusCommand } from "../dist/commands/status.js";
+import { runtimeTreeSha256 } from "../dist/integrations/runtime.js";
 
 function directoryLink(target, path) {
   symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
@@ -27,6 +28,18 @@ const sandbox = mkdtempSync(join(tmpdir(), "provena-safe-paths-"));
 try {
   const outside = join(sandbox, "outside");
   mkdirSync(outside);
+
+  // Keep the runtime root to one character so the old string-slice check saw
+  // the separator in `<sandbox>/x/outside` and misclassified it as contained.
+  const runtimeRoot = join(sandbox, "r");
+  const escapedRuntimeTarget = join(sandbox, "x", "outside");
+  mkdirSync(runtimeRoot);
+  mkdirSync(escapedRuntimeTarget, { recursive: true });
+  directoryLink(escapedRuntimeTarget, join(runtimeRoot, "escape"));
+  assert.throws(
+    () => runtimeTreeSha256(runtimeRoot),
+    /portable runtime symlink escapes its root/,
+  );
 
   const brainRoot = join(sandbox, "brain");
   mkdirSync(brainRoot);

@@ -72,6 +72,29 @@ class TestClassification(unittest.TestCase):
         self.assertEqual(result, "fact")
 
 
+class TestFingerprint(unittest.TestCase):
+    def setUp(self) -> None:
+        self.wp = WritePipeline(EmbeddingManager(), ModelRouter())
+
+    def test_valid_generated_fingerprint_uses_source_identity(self) -> None:
+        scope = {"tenant_id": "tenant-a", "project_id": "repo-a"}
+        metadata = {"provena_generated_fingerprint": "a" * 64}
+
+        self.assertEqual(
+            self.wp._fingerprint("original source", scope, metadata),
+            self.wp._fingerprint("renamed source", scope, metadata),
+        )
+
+    def test_invalid_generated_fingerprint_falls_back_to_content(self) -> None:
+        scope = {"tenant_id": "tenant-a", "project_id": "repo-a"}
+        metadata = {"provena_generated_fingerprint": "not-a-sha256"}
+
+        self.assertNotEqual(
+            self.wp._fingerprint("original source", scope, metadata),
+            self.wp._fingerprint("renamed source", scope, metadata),
+        )
+
+
 class TestEmbeddings(unittest.TestCase):
     """Test EmbeddingManager."""
 
