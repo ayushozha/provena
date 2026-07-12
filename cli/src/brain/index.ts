@@ -20,9 +20,10 @@ export {
   appendMemoryEvent,
   MEMORY_LEDGER_PATH,
   memoryEventToRecord,
+  readMemoryLedgerSnapshot,
   readMemoryEvents,
 } from "./events.js";
-export type { AppendMemoryOptions } from "./events.js";
+export type { AppendMemoryOptions, MemoryLedgerSnapshot } from "./events.js";
 export type {
   MemoryAuthority,
   MemoryEvent,

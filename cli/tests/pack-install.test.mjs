@@ -4,6 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -155,7 +156,30 @@ try {
   assert.equal(status.integrations.agents, true);
   assert.equal(status.integrations.mcp, true);
 
-  appendFileSync(join(scratch, ".provena", "memory", "events.jsonl"), "\n", "utf8");
+  const ledgerPath = join(scratch, ".provena", "memory", "events.jsonl");
+  const manifestPath = join(scratch, ".provena", "manifest.json");
+  const ledgerFingerprint = () =>
+    createHash("sha256").update(readFileSync(ledgerPath)).digest("hex");
+  const assertPacketMatchesLedger = (packet, message) => {
+    const expected = ledgerFingerprint();
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    assert.equal(packet.memoryFingerprint, expected, message);
+    assert.equal(manifest.memoryFingerprint, expected, `${message} (manifest)`);
+  };
+
+  assert.equal(readFileSync(ledgerPath).byteLength, 0, "init creates an empty ledger");
+  const emptyContextRun = run(
+    process.execPath,
+    [cliBin, "context", "authentication", "--json", "--max-tokens", "256"],
+    scratch,
+  );
+  assert.equal(emptyContextRun.status, 0, emptyContextRun.stderr);
+  assertPacketMatchesLedger(
+    JSON.parse(emptyContextRun.stdout),
+    "empty-ledger packet fingerprint must hash exact ledger bytes",
+  );
+
+  appendFileSync(ledgerPath, "\n", "utf8");
   const staleMemoryStatus = run(process.execPath, [cliBin, "status", "--json"], scratch);
   assert.equal(staleMemoryStatus.status, 0, staleMemoryStatus.stderr);
   assert.equal(
@@ -171,8 +195,13 @@ try {
     scratch,
   );
   assert.equal(contextRun.status, 0, contextRun.stderr);
+  const contextPacket = JSON.parse(contextRun.stdout);
+  assertPacketMatchesLedger(
+    contextPacket,
+    "packet fingerprint must preserve raw blank ledger lines",
+  );
   assert.ok(
-    JSON.parse(contextRun.stdout).items.some((item) => item.citations.some((citation) => citation.path === "src/index.ts")),
+    contextPacket.items.some((item) => item.citations.some((citation) => citation.path === "src/index.ts")),
     "context packet cites the relevant source file",
   );
 
@@ -205,10 +234,20 @@ try {
 
   const sessionRun = run(
     process.execPath,
-    [cliBin, "session", "start", "authentication", "--agent", "codex", "--quiet"],
+    [cliBin, "session", "start", "authentication", "--agent", "codex", "--json"],
     scratch,
   );
   assert.equal(sessionRun.status, 0, sessionRun.stderr);
+  const sessionResult = JSON.parse(sessionRun.stdout);
+  assertPacketMatchesLedger(
+    sessionResult.packet,
+    "session packet fingerprint must hash the non-empty ledger bytes",
+  );
+  assert.equal(
+    sessionResult.session.memoryFingerprint,
+    sessionResult.packet.memoryFingerprint,
+    "session metadata and its packet must attest to the same ledger snapshot",
+  );
 
   const firstRefresh = run(process.execPath, [cliBin, "refresh", "--json"], scratch);
   assert.equal(firstRefresh.status, 0, firstRefresh.stderr);

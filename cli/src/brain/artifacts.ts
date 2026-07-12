@@ -1,6 +1,11 @@
 import { readFile, rm } from "node:fs/promises";
 import { basename, join, posix } from "node:path";
-import { activeMemoryEvents, readMemoryEvents, MEMORY_LEDGER_PATH } from "./events.js";
+import {
+  activeMemoryEvents,
+  readMemoryLedgerSnapshot,
+  MEMORY_LEDGER_PATH,
+  type MemoryLedgerSnapshot,
+} from "./events.js";
 import { scanRepo, type ScanRepoOptions } from "./detect.js";
 import { MEMORY_EVENT_JSON_SCHEMA } from "./schema.js";
 import type {
@@ -37,6 +42,7 @@ export interface RefreshRepoBrainResult {
   map: RepoMap;
   graph: RepoGraph;
   manifest: RepoBrainManifest;
+  memory: MemoryLedgerSnapshot;
   written: string[];
 }
 
@@ -293,7 +299,8 @@ async function refreshRepoBrainUnlocked(
     await writeFileAtomic(repoRoot, join(repoRoot, ...MEMORY_LEDGER_PATH.split("/")), "");
     written.push(MEMORY_LEDGER_PATH);
   }
-  const events = await readMemoryEvents(repoRoot);
+  const memory = await readMemoryLedgerSnapshot(repoRoot);
+  const events = memory.events;
   const artifacts: Record<string, string> = {
     [REPO_BRAIN_PATH]: renderBrain(map, graph, events),
     [REPO_MAP_PATH]: canonicalJson(map, true),
@@ -301,11 +308,10 @@ async function refreshRepoBrainUnlocked(
     [MEMORY_EVENT_SCHEMA_PATH]: canonicalJson(MEMORY_EVENT_JSON_SCHEMA, true),
     ...renderViews(events),
   };
-  const ledger = (await readExisting(repoRoot, MEMORY_LEDGER_PATH)) ?? "";
   const manifest: RepoBrainManifest = {
     schemaVersion: 1,
     sourceFingerprint: map.sourceFingerprint,
-    memoryFingerprint: sha256(ledger),
+    memoryFingerprint: memory.memoryFingerprint,
     artifacts: [
       ...Object.entries(artifacts).map(([path, content]) => ({
         path,
@@ -314,8 +320,8 @@ async function refreshRepoBrainUnlocked(
       })),
       {
         path: MEMORY_LEDGER_PATH,
-        sha256: sha256(ledger),
-        bytes: Buffer.byteLength(ledger, "utf8"),
+        sha256: memory.memoryFingerprint,
+        bytes: memory.bytes,
       },
     ].sort((a, b) => compareText(a.path, b.path)),
   };
@@ -348,7 +354,7 @@ async function refreshRepoBrainUnlocked(
     }
     throw error;
   }
-  return { map, graph, manifest, written };
+  return { map, graph, manifest, memory, written };
 }
 
 export async function refreshRepoBrain(

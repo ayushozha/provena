@@ -1,5 +1,9 @@
 import type { MemoryEvent, RepoMap } from "../brain/types.js";
-import { activeMemoryEvents } from "../brain/events.js";
+import {
+  activeMemoryEvents,
+  memoryEventToRecord,
+  type MemoryLedgerSnapshot,
+} from "../brain/events.js";
 import { canonicalJson, compareText, sha256 } from "../brain/utils.js";
 import { degreeCentrality, neighborhood, pageRank } from "../graph/algorithms.js";
 import type { RepoGraph } from "../graph/types.js";
@@ -122,12 +126,28 @@ function scoreGraph(graph: RepoGraph): Record<string, number> {
   );
 }
 
+function contextMemorySnapshot(
+  memory: MemoryEvent[] | MemoryLedgerSnapshot,
+): MemoryLedgerSnapshot {
+  if (!Array.isArray(memory)) return memory;
+  // Preserve the pre-release array API using the canonical JSONL form. Repo
+  // callers pass a raw-byte snapshot so blank lines and line endings stay exact.
+  const ledger = memory.map((event) => canonicalJson(memoryEventToRecord(event))).join("");
+  return {
+    events: memory,
+    memoryFingerprint: sha256(ledger),
+    bytes: Buffer.byteLength(ledger, "utf8"),
+  };
+}
+
 export function buildContextPacket(
   map: RepoMap,
   graph: RepoGraph,
-  events: MemoryEvent[],
+  memory: MemoryEvent[] | MemoryLedgerSnapshot,
   input: ContextQuery = {},
 ): ContextPacket {
+  const snapshot = contextMemorySnapshot(memory);
+  const events = snapshot.events;
   const query = inline(input.query ?? "");
   const queryTokens = tokens(query);
   const exactPaths = normalized(input.paths);
@@ -304,7 +324,7 @@ export function buildContextPacket(
       schemaVersion: 1,
       query: packetQuery,
       sourceFingerprint: map.sourceFingerprint,
-      memoryFingerprint: sha256(canonicalJson(events)),
+      memoryFingerprint: snapshot.memoryFingerprint,
       budget: {
         maxCharacters,
         maxTokens: requestedTokens,

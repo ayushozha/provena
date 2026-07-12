@@ -9,7 +9,7 @@ import {
   type MemorySource,
   type NewMemoryEvent,
 } from "./types.js";
-import { canonicalJson, compareText, normalizeRepoPath, stableId } from "./utils.js";
+import { canonicalJson, compareText, normalizeRepoPath, sha256, stableId } from "./utils.js";
 import { assertNoSecretMaterial } from "../security/memory.js";
 import { withRepoMemoryLock } from "./lock.js";
 import { assertSafeRepoPath } from "../security/paths.js";
@@ -23,6 +23,12 @@ const MAX_LEDGER_BYTES = 64 * 1024 * 1024;
 
 export interface AppendMemoryOptions {
   now?: () => Date;
+}
+
+export interface MemoryLedgerSnapshot {
+  events: MemoryEvent[];
+  memoryFingerprint: string;
+  bytes: number;
 }
 
 function requiredText(value: string, field: string, maxCharacters = MAX_BODY_CHARACTERS): string {
@@ -349,20 +355,26 @@ function isMemoryEventRecord(value: unknown): value is MemoryEventRecord {
   );
 }
 
-export async function readMemoryEvents(repoRoot: string): Promise<MemoryEvent[]> {
+export async function readMemoryLedgerSnapshot(
+  repoRoot: string,
+): Promise<MemoryLedgerSnapshot> {
   const ledgerPath = join(repoRoot, ...MEMORY_LEDGER_PATH.split("/"));
   assertSafeRepoPath(repoRoot, ledgerPath);
-  let text: string;
+  let ledger: Buffer;
   try {
     const info = await stat(ledgerPath);
     if (info.size > MAX_LEDGER_BYTES) {
       throw new Error(`${MEMORY_LEDGER_PATH} exceeds the ${MAX_LEDGER_BYTES} byte safety cap`);
     }
-    text = await readFile(ledgerPath, "utf8");
+    ledger = await readFile(ledgerPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    ledger = Buffer.alloc(0);
   }
+  if (ledger.byteLength > MAX_LEDGER_BYTES) {
+    throw new Error(`${MEMORY_LEDGER_PATH} exceeds the ${MAX_LEDGER_BYTES} byte safety cap`);
+  }
+  const text = ledger.toString("utf8");
   const events: MemoryEvent[] = [];
   const ids = new Set<string>();
   for (const [index, line] of text.split(/\r?\n/).entries()) {
@@ -397,7 +409,15 @@ export async function readMemoryEvents(repoRoot: string): Promise<MemoryEvent[]>
     ids.add(validated.id);
     events.push(validated);
   }
-  return events;
+  return {
+    events,
+    memoryFingerprint: sha256(ledger),
+    bytes: ledger.byteLength,
+  };
+}
+
+export async function readMemoryEvents(repoRoot: string): Promise<MemoryEvent[]> {
+  return (await readMemoryLedgerSnapshot(repoRoot)).events;
 }
 
 export async function appendMemoryEvent(

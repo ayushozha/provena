@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getGitRoot, loadConfig } from "../config.js";
-import { readMemoryEvents, refreshRepoBrain } from "../brain/index.js";
+import { refreshRepoBrain } from "../brain/index.js";
 import { assertSafeRepoPath } from "../security/paths.js";
 import {
   buildContextPacket,
@@ -66,8 +66,7 @@ export async function runContextCommand(
   }
   const repoRoot = getGitRoot(cwd);
   loadConfig(repoRoot);
-  const { map, graph } = await refreshRepoBrain(repoRoot);
-  const events = await readMemoryEvents(repoRoot);
+  const refreshed = await refreshRepoBrain(repoRoot);
   const input: ContextQuery = {
     query: positional(args).join(" "),
     paths: valuesAfter(args, "--path"),
@@ -79,7 +78,12 @@ export async function runContextCommand(
     graphHops: numberAfter(args, "--graph-hops"),
     includeSensitive: false,
   };
-  const packet = buildContextPacket(map, graph, events, input);
+  const packet = buildContextPacket(
+    refreshed.map,
+    refreshed.graph,
+    refreshed.memory,
+    input,
+  );
   const markdown = renderContextPacketMarkdown(packet);
   const contextDir = join(repoRoot, ".provena", "context");
   assertSafeRepoPath(repoRoot, contextDir);

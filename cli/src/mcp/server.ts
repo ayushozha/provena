@@ -9,6 +9,7 @@ import {
   activeMemoryEvents,
   appendMemoryEvent,
   memoryEventToRecord,
+  readMemoryLedgerSnapshot,
   readMemoryEvents,
   readRepoBrainArtifacts,
   refreshRepoBrain,
@@ -118,7 +119,12 @@ export async function createRepoMcpServer(
     },
     async (input) => {
       const { map, graph } = await readRepoBrainArtifacts(repoRoot);
-      const packet = buildContextPacket(map, graph, await readMemoryEvents(repoRoot), input);
+      const packet = buildContextPacket(
+        map,
+        graph,
+        await readMemoryLedgerSnapshot(repoRoot),
+        input,
+      );
       return text(renderContextPacketMarkdown(packet));
     },
   );

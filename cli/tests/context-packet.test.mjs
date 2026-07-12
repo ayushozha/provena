@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { memoryEventToRecord } from "../dist/brain/events.js";
+import { canonicalJson } from "../dist/brain/utils.js";
 import { buildContextPacket, renderContextPacketMarkdown } from "../dist/context/index.js";
 import { buildRepoGraph } from "../dist/graph/index.js";
 
@@ -40,8 +43,13 @@ const events = [{
   tags: ["testing"],
   triggers: ["handoff"],
 }];
+const memory = {
+  events,
+  memoryFingerprint: "raw-ledger-fingerprint",
+  bytes: 1,
+};
 
-const packet = buildContextPacket(map, graph, events, {
+const packet = buildContextPacket(map, graph, memory, {
   query: "run test app",
   paths: ["src/app.ts"],
   symbols: ["run"],
@@ -50,6 +58,7 @@ const packet = buildContextPacket(map, graph, events, {
   maxTokens: 300,
   graphHops: 1,
 });
+assert.equal(packet.memoryFingerprint, memory.memoryFingerprint);
 assert.equal(packet.items[0].id, "file-app", "exact path matches outrank all fuzzy matches");
 assert(packet.items.some((item) => item.id === "symbol-run"));
 assert(packet.items.some((item) => item.id === "cmd:test"));
@@ -64,7 +73,7 @@ assert(markdown.includes("src/app.ts"));
 assert(markdown.includes("package.json"));
 assert(!markdown.includes("C:\\"));
 
-const clipped = buildContextPacket(map, graph, events, {
+const clipped = buildContextPacket(map, graph, memory, {
   query: "run test app",
   maxCharacters: 256,
   maxTokens: 64,
@@ -76,7 +85,7 @@ assert.equal(clipped.budget.usedCharacters, Buffer.byteLength(clippedMarkdown, "
 assert(Buffer.byteLength(clippedMarkdown, "utf8") <= 256);
 assert(Math.ceil(Buffer.byteLength(clippedMarkdown, "utf8") / 4) <= 64);
 
-const longQuery = buildContextPacket(map, graph, events, {
+const longQuery = buildContextPacket(map, graph, memory, {
   query: "#[]*`<long-query> ".repeat(500),
   maxCharacters: 256,
   maxTokens: 64,
@@ -87,5 +96,30 @@ assert(longQuery.query.endsWith("…"));
 assert.equal(longQuery.budget.usedCharacters, Buffer.byteLength(longQueryMarkdown, "utf8"));
 assert(longQuery.budget.usedCharacters <= 256);
 assert(longQuery.budget.estimatedTokens <= 64);
+
+const legacyEmpty = buildContextPacket(map, graph, [], { maxCharacters: 256, maxTokens: 64 });
+assert.equal(
+  legacyEmpty.memoryFingerprint,
+  createHash("sha256").update("").digest("hex"),
+  "the backward-compatible array API must use canonical empty-ledger bytes",
+);
+
+const legacyNonempty = buildContextPacket(map, graph, events, {
+  query: "handoff",
+  maxCharacters: 4_000,
+  maxTokens: 1_000,
+});
+const canonicalLedger = events
+  .map((event) => canonicalJson(memoryEventToRecord(event)))
+  .join("");
+assert.equal(
+  legacyNonempty.memoryFingerprint,
+  createHash("sha256").update(canonicalLedger).digest("hex"),
+  "the backward-compatible array API must fingerprint canonical JSONL records",
+);
+assert(
+  legacyNonempty.items.some((item) => item.id === events[0].id),
+  "the backward-compatible array API must preserve memory selection",
+);
 
 console.log("context packet tests passed");

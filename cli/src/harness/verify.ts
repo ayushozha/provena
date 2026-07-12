@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
-  readMemoryEvents,
   refreshRepoBrain,
   REPO_BRAIN_PATH,
   type RepoBrainManifest,
@@ -106,7 +105,7 @@ export async function verifyRepoMemory(repoRoot: string): Promise<HarnessReport>
     `repo brain is ${brainBytes} bytes (12,000 byte limit)`,
   );
 
-  const events = await readMemoryEvents(repoRoot);
+  const events = first.memory.events;
   const missingSources = events.flatMap((event) =>
     event.sources.filter((source) => !existsSync(join(repoRoot, ...source.path.split("/")))),
   );
@@ -119,10 +118,17 @@ export async function verifyRepoMemory(repoRoot: string): Promise<HarnessReport>
     "warn",
   );
 
-  const packet = buildContextPacket(first.map, first.graph, events, {
+  const packet = buildContextPacket(first.map, first.graph, first.memory, {
     query: "",
     maxTokens: 512,
   });
+  check(
+    checks,
+    "context-memory-fingerprint",
+    packet.memoryFingerprint === first.manifest.memoryFingerprint,
+    "context packet matches the manifest memory fingerprint",
+    "context packet does not match the manifest memory fingerprint",
+  );
   check(
     checks,
     "context-citations",

@@ -171,11 +171,20 @@ import {
   appendMemoryEvent,
   buildContextPacket,
   pageRank,
+  readMemoryLedgerSnapshot,
   refreshRepoBrain,
   syncGraphToNeo4j,
   verifyRepoMemory,
 } from "@provena/cli";
 ```
+
+For snapshot attestation, pass `buildContextPacket` the `memory` snapshot from
+`refreshRepoBrain` or `readMemoryLedgerSnapshot`. Its `memoryFingerprint` is the
+SHA-256 of the exact raw ledger bytes, so it matches manifest and session
+metadata produced from the same snapshot, even when blank lines or line endings
+differ. The backward-compatible
+`MemoryEvent[]` input reconstructs canonical JSONL and cannot preserve those
+otherwise invisible byte differences.
 
 ## Test gate
 

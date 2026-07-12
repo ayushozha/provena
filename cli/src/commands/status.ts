@@ -1,17 +1,15 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { getGitRoot, configExists, loadConfig } from "../config.js";
 import {
   activeMemoryEvents,
-  readMemoryEvents,
+  readMemoryLedgerSnapshot,
   scanRepo,
-  MEMORY_LEDGER_PATH,
   REPO_MANIFEST_PATH,
   type RepoBrainManifest,
 } from "../brain/index.js";
 import { readDaemonStatus } from "./daemon.js";
-import { normalizeRepoPath } from "../brain/utils.js";
+import { normalizeRepoPath, sha256 } from "../brain/utils.js";
 import { assertSafeRepoPath } from "../security/paths.js";
 import { installedMcpClients } from "../integrations/mcp-config.js";
 
@@ -36,10 +34,9 @@ export async function runStatusCommand(
     includePatterns: config.index.include,
     excludePatterns: config.index.exclude,
   });
-  const events = await readMemoryEvents(repoRoot);
-  const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
-  const ledgerPath = join(repoRoot, ...MEMORY_LEDGER_PATH.split("/"));
-  const memoryFingerprint = digest(existsSync(ledgerPath) ? readFileSync(ledgerPath) : "");
+  const memory = await readMemoryLedgerSnapshot(repoRoot);
+  const events = memory.events;
+  const memoryFingerprint = memory.memoryFingerprint;
   const artifactHashesCurrent = manifest.artifacts.every((artifact) => {
     try {
       if (
@@ -55,7 +52,7 @@ export async function runStatusCommand(
       assertSafeRepoPath(repoRoot, artifactPath);
       if (!existsSync(artifactPath)) return false;
       const content = readFileSync(artifactPath);
-      return content.byteLength === artifact.bytes && digest(content) === artifact.sha256;
+      return content.byteLength === artifact.bytes && sha256(content) === artifact.sha256;
     } catch {
       return false;
     }

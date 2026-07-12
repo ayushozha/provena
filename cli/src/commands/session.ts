@@ -3,7 +3,6 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getGitRoot, loadConfig } from "../config.js";
 import {
-  readMemoryEvents,
   refreshRepoBrain,
   REPO_BRAIN_PATH,
 } from "../brain/index.js";
@@ -42,13 +41,12 @@ export async function runSessionCommand(
   const repoRoot = getGitRoot(cwd);
   loadConfig(repoRoot);
   const refreshed = await refreshRepoBrain(repoRoot);
-  const events = await readMemoryEvents(repoRoot);
   const rawTokens = valueAfter(args, "--max-tokens");
   const maxTokens = rawTokens === undefined ? 2_500 : Number(rawTokens);
   if (!Number.isInteger(maxTokens) || maxTokens < 64) {
     throw new Error("--max-tokens must be an integer of at least 64");
   }
-  const packet = buildContextPacket(refreshed.map, refreshed.graph, events, {
+  const packet = buildContextPacket(refreshed.map, refreshed.graph, refreshed.memory, {
     query: queryFrom(args),
     maxTokens,
   });
@@ -58,7 +56,7 @@ export async function runSessionCommand(
     agent: valueAfter(args, "--agent") ?? "unknown",
     startedAt: new Date().toISOString(),
     sourceFingerprint: refreshed.map.sourceFingerprint,
-    memoryFingerprint: refreshed.manifest.memoryFingerprint,
+    memoryFingerprint: packet.memoryFingerprint,
     query: packet.query,
   };
   const sessionDir = join(repoRoot, ".provena", "cache", "sessions");
