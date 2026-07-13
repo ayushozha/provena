@@ -12,5 +12,10 @@ dependencies = [
   "numpy>=1.26.0",
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*", "eval*"]
+namespaces = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
