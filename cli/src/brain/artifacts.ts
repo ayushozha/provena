@@ -1,12 +1,17 @@
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import { basename, join, posix } from "node:path";
 import {
   activeMemoryEvents,
+  assertMemoryLedgerSnapshotAttestation,
   readMemoryLedgerSnapshot,
   MEMORY_LEDGER_PATH,
   type MemoryLedgerSnapshot,
 } from "./events.js";
-import { scanRepo, type ScanRepoOptions } from "./detect.js";
+import {
+  repoMapSourceFingerprint,
+  scanRepo,
+  type ScanRepoOptions,
+} from "./detect.js";
 import { MEMORY_EVENT_JSON_SCHEMA } from "./schema.js";
 import type {
   MemoryEvent,
@@ -19,8 +24,22 @@ import { withRepoMemoryLock } from "./lock.js";
 import { buildRepoGraph } from "../graph/build.js";
 import { degreeCentrality, pageRank } from "../graph/algorithms.js";
 import type { RepoGraph } from "../graph/types.js";
+import { repoGraphProjectionFingerprint } from "../graph/temporal.js";
 import { configExists, readConfig } from "../config.js";
 import { assertSafeRepoPath } from "../security/paths.js";
+import { assertNoSecretMaterial } from "../security/memory.js";
+import {
+  reconcileRepoMapMemories,
+  type RepoMemoryReconciliation,
+} from "./reconcile.js";
+import {
+  assertMaintenancePlanAttestation,
+  canonicalMaintenancePlan,
+  compileMaintenancePlan,
+  MAINTENANCE_PLAN_PATH,
+  MAX_MAINTENANCE_PLAN_BYTES,
+} from "../maintenance/plan.js";
+import type { MaintenancePlan } from "../maintenance/types.js";
 
 export const REPO_BRAIN_PATH = ".provena/repo.brain.md";
 export const REPO_MAP_PATH = ".provena/repo.map.json";
@@ -34,22 +53,51 @@ const VIEW_PATHS = {
   learning: ".provena/views/learnings.md",
 } as const;
 
+/** Exact tracked artifacts committed by the manifest; the manifest commits itself last. */
+export const REPO_BRAIN_MANAGED_ARTIFACT_PATHS = Object.freeze([
+  REPO_BRAIN_PATH,
+  REPO_MAP_PATH,
+  REPO_GRAPH_PATH,
+  MAINTENANCE_PLAN_PATH,
+  MEMORY_EVENT_SCHEMA_PATH,
+  VIEW_PATHS.decision,
+  VIEW_PATHS.workflow,
+  VIEW_PATHS.learning,
+  MEMORY_LEDGER_PATH,
+] as const);
+
+/** Read-time ceilings for checked-in generations before any artifact is parsed. */
+export const MAX_STORED_ARTIFACT_BYTES = 64 * 1024 * 1024;
+export const MAX_STORED_GENERATION_BYTES = 128 * 1024 * 1024;
+const STORED_GENERATION_ERROR =
+  "stored repo brain artifacts do not describe one committed generation; run `provena refresh`";
+
 export interface RefreshRepoBrainOptions extends ScanRepoOptions {
   map?: RepoMap;
+  /** Observation clock for deterministic tests; production uses wall time. */
+  now?: () => Date;
+  /** Monotonic timing source for deterministic tests. */
+  clock?: () => number;
 }
 
 export interface RefreshRepoBrainResult {
   map: RepoMap;
   graph: RepoGraph;
+  maintenancePlan: MaintenancePlan;
   manifest: RepoBrainManifest;
   memory: MemoryLedgerSnapshot;
+  reconciliation: RepoMemoryReconciliation;
   written: string[];
 }
 
 export interface StoredRepoBrainArtifacts {
   map: RepoMap;
   graph: RepoGraph;
+  maintenancePlan: MaintenancePlan;
   manifest: RepoBrainManifest;
+  memory: MemoryLedgerSnapshot;
+  /** Exact verified bytes captured under the repository-memory read lock. */
+  artifactContents: Readonly<Record<string, string>>;
 }
 
 function inline(value: string): string {
@@ -247,6 +295,7 @@ function renderBrain(map: RepoMap, graph: RepoGraph, events: MemoryEvent[]): str
     "- Canonical append-only ledger: `memory/events.jsonl`",
     "- Machine-readable map: `repo.map.json`",
     "- Machine-readable graph: `graph.json`",
+    "- [Maintenance proposals](maintenance.plan.json)",
     "",
   );
   return lines.join("\n");
@@ -268,10 +317,62 @@ async function writeChanged(
   path: string,
   content: string,
   written: string[],
+  writer: typeof writeFileAtomic,
 ): Promise<void> {
   if ((await readExisting(repoRoot, path)) === content) return;
-  await writeFileAtomic(repoRoot, join(repoRoot, ...path.split("/")), content);
+  await writer(repoRoot, join(repoRoot, ...path.split("/")), content);
   written.push(path);
+}
+
+/**
+ * Publish one locked repo-brain generation and restore every changed path if a
+ * handled write fails. The manifest is supplied last by the refresh caller so
+ * it remains the commit record. Multi-file crash atomicity is detected and
+ * repaired by the next refresh; it requires a generation pointer to guarantee.
+ *
+ * Exported from this module (but not the package root) so rollback behavior can
+ * be fault-injected without adding production failpoint configuration.
+ */
+export async function commitRepoBrainGeneration(
+  repoRoot: string,
+  generation: Readonly<Record<string, string>>,
+  generationPaths: readonly string[],
+  writer: typeof writeFileAtomic = writeFileAtomic,
+): Promise<string[]> {
+  if (new Set(generationPaths).size !== generationPaths.length) {
+    throw new Error("repo brain generation contains duplicate paths");
+  }
+  for (const path of generationPaths) {
+    if (!Object.prototype.hasOwnProperty.call(generation, path)) {
+      throw new Error(`repo brain generation is missing ${path}`);
+    }
+  }
+  const previous = new Map<string, string | null>();
+  for (const path of generationPaths) {
+    previous.set(path, await readExisting(repoRoot, path));
+  }
+  const written: string[] = [];
+  try {
+    for (const path of generationPaths) {
+      await writeChanged(repoRoot, path, generation[path] ?? "", written, writer);
+    }
+  } catch (error) {
+    // A custom/OS writer can replace the destination and then throw before
+    // returning, so restore the complete snapshotted generation rather than
+    // only paths whose writer reported success.
+    for (const path of [...generationPaths].reverse()) {
+      const prior = previous.get(path) ?? null;
+      const absolute = join(repoRoot, ...path.split("/"));
+      if (prior === null) {
+        assertSafeRepoPath(repoRoot, absolute);
+        await rm(absolute, { force: true });
+      } else {
+        await writeFileAtomic(repoRoot, absolute, prior);
+      }
+    }
+    throw error;
+  }
+  return written;
 }
 
 async function refreshRepoBrainUnlocked(
@@ -293,68 +394,93 @@ async function refreshRepoBrainUnlocked(
     };
   }
   const map = options.map ?? (await scanRepo(repoRoot, scanOptions));
-  const graph = buildRepoGraph(map);
-  const written: string[] = [];
-  if ((await readExisting(repoRoot, MEMORY_LEDGER_PATH)) === null) {
-    await writeFileAtomic(repoRoot, join(repoRoot, ...MEMORY_LEDGER_PATH.split("/")), "");
-    written.push(MEMORY_LEDGER_PATH);
-  }
-  const memory = await readMemoryLedgerSnapshot(repoRoot);
+  // The map contains more than reconciled candidates (paths, descriptions,
+  // imports, symbols, and warnings), so screen the complete tracked artifact.
+  assertNoSecretMaterial(canonicalJson(map));
+  const currentMemory = await readMemoryLedgerSnapshot(repoRoot);
+  // A caller-supplied map is useful for pure graph tests but is not attested to
+  // the repository on disk, so it must never create automatic durable memory.
+  const reconciled = options.map
+    ? {
+        memory: currentMemory,
+        appended: [],
+        reconciliation: {
+          candidates: 0,
+          added: 0,
+          noops: 0,
+          superseded: 0,
+          retracted: 0,
+          deferred: 0,
+          conflicts: 0,
+          durationMs: 0,
+        } satisfies RepoMemoryReconciliation,
+      }
+    : await reconcileRepoMapMemories(repoRoot, map, currentMemory, {
+        ...(options.now ? { now: options.now } : {}),
+        ...(options.clock ? { clock: options.clock } : {}),
+      });
+  const memory = reconciled.memory;
   const events = memory.events;
+  // Graph v2 is derived from the exact post-reconciliation snapshot so a
+  // transition appended by this refresh is visible in the same generation.
+  const graph = buildRepoGraph(map, memory);
+  if (
+    graph.schemaVersion !== 2 ||
+    graph.sourceFingerprint !== map.sourceFingerprint ||
+    graph.memoryFingerprint !== memory.memoryFingerprint
+  ) {
+    throw new Error("repo graph attestation does not match the refresh generation");
+  }
+  const maintenancePlan = compileMaintenancePlan(map, memory);
   const artifacts: Record<string, string> = {
     [REPO_BRAIN_PATH]: renderBrain(map, graph, events),
     [REPO_MAP_PATH]: canonicalJson(map, true),
     [REPO_GRAPH_PATH]: canonicalJson(graph, true),
+    [MAINTENANCE_PLAN_PATH]: canonicalMaintenancePlan(maintenancePlan),
     [MEMORY_EVENT_SCHEMA_PATH]: canonicalJson(MEMORY_EVENT_JSON_SCHEMA, true),
     ...renderViews(events),
+  };
+  const committedArtifacts: Record<string, string> = {
+    ...artifacts,
+    [MEMORY_LEDGER_PATH]: memory.rawLedger,
   };
   const manifest: RepoBrainManifest = {
     schemaVersion: 1,
     sourceFingerprint: map.sourceFingerprint,
     memoryFingerprint: memory.memoryFingerprint,
-    artifacts: [
-      ...Object.entries(artifacts).map(([path, content]) => ({
+    artifacts: REPO_BRAIN_MANAGED_ARTIFACT_PATHS.map((path) => {
+      const content = committedArtifacts[path];
+      return {
         path,
         sha256: sha256(content),
         bytes: Buffer.byteLength(content, "utf8"),
-      })),
-      {
-        path: MEMORY_LEDGER_PATH,
-        sha256: memory.memoryFingerprint,
-        bytes: memory.bytes,
-      },
-    ].sort((a, b) => compareText(a.path, b.path)),
+      };
+    }),
   };
   const generation: Record<string, string> = {
+    [MEMORY_LEDGER_PATH]: memory.rawLedger,
     ...artifacts,
     [REPO_MANIFEST_PATH]: canonicalJson(manifest, true),
   };
   const generationPaths = [
+    MEMORY_LEDGER_PATH,
     ...Object.keys(artifacts).sort(compareText),
     REPO_MANIFEST_PATH,
   ];
-  const previous = new Map<string, string | null>();
-  for (const path of generationPaths) {
-    previous.set(path, await readExisting(repoRoot, path));
-  }
-  try {
-    for (const path of generationPaths) {
-      await writeChanged(repoRoot, path, generation[path] ?? "", written);
-    }
-  } catch (error) {
-    for (const path of [...written].reverse()) {
-      const prior = previous.get(path) ?? null;
-      const absolute = join(repoRoot, ...path.split("/"));
-      if (prior === null) {
-        assertSafeRepoPath(repoRoot, absolute);
-        await rm(absolute, { force: true });
-      } else {
-        await writeFileAtomic(repoRoot, absolute, prior);
-      }
-    }
-    throw error;
-  }
-  return { map, graph, manifest, memory, written };
+  const written = await commitRepoBrainGeneration(
+    repoRoot,
+    generation,
+    generationPaths,
+  );
+  return {
+    map,
+    graph,
+    maintenancePlan,
+    manifest,
+    memory,
+    reconciliation: reconciled.reconciliation,
+    written,
+  };
 }
 
 export async function refreshRepoBrain(
@@ -369,29 +495,184 @@ export async function refreshRepoBrain(
 export async function readRepoBrainArtifacts(
   repoRoot: string,
 ): Promise<StoredRepoBrainArtifacts> {
-  const readJson = async <T>(path: string): Promise<T> => {
-    const text = await readExisting(repoRoot, path);
-    if (text === null) {
-      throw new Error(`missing ${path}; run \`provena refresh\` first`);
+  return withRepoMemoryLock(repoRoot, async () => {
+    const generationPaths = [
+      ...REPO_BRAIN_MANAGED_ARTIFACT_PATHS,
+      REPO_MANIFEST_PATH,
+    ] as const;
+    let generationBytes = 0;
+    for (const path of generationPaths) {
+      const absolute = join(repoRoot, ...path.split("/"));
+      assertSafeRepoPath(repoRoot, absolute);
+      let info;
+      try {
+        info = await stat(absolute);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new Error(`missing ${path}; run \`provena refresh\` first`);
+        }
+        throw error;
+      }
+      const maxBytes = path === MAINTENANCE_PLAN_PATH
+        ? MAX_MAINTENANCE_PLAN_BYTES
+        : MAX_STORED_ARTIFACT_BYTES;
+      if (!info.isFile() || info.size > maxBytes) {
+        throw new Error(`invalid ${path}; run \`provena refresh\` to repair it`);
+      }
+      generationBytes += info.size;
+      if (
+        !Number.isSafeInteger(generationBytes) ||
+        generationBytes > MAX_STORED_GENERATION_BYTES
+      ) {
+        throw new Error(
+          "stored repo brain generation exceeds the safety cap; run `provena refresh` to repair it",
+        );
+      }
     }
+
+    const readCapped = async (path: string): Promise<string> => {
+      const bytes = await readFile(join(repoRoot, ...path.split("/")));
+      const maxBytes = path === MAINTENANCE_PLAN_PATH
+        ? MAX_MAINTENANCE_PLAN_BYTES
+        : MAX_STORED_ARTIFACT_BYTES;
+      if (bytes.byteLength > maxBytes) {
+        throw new Error(`invalid ${path}; run \`provena refresh\` to repair it`);
+      }
+      return bytes.toString("utf8");
+    };
+    const [artifactPairs, memory] = await Promise.all([
+      Promise.all(generationPaths.map(async (path) => [path, await readCapped(path)] as const)),
+      readMemoryLedgerSnapshot(repoRoot),
+    ]);
+    const artifactContents: Record<string, string> = Object.fromEntries(artifactPairs);
+    const content = (path: string): string => {
+      const value = artifactContents[path];
+      if (value === undefined) throw new Error(STORED_GENERATION_ERROR);
+      return value;
+    };
+    const mapText = content(REPO_MAP_PATH);
+    const graphText = content(REPO_GRAPH_PATH);
+    const maintenancePlanText = content(MAINTENANCE_PLAN_PATH);
+    const manifestText = content(REPO_MANIFEST_PATH);
+    const parse = <T>(text: string, path: string): T => {
+      try {
+        return JSON.parse(text) as T;
+      } catch {
+        throw new Error(`invalid ${path}; run \`provena refresh\` to repair it`);
+      }
+    };
+    const map = parse<RepoMap>(mapText, REPO_MAP_PATH);
+    const graph = parse<RepoGraph>(graphText, REPO_GRAPH_PATH);
+    const maintenancePlan = parse<MaintenancePlan>(
+      maintenancePlanText,
+      MAINTENANCE_PLAN_PATH,
+    );
+    const manifest = parse<RepoBrainManifest>(manifestText, REPO_MANIFEST_PATH);
+    if (
+      !map || typeof map !== "object" ||
+      map.schemaVersion !== 1 ||
+      !Array.isArray(map.files) ||
+      typeof map.sourceFingerprint !== "string" ||
+      !graph || typeof graph !== "object" ||
+      ![1, 2].includes(graph.schemaVersion) ||
+      !Array.isArray(graph.nodes) ||
+      !Array.isArray(graph.edges) ||
+      typeof graph.sourceFingerprint !== "string" ||
+      (graph.schemaVersion === 2 && (
+        typeof graph.memoryFingerprint !== "string" ||
+        typeof graph.projectionFingerprint !== "string" ||
+        graph.timeSemantics !== "event-effective-time"
+      )) ||
+      !manifest || typeof manifest !== "object" ||
+      manifest.schemaVersion !== 1 ||
+      typeof manifest.sourceFingerprint !== "string" ||
+      typeof manifest.memoryFingerprint !== "string" ||
+      !Array.isArray(manifest.artifacts)
+    ) {
+      throw new Error("stored repo brain artifacts have an unsupported schema; run `provena refresh`");
+    }
+    if (manifest.artifacts.some((artifact) =>
+      !artifact || typeof artifact !== "object" ||
+      typeof artifact.path !== "string" ||
+      typeof artifact.sha256 !== "string" ||
+      !Number.isSafeInteger(artifact.bytes) || artifact.bytes < 0
+    )) {
+      throw new Error(STORED_GENERATION_ERROR);
+    }
+    if (
+      manifest.artifacts.reduce((total, artifact) => total + artifact.bytes, 0) >
+      MAX_STORED_GENERATION_BYTES
+    ) {
+      throw new Error(STORED_GENERATION_ERROR);
+    }
+    assertMemoryLedgerSnapshotAttestation(memory);
     try {
-      return JSON.parse(text) as T;
+      assertMaintenancePlanAttestation(maintenancePlan, map, memory);
+      if (maintenancePlanText !== canonicalMaintenancePlan(maintenancePlan)) {
+        throw new Error();
+      }
     } catch {
-      throw new Error(`invalid ${path}; run \`provena refresh\` to repair it`);
+      throw new Error(STORED_GENERATION_ERROR);
     }
-  };
-  const map = await readJson<RepoMap>(REPO_MAP_PATH);
-  const graph = await readJson<RepoGraph>(REPO_GRAPH_PATH);
-  const manifest = await readJson<RepoBrainManifest>(REPO_MANIFEST_PATH);
-  if (
-    map.schemaVersion !== 1 ||
-    !Array.isArray(map.files) ||
-    graph.schemaVersion !== 1 ||
-    !Array.isArray(graph.nodes) ||
-    !Array.isArray(graph.edges) ||
-    manifest.schemaVersion !== 1
-  ) {
-    throw new Error("stored repo brain artifacts have an unsupported schema; run `provena refresh`");
-  }
-  return { map, graph, manifest };
+    const entries = new Map(manifest.artifacts.map((artifact) => [artifact.path, artifact]));
+    const expectedPaths = [...REPO_BRAIN_MANAGED_ARTIFACT_PATHS].sort(compareText);
+    const actualPaths = manifest.artifacts.map((artifact) => artifact.path).sort(compareText);
+    const expectedArtifacts: Record<string, string> = {
+      [REPO_BRAIN_PATH]: renderBrain(map, graph, memory.events),
+      [REPO_MAP_PATH]: canonicalJson(map, true),
+      [REPO_GRAPH_PATH]: canonicalJson(graph, true),
+      [MAINTENANCE_PLAN_PATH]: canonicalMaintenancePlan(maintenancePlan),
+      [MEMORY_EVENT_SCHEMA_PATH]: canonicalJson(MEMORY_EVENT_JSON_SCHEMA, true),
+      ...renderViews(memory.events),
+      [MEMORY_LEDGER_PATH]: memory.rawLedger,
+    };
+    const graphAttested = graph.schemaVersion === 1 || (
+      graph.memoryFingerprint === memory.memoryFingerprint &&
+      graph.projectionFingerprint === repoGraphProjectionFingerprint(
+        graph.sourceFingerprint,
+        graph.memoryFingerprint,
+      ) &&
+      graph.timeSemantics === "event-effective-time"
+    );
+    let graphCanonical = false;
+    try {
+      if (graph.schemaVersion === 2) {
+        graphCanonical = canonicalJson(graph) === canonicalJson(buildRepoGraph(map, memory));
+      } else {
+        const expected = buildRepoGraph(map, []);
+        graphCanonical = canonicalJson(graph.nodes) === canonicalJson(expected.nodes) &&
+          canonicalJson(graph.edges) === canonicalJson(expected.edges);
+      }
+    } catch {
+      graphCanonical = false;
+    }
+    if (
+      canonicalJson(actualPaths) !== canonicalJson(expectedPaths) ||
+      entries.size !== manifest.artifacts.length ||
+      map.sourceFingerprint !== repoMapSourceFingerprint(map) ||
+      map.sourceFingerprint !== graph.sourceFingerprint ||
+      map.sourceFingerprint !== manifest.sourceFingerprint ||
+      manifest.memoryFingerprint !== memory.memoryFingerprint ||
+      !graphAttested ||
+      !graphCanonical ||
+      manifestText !== canonicalJson(manifest, true) ||
+      REPO_BRAIN_MANAGED_ARTIFACT_PATHS.some((path) => {
+        const stored = content(path);
+        if (stored !== expectedArtifacts[path]) return true;
+        const entry = entries.get(path);
+        return !entry || entry.sha256 !== sha256(stored) ||
+          entry.bytes !== Buffer.byteLength(stored, "utf8");
+      })
+    ) {
+      throw new Error(STORED_GENERATION_ERROR);
+    }
+    return {
+      map,
+      graph,
+      maintenancePlan,
+      manifest,
+      memory,
+      artifactContents: Object.freeze({ ...artifactContents }),
+    };
+  });
 }

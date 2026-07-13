@@ -62,6 +62,90 @@
         }
       }
     },
+    "/v1/repositories/{repository_id}/memory-events/sync": {
+      "post": {
+        "summary": "Sync Repository Memory Events",
+        "operationId": "sync_repository_memory_events_v1_repositories__repository_id__memory_events_sync_post",
+        "security": [
+          {
+            "ProvenaTenant": [],
+            "ProvenaPrincipal": []
+          },
+          {
+            "ProvenaTenant": [],
+            "ProvenaKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "repository_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Repository Id"
+            }
+          },
+          {
+            "name": "X-Provena-Role",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "enum": [
+                "editor",
+                "admin",
+                "superadmin"
+              ],
+              "type": "string",
+              "description": "Write role: editor, admin, or superadmin.",
+              "title": "X-Provena-Role"
+            },
+            "description": "Write role: editor, admin, or superadmin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepositoryMemorySyncRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryMemorySyncResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Tenant-bound principal or key authentication is required."
+          },
+          "403": {
+            "description": "The caller lacks write access or crossed a tenant boundary."
+          },
+          "409": {
+            "description": "An immutable repository event or deterministic projection conflicts."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/memories/{memory_id}": {
       "get": {
         "summary": "Get Memory",
@@ -146,6 +230,53 @@
             }
           }
         }
+      },
+      "put": {
+        "summary": "Update Memory",
+        "operationId": "update_memory_v1_memories__memory_id__put",
+        "parameters": [
+          {
+            "name": "memory_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Memory Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryWriteResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/memories/search": {
@@ -203,6 +334,163 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/memories/{memory_id}/history": {
+      "get": {
+        "summary": "Memory History",
+        "operationId": "memory_history_v1_memories__memory_id__history_get",
+        "parameters": [
+          {
+            "name": "memory_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Memory Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MemoryHistoryEvent"
+                  },
+                  "title": "Response Memory History V1 Memories  Memory Id  History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/memories/{memory_id}/feedback": {
+      "post": {
+        "summary": "Add Memory Feedback",
+        "operationId": "add_memory_feedback_v1_memories__memory_id__feedback_post",
+        "parameters": [
+          {
+            "name": "memory_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Memory Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryFeedbackCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryFeedbackRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List Memory Feedback",
+        "operationId": "list_memory_feedback_v1_memories__memory_id__feedback_get",
+        "parameters": [
+          {
+            "name": "memory_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Memory Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MemoryFeedbackRecord"
+                  },
+                  "title": "Response List Memory Feedback V1 Memories  Memory Id  Feedback Get"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -1130,10 +1418,9 @@
           {
             "name": "tenant_id",
             "in": "query",
-            "required": false,
+            "required": true,
             "schema": {
               "type": "string",
-              "default": "",
               "title": "Tenant Id"
             }
           }
@@ -1817,6 +2104,16 @@
           "kind": {
             "$ref": "#/components/schemas/MemoryKind"
           },
+          "memory_layer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemoryLayer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "scope": {
             "$ref": "#/components/schemas/ScopeEnvelope"
           },
@@ -1910,6 +2207,18 @@
             ],
             "title": "Valid To"
           },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
           "source_references": {
             "items": {
               "$ref": "#/components/schemas/SourceReference"
@@ -1969,6 +2278,190 @@
         ],
         "title": "MemoryCreate"
       },
+      "MemoryFeedbackCreate": {
+        "properties": {
+          "feedback_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback Id"
+          },
+          "feedback_type": {
+            "$ref": "#/components/schemas/MemoryFeedbackType"
+          },
+          "principal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Principal Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "feedback_type"
+        ],
+        "title": "MemoryFeedbackCreate"
+      },
+      "MemoryFeedbackRecord": {
+        "properties": {
+          "feedback_id": {
+            "type": "string",
+            "title": "Feedback Id"
+          },
+          "memory_id": {
+            "type": "string",
+            "title": "Memory Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "feedback_type": {
+            "$ref": "#/components/schemas/MemoryFeedbackType"
+          },
+          "principal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Principal Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "feedback_id",
+          "memory_id",
+          "tenant_id",
+          "feedback_type",
+          "created_at"
+        ],
+        "title": "MemoryFeedbackRecord"
+      },
+      "MemoryFeedbackType": {
+        "type": "string",
+        "enum": [
+          "positive",
+          "negative",
+          "correction",
+          "pin"
+        ],
+        "title": "MemoryFeedbackType"
+      },
+      "MemoryHistoryEvent": {
+        "properties": {
+          "history_id": {
+            "type": "string",
+            "title": "History Id"
+          },
+          "memory_id": {
+            "type": "string",
+            "title": "Memory Id"
+          },
+          "event": {
+            "$ref": "#/components/schemas/MemoryHistoryEventType"
+          },
+          "actor_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Id"
+          },
+          "old_memory": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Old Memory"
+          },
+          "new_memory": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "New Memory"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "history_id",
+          "memory_id",
+          "event",
+          "created_at"
+        ],
+        "title": "MemoryHistoryEvent"
+      },
+      "MemoryHistoryEventType": {
+        "type": "string",
+        "enum": [
+          "add",
+          "update",
+          "delete",
+          "feedback"
+        ],
+        "title": "MemoryHistoryEventType"
+      },
       "MemoryKind": {
         "type": "string",
         "enum": [
@@ -1981,9 +2474,24 @@
           "instruction",
           "metric",
           "stakeholder",
-          "source"
+          "source",
+          "workflow",
+          "mistake",
+          "handoff",
+          "invariant"
         ],
         "title": "MemoryKind"
+      },
+      "MemoryLayer": {
+        "type": "string",
+        "enum": [
+          "conversation",
+          "session",
+          "user",
+          "agent",
+          "organization"
+        ],
+        "title": "MemoryLayer"
       },
       "MemoryRecord": {
         "properties": {
@@ -2000,6 +2508,10 @@
           },
           "status": {
             "$ref": "#/components/schemas/MemoryStatus"
+          },
+          "memory_layer": {
+            "$ref": "#/components/schemas/MemoryLayer",
+            "default": "user"
           },
           "scope": {
             "$ref": "#/components/schemas/ScopeEnvelope"
@@ -2084,6 +2596,18 @@
               }
             ],
             "title": "Valid To"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
           },
           "created_at": {
             "type": "string",
@@ -2197,9 +2721,256 @@
           "active",
           "superseded",
           "deleted",
-          "held"
+          "held",
+          "retracted"
         ],
         "title": "MemoryStatus"
+      },
+      "MemoryUpdate": {
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemoryKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_layer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemoryLayer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "entity_keys": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity Keys"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          },
+          "importance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Importance"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "strength": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strength"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid To"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "embedding_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Model"
+          },
+          "embedding": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding"
+          },
+          "acl": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ACLEntry"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acl"
+          },
+          "source_references": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SourceReference"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source References"
+          },
+          "trigger_phrases": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Phrases"
+          },
+          "supersedes_memory_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Memory Id"
+          }
+        },
+        "type": "object",
+        "title": "MemoryUpdate"
       },
       "MemoryWriteResult": {
         "properties": {
@@ -2414,6 +3185,7 @@
           "related_to",
           "supports",
           "derived_from",
+          "defined_in",
           "supersedes",
           "conflicts_with"
         ],
@@ -2444,6 +3216,214 @@
           "scope"
         ],
         "title": "RelationWrite"
+      },
+      "RepositoryMemorySyncRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Schema Version"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RepositoryMemorySyncScope"
+          },
+          "ledger_path": {
+            "type": "string",
+            "const": ".provena/memory/events.jsonl",
+            "title": "Ledger Path"
+          },
+          "memory_fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Memory Fingerprint"
+          },
+          "ledger_bytes": {
+            "type": "integer",
+            "maximum": 67108864.0,
+            "minimum": 0.0,
+            "title": "Ledger Bytes"
+          },
+          "ledger": {
+            "type": "string",
+            "maxLength": 67108864,
+            "title": "Ledger"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema_version",
+          "scope",
+          "ledger_path",
+          "memory_fingerprint",
+          "ledger_bytes",
+          "ledger"
+        ],
+        "title": "RepositoryMemorySyncRequest"
+      },
+      "RepositoryMemorySyncResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Schema Version",
+            "default": 1
+          },
+          "repository_id": {
+            "type": "string",
+            "title": "Repository Id"
+          },
+          "ledger_fingerprint": {
+            "type": "string",
+            "title": "Ledger Fingerprint"
+          },
+          "events_fingerprint": {
+            "type": "string",
+            "title": "Events Fingerprint"
+          },
+          "received_events": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Received Events"
+          },
+          "created_memories": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Created Memories"
+          },
+          "unchanged_memories": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Unchanged Memories"
+          },
+          "repaired_memories": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Repaired Memories",
+            "default": 0
+          },
+          "suppressed_events": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Suppressed Events",
+            "default": 0
+          },
+          "status_updates": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Status Updates"
+          },
+          "created_relations": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Created Relations"
+          },
+          "repaired_relations": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Repaired Relations",
+            "default": 0
+          },
+          "unchanged_relations": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Unchanged Relations"
+          },
+          "suppressed_relations": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Suppressed Relations",
+            "default": 0
+          },
+          "checkpoint_updated": {
+            "type": "boolean",
+            "title": "Checkpoint Updated"
+          },
+          "no_op": {
+            "type": "boolean",
+            "title": "No Op"
+          },
+          "duration_ms": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Duration Ms"
+          },
+          "timings_ms": {
+            "$ref": "#/components/schemas/RepositoryMemorySyncTimings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "repository_id",
+          "ledger_fingerprint",
+          "events_fingerprint",
+          "received_events",
+          "created_memories",
+          "unchanged_memories",
+          "status_updates",
+          "created_relations",
+          "unchanged_relations",
+          "checkpoint_updated",
+          "no_op",
+          "duration_ms",
+          "timings_ms"
+        ],
+        "title": "RepositoryMemorySyncResponse"
+      },
+      "RepositoryMemorySyncScope": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Tenant Id"
+          },
+          "project_id": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Project Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "project_id"
+        ],
+        "title": "RepositoryMemorySyncScope"
+      },
+      "RepositoryMemorySyncTimings": {
+        "properties": {
+          "validate": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Validate"
+          },
+          "write": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Write"
+          },
+          "relations": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Relations"
+          },
+          "total": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "validate",
+          "write",
+          "relations",
+          "total"
+        ],
+        "title": "RepositoryMemorySyncTimings"
       },
       "RetentionEnforcementRequest": {
         "properties": {
@@ -2623,6 +3603,13 @@
             },
             "type": "array",
             "title": "Query Embedding"
+          },
+          "memory_layers": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryLayer"
+            },
+            "type": "array",
+            "title": "Memory Layers"
           },
           "include_relations": {
             "type": "boolean",
@@ -3016,6 +4003,26 @@
           "type"
         ],
         "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "ProvenaTenant": {
+        "type": "apiKey",
+        "description": "Tenant boundary for the repository memory projection.",
+        "in": "header",
+        "name": "X-Provena-Tenant-Id"
+      },
+      "ProvenaPrincipal": {
+        "type": "apiKey",
+        "description": "Authenticated principal identity. Required unless X-Provena-Key-Id is sent.",
+        "in": "header",
+        "name": "X-Provena-Principal-Id"
+      },
+      "ProvenaKey": {
+        "type": "apiKey",
+        "description": "Authenticated service-key identity. Required unless X-Provena-Principal-Id is sent.",
+        "in": "header",
+        "name": "X-Provena-Key-Id"
       }
     }
   }

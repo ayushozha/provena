@@ -31,7 +31,11 @@ export type MemoryKind =
   | "instruction"
   | "metric"
   | "stakeholder"
-  | "source";
+  | "source"
+  | "workflow"
+  | "mistake"
+  | "handoff"
+  | "invariant";
 
 export interface MemoryCreate {
   memory_id?: string;
@@ -126,9 +130,59 @@ export interface PipelineWriteResult {
   memory: MemoryRecord;
 }
 
+export interface RepositoryMemorySyncRequest {
+  schema_version: 1;
+  scope: ScopeEnvelope;
+  ledger_path: ".provena/memory/events.jsonl";
+  memory_fingerprint: string;
+  ledger_bytes: number;
+  ledger: string;
+}
+
+export interface RepositoryMemorySyncTimings {
+  validate: number;
+  write: number;
+  relations: number;
+  total: number;
+}
+
+export interface RepositoryMemorySyncResponse {
+  schema_version: 1;
+  repository_id: string;
+  ledger_fingerprint: string;
+  events_fingerprint: string;
+  received_events: number;
+  created_memories: number;
+  unchanged_memories: number;
+  repaired_memories: number;
+  suppressed_events: number;
+  status_updates: number;
+  created_relations: number;
+  repaired_relations: number;
+  unchanged_relations: number;
+  suppressed_relations: number;
+  checkpoint_updated: boolean;
+  no_op: boolean;
+  duration_ms: number;
+  timings_ms: RepositoryMemorySyncTimings;
+}
+
+export class RepositoryMemorySyncTransportError extends Error {
+  constructor(path: string, cause: unknown, credential?: string) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    // Do not retain the original error as `cause`: fetch implementations can
+    // include request headers or URLs in it, which would make a bearer token
+    // visible through structured error inspection even when `message` is safe.
+    super(`POST ${path} transport failed: ${redactCredential(detail, credential)}`);
+    this.name = "RepositoryMemorySyncTransportError";
+  }
+}
+
 export interface ProvenaClientOptions {
   storeUrl: string;
   intelligenceUrl?: string;
+  /** Optional bearer credential supplied at runtime; never persisted by the client. */
+  apiKey?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }
@@ -138,27 +192,81 @@ const DEFAULT_SEARCH_LIMIT = 5;
 export class ProvenaClient {
   private readonly baseUrl: string;
   private readonly intelligenceUrl: string | undefined;
+  private readonly apiKey: string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
 
   constructor(options: ProvenaClientOptions) {
     this.baseUrl = options.storeUrl.replace(/\/$/, "");
     this.intelligenceUrl = options.intelligenceUrl?.replace(/\/$/, "");
+    this.apiKey = options.apiKey;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 30_000;
+  }
+
+  private scopedHeaders(scope: ScopeEnvelope): Record<string, string> {
+    return {
+      "X-Provena-Tenant-Id": scope.tenant_id,
+      "X-Provena-Principal-Id": "provena-cli",
+      "X-Provena-Role": "editor",
+      ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+    };
   }
 
   async createMemory(payload: MemoryCreate): Promise<MemoryWriteResult> {
     // Generated code memories already have deterministic semantic boundaries.
     // Sending them through fact extraction can split one indexed chunk into
     // several records and destroy the source-identity contract.
-    if (
-      this.intelligenceUrl &&
-      typeof payload.metadata?.provena_generated_fingerprint !== "string"
-    ) {
+    const generatedFingerprint = payload.metadata?.provena_generated_fingerprint;
+    const isGeneratedMemory =
+      typeof generatedFingerprint === "string" && /^[0-9a-f]{64}$/.test(generatedFingerprint);
+    if (this.intelligenceUrl && !isGeneratedMemory) {
       return this.pipelineWrite(payload);
     }
     return this.postJson<MemoryWriteResult>("/v1/memories", payload);
+  }
+
+  async syncRepositoryMemoryEvents(
+    repositoryId: string,
+    payload: RepositoryMemorySyncRequest,
+    expectedEventCount: number,
+    expectedRelationCount: number,
+  ): Promise<RepositoryMemorySyncResponse> {
+    const path = `/v1/repositories/${encodeURIComponent(repositoryId)}/memory-events/sync`;
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...this.scopedHeaders(payload.scope),
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch (error) {
+      throw new RepositoryMemorySyncTransportError(path, error, this.apiKey);
+    }
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(
+        `POST ${path} failed (${response.status}): ${redactCredential(detail.slice(0, 500), this.apiKey)}`,
+      );
+    }
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`invalid repository memory sync response: invalid JSON (${detail})`);
+    }
+    return validateRepositoryMemorySyncResponse(
+      body,
+      repositoryId,
+      payload.memory_fingerprint,
+      expectedEventCount,
+      expectedRelationCount,
+    );
   }
 
   /** Write via intelligence pipeline for embeddings (PLAN-09). */
@@ -168,7 +276,7 @@ export class ProvenaClient {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Provena-Role": "editor",
+        ...this.scopedHeaders(payload.scope),
       },
       body: JSON.stringify({
         kind: payload.kind,
@@ -187,7 +295,7 @@ export class ProvenaClient {
     if (!response.ok) {
       const detail = await response.text();
       throw new Error(
-        `POST /v1/pipeline/write failed (${response.status}): ${detail.slice(0, 500)}`,
+        `POST /v1/pipeline/write failed (${response.status}): ${redactCredential(detail.slice(0, 500), this.apiKey)}`,
       );
     }
 
@@ -212,7 +320,7 @@ export class ProvenaClient {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Provena-Role": "editor",
+        ...this.scopedHeaders(payload.scope),
       },
       body: JSON.stringify({
         query: payload.query,
@@ -228,7 +336,7 @@ export class ProvenaClient {
     if (!response.ok) {
       const detail = await response.text();
       throw new Error(
-        `POST /v1/pipeline/search failed (${response.status}): ${detail.slice(0, 500)}`,
+        `POST /v1/pipeline/search failed (${response.status}): ${redactCredential(detail.slice(0, 500), this.apiKey)}`,
       );
     }
 
@@ -379,6 +487,132 @@ export function scopeEnvelopeFromConfig(scope: ProvenaScope): ScopeEnvelope {
     tenant_id: scope.tenant_id,
     project_id: scope.project_id,
   };
+}
+
+function validateRepositoryMemorySyncResponse(
+  value: unknown,
+  repositoryId: string,
+  ledgerFingerprint: string,
+  expectedEventCount: number,
+  expectedRelationCount: number,
+): RepositoryMemorySyncResponse {
+  const invalid = (detail: string): never => {
+    throw new Error(`invalid repository memory sync response: ${detail}`);
+  };
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return invalid("expected an object");
+  }
+  const body = value as Record<string, unknown>;
+  if (body.schema_version !== 1) invalid("schema_version must be 1");
+  if (body.repository_id !== repositoryId) invalid("repository_id does not match the request");
+  if (body.ledger_fingerprint !== ledgerFingerprint) {
+    invalid("ledger_fingerprint does not match the exact local ledger");
+  }
+  if (typeof body.events_fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(body.events_fingerprint)) {
+    invalid("events_fingerprint must be a lowercase SHA-256");
+  }
+
+  const counters = [
+    "received_events",
+    "created_memories",
+    "unchanged_memories",
+    "repaired_memories",
+    "suppressed_events",
+    "status_updates",
+    "created_relations",
+    "repaired_relations",
+    "unchanged_relations",
+    "suppressed_relations",
+  ] as const;
+  for (const field of counters) {
+    const current = body[field];
+    if (typeof current !== "number" || !Number.isSafeInteger(current) || current < 0) {
+      invalid(`${field} must be a non-negative safe integer`);
+    }
+  }
+  if (body.received_events !== expectedEventCount) {
+    invalid("received_events does not match the validated local event count");
+  }
+  if (
+    (body.created_memories as number) +
+      (body.unchanged_memories as number) +
+      (body.repaired_memories as number) +
+      (body.suppressed_events as number) !==
+    body.received_events
+  ) {
+    invalid("memory projection counters must equal received_events");
+  }
+  if (
+    (body.created_relations as number) +
+      (body.repaired_relations as number) +
+      (body.unchanged_relations as number) +
+      (body.suppressed_relations as number) !==
+    expectedRelationCount
+  ) {
+    invalid("relation projection counters must equal the validated local relation count");
+  }
+  if (typeof body.checkpoint_updated !== "boolean" || typeof body.no_op !== "boolean") {
+    invalid("checkpoint_updated and no_op must be booleans");
+  }
+  if (body.checkpoint_updated === body.no_op) {
+    invalid("checkpoint_updated must be the inverse of no_op");
+  }
+  if (
+    body.no_op &&
+    (body.created_memories !== 0 ||
+      body.repaired_memories !== 0 ||
+      body.status_updates !== 0 ||
+      body.created_relations !== 0 ||
+      body.repaired_relations !== 0)
+  ) {
+    invalid("a no-op response cannot report projection mutations");
+  }
+
+  if (typeof body.duration_ms !== "number" || !Number.isFinite(body.duration_ms) || body.duration_ms < 0) {
+    invalid("duration_ms must be a non-negative finite number");
+  }
+  if (typeof body.timings_ms !== "object" || body.timings_ms === null || Array.isArray(body.timings_ms)) {
+    return invalid("timings_ms must be an object");
+  }
+  const timings = body.timings_ms as Record<string, unknown>;
+  for (const field of ["validate", "write", "relations", "total"] as const) {
+    const current = timings[field];
+    if (typeof current !== "number" || !Number.isFinite(current) || current < 0) {
+      invalid(`timings_ms.${field} must be a non-negative finite number`);
+    }
+  }
+  if (body.duration_ms !== timings.total) {
+    invalid("duration_ms must equal timings_ms.total");
+  }
+  return {
+    schema_version: 1,
+    repository_id: repositoryId,
+    ledger_fingerprint: ledgerFingerprint,
+    events_fingerprint: body.events_fingerprint as string,
+    received_events: body.received_events as number,
+    created_memories: body.created_memories as number,
+    unchanged_memories: body.unchanged_memories as number,
+    repaired_memories: body.repaired_memories as number,
+    suppressed_events: body.suppressed_events as number,
+    status_updates: body.status_updates as number,
+    created_relations: body.created_relations as number,
+    repaired_relations: body.repaired_relations as number,
+    unchanged_relations: body.unchanged_relations as number,
+    suppressed_relations: body.suppressed_relations as number,
+    checkpoint_updated: body.checkpoint_updated as boolean,
+    no_op: body.no_op as boolean,
+    duration_ms: body.duration_ms as number,
+    timings_ms: {
+      validate: timings.validate as number,
+      write: timings.write as number,
+      relations: timings.relations as number,
+      total: timings.total as number,
+    },
+  };
+}
+
+function redactCredential(detail: string, credential: string | undefined): string {
+  return credential ? detail.split(credential).join("[REDACTED]") : detail;
 }
 
 function normalizeSearchResponse(body: SearchResponse): SearchResponse {

@@ -25,18 +25,25 @@ The CLI is currently distributed as a source-built npm tarball; the
 
 ## Current product boundary
 
-- The portable brain, typed ledger, current-code graph, context packets, MCP,
-  managed agent instructions, Git hooks, daemon, and integrity harness exist.
+- The portable brain, typed ledger, deterministic current-code + temporal-memory
+  graph, context packets, MCP, managed agent instructions, Git hooks, daemon,
+  and integrity harness exist.
+- Every normal refresh also emits an attested, bounded maintenance plan for
+  exact evidence gaps, paths absent from a complete current map, and exact
+  active-memory overlaps. CLI/MCP can compile cited task packets for human or
+  agent review, but cannot approve, apply, or autonomously execute them.
 - Refresh still performs a bounded eligible-file scan; incremental filesystem
   CDC is roadmap.
-- Neo4j receives the latest code topology, not temporal memory history or a
-  cross-repository enterprise graph.
+- The optional Neo4j adapter projects current code plus temporal memory history
+  and is mock-driver tested; live-server conformance and a cross-repository
+  enterprise graph are not shipped.
 - Confidential/restricted events are rejected from the Git-tracked ledger and
   belong in the optional governed store.
 - Agent/MCP/hook integrations are best-effort and preserve conflicting
   user-owned configuration instead of claiming universal installation.
 - First-party SaaS crawlers, a hosted admin plane, learned local ranking,
-  autonomous subagent DAGs, and commercial enterprise plans are not shipped.
+  semantic consolidation/decay, autonomous subagent DAGs, automatic proposal
+  approval/application, and commercial enterprise plans are not shipped.
 
 ## What Provena already does well
 
@@ -47,17 +54,23 @@ The CLI is currently distributed as a source-built npm tarball; the
 - Exposes API, MCP, queue, and SDK surfaces for multiple product shapes.
 - Supports connected-mode foundations: connector registry, source inventory,
   principal mapping, permission grants, sync jobs, and coverage summaries.
+- Produces deterministic proposal-only repository-memory review work without a
+  model, network service, database, or second scheduler.
 
 ## Product surfaces
 
 ### MCP mode
 
 Use when an agent client wants memory through a tool bridge with minimal setup.
+The project MCP exposes five resources and seven tools over stdio or explicit
+loopback HTTP, including read-only maintenance-plan and task-context tools.
 
 ### Standalone mode
 
 Use when a startup or internal team wants a direct API and SDK-backed memory
-service with platform authentication and usage controls.
+service inside a trusted network boundary. Standalone does not enforce Provena
+bearer keys; use the polyglot gateway when Provena-managed authentication,
+verified identity claims, and rate limits are required.
 
 ### Connected mode
 
@@ -78,30 +91,31 @@ Provena to ingest, preserve, and retrieve context without re-platforming.
 - Provena can sit across tools and vendors instead of forcing one suite lock-in.
 - Security and platform teams get explicit coverage and sync-state visibility.
 
-## Where Provena is stronger today
+## Where Provena is differentiated today
 
-### Better than lightweight agent-memory products
+### Governance-heavy memory requirements
 
-Provena is stronger than developer-first memory tools when the buyer cares
-about provenance, legal hold, RTBF, retention, scoped recall, and
-permission-preserving retrieval.
+The current codebase combines provenance, legal hold, RTBF, retention, scoped
+recall, and permission-preserving retrieval foundations. Teams should evaluate
+those implemented controls directly rather than infer overall product
+superiority from the feature list.
 
-### Better than ingestion-only tooling
+### Runtime memory rather than ingestion only
 
-Provena is stronger than pure connector or document-processing tooling when the
-buyer needs a runtime memory plane with retrieval policy, lifecycle, and agent
-interfaces rather than just extraction pipelines.
+Provena is designed for use cases that need a runtime memory plane with
+retrieval policy, lifecycle, and agent interfaces rather than only extraction
+pipelines.
 
-### Better than full-stack RAG platforms for embedded use cases
+### Embedded, neutral memory plane
 
-Provena is stronger when the customer wants a neutral memory layer they can
-embed into their own app, agent, or internal platform instead of adopting an
-entire opinionated retrieval product.
+Provena can be evaluated as a neutral memory layer embedded in an existing app,
+agent, or internal platform. No checked-in competitive benchmark currently
+establishes that it is better overall than another memory or RAG product.
 
-## Where Glean-class products are still stronger today
+## Enterprise-search gaps
 
-Provena should not claim to beat Glean yet. Glean-class tools remain stronger
-at:
+Provena does not yet provide the following capabilities expected from a mature
+enterprise-search product:
 
 - breadth of mature production connectors
 - out-of-the-box enterprise search UX
@@ -109,7 +123,7 @@ at:
 - polished admin controls for indexing and source operations
 - broad permission sync across many SaaS systems
 
-## What must exist before Provena can honestly claim "better than Glean"
+## What must exist before broad enterprise-search parity
 
 1. First-party connectors for the highest-value systems:
    Slack, Google Drive, SharePoint/OneDrive, Notion, Confluence, Jira, GitHub,

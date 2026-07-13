@@ -147,15 +147,16 @@ export function memoryFingerprint(
   generatedIdentity?: string,
 ): string {
   const scopeJson = JSON.stringify(scopeForFingerprint(scope));
-  const value = generatedIdentity
-    ? [scopeJson, "provena-generated-v1", generatedIdentity].join("|")
-    : [
-        scopeJson,
-        kind,
-        (title ?? "").trim().toLowerCase(),
-        content.trim().toLowerCase(),
-      ].join("|");
-  return createHash("sha256").update(value, "utf8").digest("hex");
+  const parts = [
+    scopeJson,
+    kind,
+    (title ?? "").trim().toLowerCase(),
+    content.trim().toLowerCase(),
+  ];
+  if (generatedIdentity && /^[0-9a-f]{64}$/.test(generatedIdentity)) {
+    parts.push("provena-generated-v2", generatedIdentity);
+  }
+  return createHash("sha256").update(parts.join("|"), "utf8").digest("hex");
 }
 
 function generatedMemoryIdentity(input: {

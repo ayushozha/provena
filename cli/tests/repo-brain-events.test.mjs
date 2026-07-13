@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { appendFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   activeMemoryEvents,
+  activeMemoryEventsAt,
   appendMemoryEvent,
+  assertMemoryLedgerSnapshotAttestation,
+  canonicalMemoryAsOf,
+  readMemoryLedgerSnapshot,
   readMemoryEvents,
   refreshRepoBrain,
 } from "../dist/brain/index.js";
+import { canonicalJson } from "../dist/brain/utils.js";
 
 const root = await mkdtemp(join(tmpdir(), "provena-events-"));
 try {
@@ -20,7 +26,7 @@ try {
     kind: "fact",
     subjectType: "file",
     title: "App entrypoint",
-    body: "src/app.ts is the application entrypoint.",
+    body: "src/app.ts is the application entrypoint.\nKeep this second source-attested line.",
     provenance: { actor: "indexer", method: "observed" },
     authority: "tool",
     confidence: 0.8,
@@ -114,10 +120,31 @@ try {
     }, { now }),
     /agent memory cannot supersede human memory/,
   );
+  await assert.rejects(
+    appendMemoryEvent(root, {
+      id: "older-than-target",
+      kind: "decision",
+      subjectType: "architecture",
+      title: "Backdated override",
+      body: "A backdated event must not supersede a newer source-attested decision.",
+      provenance: { actor: "maintainer", method: "explicit" },
+      authority: "human",
+      createdAt: "2026-07-09T11:00:00.000Z",
+      supersedes: ["decision-002"],
+    }, { now }),
+    /cannot supersede newer memory decision-002/,
+  );
 
   const all = await readMemoryEvents(root);
   assert.equal(all.length, 3);
+  assert.match(all[0].body, /entrypoint\.\nKeep this second/);
   assert.deepEqual(activeMemoryEvents(all).map((event) => event.id).sort(), ["decision-002", "fact-001"]);
+  assert.deepEqual(activeMemoryEventsAt(all), activeMemoryEvents(all));
+  assert.equal(canonicalMemoryAsOf("2026-07-09T12:00:00.000Z"), "2026-07-09T12:00:00.000Z");
+  assert.throws(
+    () => canonicalMemoryAsOf("Bearer temporal-boundary-secret"),
+    (error) => !error.message.includes("temporal-boundary-secret"),
+  );
   const ledger = await readFile(join(root, ".provena", "memory", "events.jsonl"), "utf8");
   assert.equal(ledger.trim().split(/\r?\n/).length, 3, "one complete JSON object must be appended per line");
   const stored = JSON.parse(ledger.trim().split(/\r?\n/)[0]);
@@ -125,6 +152,35 @@ try {
   assert.equal(stored.subject_type, "file");
   assert.equal(stored.created_at, "2026-07-09T12:00:00.000Z");
   assert(!("schemaVersion" in stored), "the cross-runtime ledger uses canonical snake_case fields");
+
+  const exactSnapshot = await readMemoryLedgerSnapshot(root);
+  assert.doesNotThrow(() => assertMemoryLedgerSnapshotAttestation(exactSnapshot));
+  const attest = (rawLedger, events = exactSnapshot.events) => ({
+    events,
+    rawLedger,
+    bytes: Buffer.byteLength(rawLedger, "utf8"),
+    memoryFingerprint: createHash("sha256").update(rawLedger).digest("hex"),
+  });
+  const attestationError =
+    "memory ledger snapshot events do not match rawLedger or its byte attestation";
+  const forgedSnapshots = [
+    null,
+    undefined,
+    42,
+    {},
+    { ...exactSnapshot, bytes: exactSnapshot.bytes + 1 },
+    { ...exactSnapshot, memoryFingerprint: "0".repeat(64) },
+    { ...exactSnapshot, events: [...exactSnapshot.events].reverse() },
+    { ...exactSnapshot, events: exactSnapshot.events.slice(0, -1) },
+    attest(` ${exactSnapshot.rawLedger}`),
+    attest("\ud800", []),
+  ];
+  for (const forged of forgedSnapshots) {
+    assert.throws(
+      () => assertMemoryLedgerSnapshotAttestation(forged),
+      (error) => error.message === attestationError,
+    );
+  }
   await assert.rejects(
     appendMemoryEvent(root, {
       id: "absolute-applies-to",
@@ -142,7 +198,7 @@ try {
   const ledgerPath = join(root, ".provena", "memory", "events.jsonl");
   const canonicalLedger = await readFile(ledgerPath, "utf8");
   const withUnknownField = { ...stored, unexpected: true };
-  await appendFile(ledgerPath, `${JSON.stringify(withUnknownField)}\n`);
+  await appendFile(ledgerPath, canonicalJson(withUnknownField));
   await assert.rejects(readMemoryEvents(root), /unsupported fields/);
   await writeFile(ledgerPath, canonicalLedger, "utf8");
 
@@ -151,7 +207,7 @@ try {
     id: "non-canonical-time",
     created_at: "2026-07-09T12:00:00Z",
   };
-  await appendFile(ledgerPath, `${JSON.stringify(nonCanonicalTimestamp)}\n`);
+  await appendFile(ledgerPath, canonicalJson(nonCanonicalTimestamp));
   await assert.rejects(readMemoryEvents(root), /canonical UTC ISO timestamp/);
   await writeFile(ledgerPath, canonicalLedger, "utf8");
 
@@ -205,9 +261,10 @@ try {
     /credential|private key/,
   );
 
+  const ledgerBeforeRestrictedImport = await readFile(ledgerPath, "utf8");
   await appendFile(
     ledgerPath,
-    `${JSON.stringify({
+    canonicalJson({
       schema_version: 1,
       id: "restricted-imported",
       kind: "fact",
@@ -228,16 +285,19 @@ try {
       supersedes: [],
       tags: [],
       triggers: [],
-    })}\n`,
+    }),
   );
+  await assert.rejects(
+    readMemoryEvents(root),
+    /restricted memory cannot be read from the Git-tracked repo ledger/,
+  );
+  await writeFile(ledgerPath, ledgerBeforeRestrictedImport, "utf8");
 
   await refreshRepoBrain(root);
   const decisions = await readFile(join(root, ".provena", "views", "decisions.md"), "utf8");
   assert(decisions.includes("Use canonical event sourcing"));
   assert(!decisions.includes("## Use event sourcing"));
   assert(decisions.includes("memory:decision-002") || decisions.includes("package.json"));
-  const learnings = await readFile(join(root, ".provena", "views", "learnings.md"), "utf8");
-  assert(!learnings.includes("This body must never appear"));
 
   console.log("repo brain event tests passed");
 } finally {

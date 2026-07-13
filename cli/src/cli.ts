@@ -13,6 +13,7 @@ import { runGraphCommand } from "./commands/graph.js";
 import { runHarnessCommand } from "./commands/harness.js";
 import { runIndexCommand } from "./commands/index.js";
 import { runInit } from "./commands/init.js";
+import { runMaintainCommand } from "./commands/maintain.js";
 import { runMcpCommand } from "./commands/mcp.js";
 import { runRefreshCommand } from "./commands/refresh.js";
 import { runRememberCommand } from "./commands/remember.js";
@@ -20,6 +21,7 @@ import { runSearchCommand } from "./commands/search.js";
 import { runServe } from "./commands/serve.js";
 import { runSessionCommand } from "./commands/session.js";
 import { runStatusCommand } from "./commands/status.js";
+import { runSyncCommand } from "./commands/sync.js";
 import { runWatchCommand } from "./commands/watch.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -32,8 +34,9 @@ function readVersion(): string {
 
 const COMMANDS = [
   ["init", "One-click install: brain, graph, runtime, hooks, agents, and MCP"],
-  ["refresh", "Regenerate the repo brain, map, graph, and memory views"],
+  ["refresh", "Regenerate the brain, map, graph, maintenance plan, and memory views"],
   ["context", "Build a compact cited task-context packet"],
+  ["maintain", "List deterministic review proposals or compile one task packet"],
   ["remember", "Append an explicit durable memory to the repo ledger"],
   ["checkpoint", "Record a handoff and refresh the brain"],
   ["status", "Show freshness, memory, daemon, and integration health"],
@@ -43,6 +46,7 @@ const COMMANDS = [
   ["agents", "Install managed instructions for coding agents"],
   ["mcp", "Install or serve the project-scoped MCP integration"],
   ["daemon", "Manage fixed-cadence background refresh"],
+  ["sync", "Replicate the canonical repo ledger into governed storage"],
   ["index", "Alias for local refresh; use --store for legacy store indexing"],
   ["search", "Alias for local context search; use --store for legacy search"],
   ["watch", "Watch and incrementally index the optional local store"],
@@ -117,6 +121,8 @@ async function dispatch(command: string, args: string[]): Promise<number> {
       return runRefreshCommand(args);
     case "context":
       return runContextCommand(args);
+    case "maintain":
+      return runMaintainCommand(args);
     case "remember":
       return runRememberCommand(args);
     case "checkpoint":
@@ -135,6 +141,8 @@ async function dispatch(command: string, args: string[]): Promise<number> {
       return runMcpCommand(args);
     case "daemon":
       return runDaemonCommand(args);
+    case "sync":
+      return runSyncCommand(args);
     case "index":
       return hasFlag(args, "--store")
         ? runIndexCommand(withoutFlag(args, "--store"))

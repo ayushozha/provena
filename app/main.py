@@ -1,6 +1,9 @@
 from contextlib import asynccontextmanager
+from typing import Annotated, Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Security
+from fastapi.security import APIKeyHeader
+from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.connector_scheduler import ConnectorSchedulerService
@@ -26,6 +29,8 @@ from app.models import (
     PrincipalMappingBatch,
     ProjectSnapshot,
     RelationWrite,
+    RepositoryMemorySyncRequest,
+    RepositoryMemorySyncResponse,
     RetentionEnforcementRequest,
     RTBFRequest,
     RTBFResponse,
@@ -37,8 +42,32 @@ from app.models import (
     SourcePermissionGrant,
     SyncJob,
 )
-from app.store import AccessContext
+from app.store import (
+    AccessContext,
+    RepositoryEventConflictError,
+    TenantOwnershipConflictError,
+)
 from app.store_factory import create_store
+
+
+provena_tenant_header = APIKeyHeader(
+    name="X-Provena-Tenant-Id",
+    scheme_name="ProvenaTenant",
+    description="Tenant boundary for the repository memory projection.",
+    auto_error=False,
+)
+provena_principal_header = APIKeyHeader(
+    name="X-Provena-Principal-Id",
+    scheme_name="ProvenaPrincipal",
+    description="Authenticated principal identity. Required unless X-Provena-Key-Id is sent.",
+    auto_error=False,
+)
+provena_key_header = APIKeyHeader(
+    name="X-Provena-Key-Id",
+    scheme_name="ProvenaKey",
+    description="Authenticated service-key identity. Required unless X-Provena-Principal-Id is sent.",
+    auto_error=False,
+)
 
 
 def create_app() -> FastAPI:
@@ -65,21 +94,38 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    @app.exception_handler(TenantOwnershipConflictError)
+    async def tenant_ownership_conflict(
+        _request: Request,
+        _exc: TenantOwnershipConflictError,
+    ) -> JSONResponse:
+        # Keep the response deliberately generic: callers learn that their
+        # write conflicts, not whether another tenant owns the identifier.
+        return JSONResponse(status_code=409, content={"detail": "resource write conflict"})
+
     def extract_access(request: Request) -> AccessContext | None:
-        tenant_id = request.headers.get("X-Provena-Tenant-Id")
-        role = request.headers.get("X-Provena-Role")
-        principal_id = request.headers.get("X-Provena-Principal-Id")
-        key_id = request.headers.get("X-Provena-Key-Id")
+        tenant_id = (request.headers.get("X-Provena-Tenant-Id") or "").strip() or None
+        role_header = (request.headers.get("X-Provena-Role") or "").strip() or None
+        principal_id = (request.headers.get("X-Provena-Principal-Id") or "").strip() or None
+        key_id = (request.headers.get("X-Provena-Key-Id") or "").strip() or None
         groups = [
             group.strip()
             for group in request.headers.get("X-Provena-Groups", "").split(",")
             if group.strip()
         ]
-        if not any([tenant_id, role, principal_id, key_id, groups]):
+        if role_header is not None and role_header not in {"viewer", "editor", "admin", "superadmin"}:
+            raise HTTPException(status_code=400, detail="invalid Provena role")
+        if not any([tenant_id, role_header, principal_id, key_id, groups]):
             return None
+        role = role_header or "viewer"
+        if role != "superadmin" and tenant_id is None:
+            raise HTTPException(
+                status_code=401,
+                detail="authenticated requests require X-Provena-Tenant-Id",
+            )
         return AccessContext(
             tenant_id=tenant_id,
-            role=role or "viewer",
+            role=role,
             principal_id=principal_id,
             key_id=key_id,
             groups=groups,
@@ -88,10 +134,25 @@ def create_app() -> FastAPI:
     def require_admin(access: AccessContext | None) -> None:
         if access is None:
             raise HTTPException(status_code=401, detail="authentication required")
-        if access.principal_id is None:
+        if not (access.principal_id or access.key_id):
             raise HTTPException(status_code=401, detail="authentication required")
         if access.role not in {"admin", "superadmin"}:
             raise HTTPException(status_code=403, detail="admin access required")
+
+    def require_tenant_admin(
+        access: AccessContext | None,
+        tenant_id: str | None,
+    ) -> None:
+        require_admin(access)
+        if access is not None and access.role == "superadmin":
+            return
+        if not tenant_id:
+            raise HTTPException(
+                status_code=403,
+                detail="tenant_id is required for non-superadmin requests",
+            )
+        if access is None or access.tenant_id != tenant_id:
+            raise HTTPException(status_code=403, detail="tenant mismatch")
 
     @app.get("/healthz", response_model=HealthResponse)
     async def healthz() -> HealthResponse:
@@ -107,6 +168,54 @@ def create_app() -> FastAPI:
             return request.app.state.store.create_memory(payload, access=extract_access(request))
         except ValueError as exc:
             raise _memory_value_error(exc) from exc
+
+    @app.post(
+        "/v1/repositories/{repository_id}/memory-events/sync",
+        response_model=RepositoryMemorySyncResponse,
+        responses={
+            401: {"description": "Tenant-bound principal or key authentication is required."},
+            403: {"description": "The caller lacks write access or crossed a tenant boundary."},
+            409: {"description": "An immutable repository event or deterministic projection conflicts."},
+        },
+    )
+    async def sync_repository_memory_events(
+        repository_id: str,
+        payload: RepositoryMemorySyncRequest,
+        request: Request,
+        _role: Annotated[
+            Literal["editor", "admin", "superadmin"],
+            Header(
+                alias="X-Provena-Role",
+                description="Write role: editor, admin, or superadmin.",
+            ),
+        ],
+        _tenant_id: Annotated[str | None, Security(provena_tenant_header)] = None,
+        _principal_id: Annotated[str | None, Security(provena_principal_header)] = None,
+        _key_id: Annotated[str | None, Security(provena_key_header)] = None,
+    ) -> RepositoryMemorySyncResponse:
+        access = extract_access(request)
+        if (
+            access is None
+            or not access.tenant_id
+            or not (access.principal_id or access.key_id)
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="repository sync requires a tenant-bound authenticated context",
+            )
+        if access is not None and access.role not in {"editor", "admin", "superadmin"}:
+            raise HTTPException(status_code=403, detail="write access required")
+        try:
+            return request.app.state.store.sync_repository_memory_events(
+                repository_id,
+                payload,
+                access=access,
+            )
+        except RepositoryEventConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            status_code = 403 if "access tenant" in str(exc) else 422
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
     @app.get("/v1/memories/{memory_id}", response_model=MemoryRecord)
     async def get_memory(memory_id: str, request: Request) -> MemoryRecord:
@@ -131,7 +240,7 @@ def create_app() -> FastAPI:
         try:
             request.app.state.store.write_relation(payload, access=extract_access(request))
         except ValueError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            raise _memory_value_error(exc) from exc
 
     @app.delete("/v1/memories/{memory_id}", response_model=DeleteResponse)
     async def delete_memory(
@@ -140,19 +249,24 @@ def create_app() -> FastAPI:
         hard_delete: bool = Query(default=False),
     ) -> DeleteResponse:
         access = extract_access(request)
-        existing = request.app.state.store.get_memory(memory_id, access=access)
-        if not existing:
-            raise HTTPException(status_code=404, detail="memory not found")
         try:
-            return request.app.state.store.delete_memory(memory_id, hard_delete=hard_delete, access=access)
+            result = request.app.state.store.delete_memory(
+                memory_id,
+                hard_delete=hard_delete,
+                access=access,
+            )
+            if not result.deleted:
+                raise HTTPException(status_code=404, detail="memory not found")
+            return result
         except ValueError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            status_code = 409 if "immutable" in str(exc).lower() else 403
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
     def _memory_value_error(exc: ValueError) -> HTTPException:
         detail = str(exc)
         if detail == "memory not found":
             status = 404
-        elif "duplicate" in detail.lower() or "tombstoned" in detail.lower():
+        elif "duplicate" in detail.lower() or "tombstoned" in detail.lower() or "immutable" in detail.lower():
             status = 409
         else:
             status = 403
@@ -202,13 +316,13 @@ def create_app() -> FastAPI:
     @app.post("/v1/admin/erase", response_model=EraseResponse)
     async def erase_memories(payload: EraseRequest, request: Request) -> EraseResponse:
         access = extract_access(request)
-        require_admin(access)
+        require_tenant_admin(access, payload.tenant_id)
         return request.app.state.store.erase_scope(payload, access=access)
 
     @app.post("/v1/project-snapshots", response_model=ProjectSnapshot)
     async def create_project_snapshot(payload: ProjectSnapshot, request: Request) -> ProjectSnapshot:
         access = extract_access(request)
-        require_admin(access)
+        require_tenant_admin(access, payload.tenant_id)
         return request.app.state.store.upsert_project_snapshot(payload)
 
     @app.get("/v1/project-snapshots/latest", response_model=ProjectSnapshot)
@@ -228,9 +342,7 @@ def create_app() -> FastAPI:
     @app.post("/v1/integrations/connectors", response_model=ConnectorConfig)
     async def save_connector(payload: ConnectorConfig, request: Request) -> ConnectorConfig:
         access = extract_access(request)
-        require_admin(access)
-        if access is not None and access.role != "superadmin" and access.tenant_id not in {None, payload.tenant_id}:
-            raise HTTPException(status_code=403, detail="tenant mismatch")
+        require_tenant_admin(access, payload.tenant_id)
         return request.app.state.store.save_connector(payload)
 
     @app.get("/v1/integrations/connectors", response_model=list[ConnectorConfig])
@@ -264,9 +376,7 @@ def create_app() -> FastAPI:
         tenant_id: str = Query(...),
     ) -> list[ConnectorSourceRecord]:
         access = extract_access(request)
-        require_admin(access)
-        if access is not None and access.role != "superadmin" and access.tenant_id not in {None, tenant_id}:
-            raise HTTPException(status_code=403, detail="tenant mismatch")
+        require_tenant_admin(access, tenant_id)
         return request.app.state.store.save_connector_sources(connector_id, tenant_id, payload)
 
     @app.get("/v1/integrations/connectors/{connector_id}/sources", response_model=list[ConnectorSourceRecord])
@@ -285,9 +395,7 @@ def create_app() -> FastAPI:
         tenant_id: str = Query(...),
     ) -> list[PrincipalMapping]:
         access = extract_access(request)
-        require_admin(access)
-        if access is not None and access.role != "superadmin" and access.tenant_id not in {None, tenant_id}:
-            raise HTTPException(status_code=403, detail="tenant mismatch")
+        require_tenant_admin(access, tenant_id)
         return request.app.state.store.save_principal_mappings(connector_id, tenant_id, payload)
 
     @app.get("/v1/integrations/connectors/{connector_id}/principal-mappings", response_model=list[PrincipalMapping])
@@ -306,9 +414,7 @@ def create_app() -> FastAPI:
         tenant_id: str = Query(...),
     ) -> list[SourcePermissionGrant]:
         access = extract_access(request)
-        require_admin(access)
-        if access is not None and access.role != "superadmin" and access.tenant_id not in {None, tenant_id}:
-            raise HTTPException(status_code=403, detail="tenant mismatch")
+        require_tenant_admin(access, tenant_id)
         return request.app.state.store.save_source_permission_grants(connector_id, tenant_id, payload)
 
     @app.get("/v1/integrations/connectors/{connector_id}/permissions", response_model=list[SourcePermissionGrant])
@@ -332,9 +438,7 @@ def create_app() -> FastAPI:
         tenant_id: str = Query(...),
     ) -> SyncJob:
         access = extract_access(request)
-        require_admin(access)
-        if access is not None and access.role != "superadmin" and access.tenant_id not in {None, tenant_id}:
-            raise HTTPException(status_code=403, detail="tenant mismatch")
+        require_tenant_admin(access, tenant_id)
         return request.app.state.store.save_sync_job(connector_id, tenant_id, payload)
 
     @app.get("/v1/integrations/connectors/{connector_id}/sync-jobs", response_model=list[SyncJob])
@@ -356,7 +460,7 @@ def create_app() -> FastAPI:
     @app.post("/v1/admin/retention-policies", response_model=RetentionPolicy)
     async def save_retention_policy(payload: RetentionPolicy, request: Request) -> RetentionPolicy:
         access = extract_access(request)
-        require_admin(access)
+        require_tenant_admin(access, payload.tenant_id)
         return request.app.state.store.save_retention_policy(payload)
 
     @app.get("/v1/admin/retention-policies", response_model=list[RetentionPolicy])
@@ -373,14 +477,14 @@ def create_app() -> FastAPI:
     @app.post("/v1/admin/legal-hold", response_model=LegalHold)
     async def place_legal_hold(payload: LegalHold, request: Request) -> LegalHold:
         access = extract_access(request)
-        require_admin(access)
+        require_tenant_admin(access, payload.tenant_id)
         return request.app.state.store.place_legal_hold(payload)
 
     @app.delete("/v1/admin/legal-hold/{hold_id}")
-    async def release_legal_hold(request: Request, hold_id: str, tenant_id: str = Query(default="")) -> dict[str, bool]:
+    async def release_legal_hold(request: Request, hold_id: str, tenant_id: str = Query(...)) -> dict[str, bool]:
         access = extract_access(request)
-        require_admin(access)
-        released = app.state.store.release_legal_hold(hold_id, tenant_id=tenant_id or None)
+        require_tenant_admin(access, tenant_id)
+        released = app.state.store.release_legal_hold(hold_id, tenant_id=tenant_id)
         if not released:
             raise HTTPException(status_code=404, detail="legal hold not found")
         return {"released": True}
@@ -388,21 +492,29 @@ def create_app() -> FastAPI:
     @app.post("/v1/admin/rtbf", response_model=RTBFResponse)
     async def right_to_be_forgotten(payload: RTBFRequest, request: Request) -> RTBFResponse:
         access = extract_access(request)
-        require_admin(access)
-        if access is not None and access.role != "superadmin" and access.tenant_id not in {None, payload.tenant_id}:
-            raise HTTPException(status_code=403, detail="tenant mismatch")
+        require_tenant_admin(access, payload.tenant_id)
         return request.app.state.store.rtbf(payload)
 
     @app.post("/v1/admin/retention/enforce", response_model=RetentionEnforcementResponse)
     async def enforce_retention(payload: RetentionEnforcementRequest, request: Request) -> RetentionEnforcementResponse:
         access = extract_access(request)
-        require_admin(access)
-        if payload.tenant_id is None:
-            if access is not None and access.role != "superadmin":
-                raise HTTPException(status_code=403, detail="tenant_id is required for non-superadmin requests")
-        elif access is not None and access.role != "superadmin" and access.tenant_id not in {None, payload.tenant_id}:
-            raise HTTPException(status_code=403, detail="tenant mismatch")
+        require_tenant_admin(access, payload.tenant_id)
         return request.app.state.store.enforce_retention(payload.tenant_id)
+
+    generated_openapi = app.openapi
+
+    def openapi_with_repository_sync_auth() -> dict[str, object]:
+        schema = generated_openapi()
+        operation = schema["paths"]["/v1/repositories/{repository_id}/memory-events/sync"]["post"]
+        # FastAPI emits separate OR requirements for multiple API-key
+        # dependencies. The runtime contract is tenant AND (principal OR key).
+        operation["security"] = [
+            {"ProvenaTenant": [], "ProvenaPrincipal": []},
+            {"ProvenaTenant": [], "ProvenaKey": []},
+        ]
+        return schema
+
+    app.openapi = openapi_with_repository_sync_auth
 
     return app
 

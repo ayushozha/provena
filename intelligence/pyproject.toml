@@ -12,5 +12,11 @@ dependencies = [
   "numpy>=1.26.0",
 ]
 
+[tool.setuptools]
+packages = ["app", "eval"]
+
+[tool.setuptools.package-data]
+eval = ["fixtures/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

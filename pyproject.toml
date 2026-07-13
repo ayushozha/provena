@@ -16,6 +16,7 @@ dependencies = [
   "sqlite-vec>=0.1.9",
   "psycopg[binary]>=3.2.0",
   "redis>=5.0.0",
+  "rfc8785>=0.1.4,<0.2.0",
 ]
 
 [project.optional-dependencies]

@@ -1,11 +1,26 @@
 import type { MemoryEvent, RepoMap } from "../brain/types.js";
+import { repoMapSourceFingerprint } from "../brain/detect.js";
 import {
-  activeMemoryEvents,
+  activeMemoryEventsAt,
+  assertMemoryLedgerSnapshotAttestation,
+  canonicalMemoryAsOf,
   memoryEventToRecord,
   type MemoryLedgerSnapshot,
 } from "../brain/events.js";
 import { canonicalJson, compareText, sha256 } from "../brain/utils.js";
-import { degreeCentrality, neighborhood, pageRank } from "../graph/algorithms.js";
+import {
+  REPO_MAP_MEMORY_DATA_KEY,
+  REPO_MAP_MEMORY_GENERATOR,
+  REPO_MAP_MEMORY_GENERATOR_VERSION,
+  REPO_MAP_MEMORY_TAG,
+} from "../brain/reconcile.js";
+import {
+  degreeCentrality,
+  induceRepoGraphAt,
+  neighborhood,
+  pageRank,
+  repoGraphProjectionFingerprint,
+} from "../graph/index.js";
 import type { RepoGraph } from "../graph/types.js";
 
 export interface ContextQuery {
@@ -13,11 +28,13 @@ export interface ContextQuery {
   paths?: string[];
   symbols?: string[];
   commands?: string[];
+  memoryIds?: string[];
   maxItems?: number;
   maxCharacters?: number;
   maxTokens?: number;
   graphHops?: number;
   includeSensitive?: boolean;
+  memoryAsOf?: string;
 }
 
 export interface ContextCitation {
@@ -26,6 +43,43 @@ export interface ContextCitation {
   startLine?: number;
   endLine?: number;
   memoryId?: string;
+}
+
+function duplicatesCurrentCommand(memory: MemoryEvent, map: RepoMap): boolean {
+  if (memory.kind !== "workflow" || !memory.tags.includes(REPO_MAP_MEMORY_TAG)) {
+    return false;
+  }
+  const value = memory.structuredData[REPO_MAP_MEMORY_DATA_KEY];
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const managed = value as Record<string, unknown>;
+  const candidate = managed.candidate;
+  if (
+    managed.generator !== REPO_MAP_MEMORY_GENERATOR ||
+    managed.version !== REPO_MAP_MEMORY_GENERATOR_VERSION ||
+    !candidate ||
+    typeof candidate !== "object" ||
+    Array.isArray(candidate)
+  ) {
+    return false;
+  }
+  const command = candidate as Record<string, unknown>;
+  if (
+    command.type !== "command" ||
+    typeof command.manifestPath !== "string" ||
+    typeof command.cwd !== "string" ||
+    typeof command.name !== "string" ||
+    typeof command.command !== "string"
+  ) {
+    return false;
+  }
+  const normalize = (text: string) => text.normalize("NFC").trim();
+  return map.commands.some(
+    (current) =>
+      current.source === command.manifestPath &&
+      current.cwd === command.cwd &&
+      normalize(current.name) === command.name &&
+      normalize(current.command) === command.command,
+  );
 }
 
 export interface ContextItem {
@@ -42,6 +96,8 @@ export interface ContextPacket {
   query: string;
   sourceFingerprint: string;
   memoryFingerprint: string;
+  repositoryTopology: "current";
+  memoryAsOf?: string;
   budget: {
     maxCharacters: number;
     maxTokens: number;
@@ -52,9 +108,13 @@ export interface ContextPacket {
   items: ContextItem[];
 }
 
-const DEFAULT_MAX_ITEMS = 30;
+const DEFAULT_MAX_ITEMS = 32;
 const DEFAULT_MAX_CHARACTERS = 12_000;
 const CHARS_PER_TOKEN = 4;
+export const MAX_CONTEXT_MEMORY_IDS = 32;
+const MEMORY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
+const MEMORY_IDS_ERROR =
+  `memoryIds must contain at most ${MAX_CONTEXT_MEMORY_IDS} valid memory IDs`;
 
 function normalized(values: string[] | undefined): Set<string> {
   return new Set(
@@ -62,6 +122,18 @@ function normalized(values: string[] | undefined): Set<string> {
       .map((value) => value.trim().replaceAll("\\", "/").replace(/^\.\//, "").toLowerCase())
       .filter(Boolean),
   );
+}
+
+function normalizedMemoryIds(values: string[] | undefined): Set<string> {
+  if (values === undefined) return new Set();
+  if (
+    !Array.isArray(values) ||
+    values.length > MAX_CONTEXT_MEMORY_IDS ||
+    values.some((value) => typeof value !== "string" || !MEMORY_ID_PATTERN.test(value))
+  ) {
+    throw new Error(MEMORY_IDS_ERROR);
+  }
+  return new Set(values);
 }
 
 function tokens(value: string): Set<string> {
@@ -137,7 +209,37 @@ function contextMemorySnapshot(
     events: memory,
     memoryFingerprint: sha256(ledger),
     bytes: Buffer.byteLength(ledger, "utf8"),
+    rawLedger: ledger,
   };
+}
+
+const CONTEXT_ATTESTATION_ERROR =
+  "context inputs do not describe one attested repo generation";
+
+function assertContextAttestation(
+  map: RepoMap,
+  graph: RepoGraph,
+  snapshot: MemoryLedgerSnapshot,
+): void {
+  try {
+    assertMemoryLedgerSnapshotAttestation(snapshot);
+    if (
+      map.sourceFingerprint !== repoMapSourceFingerprint(map) ||
+      map.sourceFingerprint !== graph.sourceFingerprint ||
+      (graph.schemaVersion === 2 && (
+        snapshot.memoryFingerprint !== graph.memoryFingerprint ||
+        graph.timeSemantics !== "event-effective-time" ||
+        graph.projectionFingerprint !== repoGraphProjectionFingerprint(
+          graph.sourceFingerprint,
+          graph.memoryFingerprint,
+        )
+      ))
+    ) {
+      throw new Error();
+    }
+  } catch {
+    throw new Error(CONTEXT_ATTESTATION_ERROR);
+  }
 }
 
 export function buildContextPacket(
@@ -147,16 +249,29 @@ export function buildContextPacket(
   input: ContextQuery = {},
 ): ContextPacket {
   const snapshot = contextMemorySnapshot(memory);
+  assertContextAttestation(map, graph, snapshot);
   const events = snapshot.events;
+  const memoryAsOf = canonicalMemoryAsOf(input.memoryAsOf);
+  const contextGraph = induceRepoGraphAt(graph, memoryAsOf);
   const query = inline(input.query ?? "");
   const queryTokens = tokens(query);
   const exactPaths = normalized(input.paths);
   const exactSymbols = normalized(input.symbols);
   const exactCommands = normalized(input.commands);
-  const graphScores = scoreGraph(graph);
+  const exactMemoryIds = normalizedMemoryIds(input.memoryIds);
+  const graphScores = scoreGraph(contextGraph);
+  const memoryGraphIds = new Map(
+    contextGraph.nodes.flatMap((node) =>
+      node.type === "memory" && typeof node.metadata.eventId === "string"
+        ? [[node.metadata.eventId, node.id] as const]
+        : [],
+    ),
+  );
   const candidates: ContextItem[] = [];
   const seedIds = new Set<string>();
   const exactTiers = new Map<string, number>();
+  const tierKey = (type: ContextItem["type"], id: string): string =>
+    `${type}\u0000${id}`;
 
   for (const file of map.files) {
     const path = file.path.toLowerCase();
@@ -164,12 +279,12 @@ export function buildContextPacket(
     if (exactPaths.has(path)) {
       score += 1_000;
       seedIds.add(file.id);
-      exactTiers.set(file.id, 4);
+      exactTiers.set(tierKey("file", file.id), 4);
     }
     if (query && query.toLowerCase() === path) {
       score += 900;
       seedIds.add(file.id);
-      exactTiers.set(file.id, 4);
+      exactTiers.set(tierKey("file", file.id), 4);
     }
     score += overlap(queryTokens, `${file.path} ${file.kind} ${file.language ?? ""}`) * 45;
     if (score <= 0 && queryTokens.size > 0) continue;
@@ -189,12 +304,12 @@ export function buildContextPacket(
     if (exactSymbols.has(name) || exactSymbols.has(`${symbol.path}:${name}`)) {
       score += 950;
       seedIds.add(symbol.id);
-      exactTiers.set(symbol.id, 3);
+      exactTiers.set(tierKey("symbol", symbol.id), 3);
     }
     if (query && query.toLowerCase() === name) {
       score += 850;
       seedIds.add(symbol.id);
-      exactTiers.set(symbol.id, 3);
+      exactTiers.set(tierKey("symbol", symbol.id), 3);
     }
     score += overlap(queryTokens, `${symbol.name} ${symbol.kind} ${symbol.path}`) * 55;
     if (score <= 0 && queryTokens.size > 0) continue;
@@ -214,12 +329,12 @@ export function buildContextPacket(
     if (keys.some((value) => exactCommands.has(value))) {
       score += 900;
       seedIds.add(command.id);
-      exactTiers.set(command.id, 2);
+      exactTiers.set(tierKey("command", command.id), 2);
     }
     if (query && keys.includes(query.toLowerCase())) {
       score += 825;
       seedIds.add(command.id);
-      exactTiers.set(command.id, 2);
+      exactTiers.set(tierKey("command", command.id), 2);
     }
     score += overlap(queryTokens, `${command.name} ${command.command} ${command.cwd}`) * 50;
     if (score <= 0 && queryTokens.size > 0) continue;
@@ -254,12 +369,25 @@ export function buildContextPacket(
     });
   }
 
-  for (const memory of activeMemoryEvents(events)) {
+  for (const memory of activeMemoryEventsAt(events, memoryAsOf)) {
     if (!input.includeSensitive && ["confidential", "restricted"].includes(memory.sensitivity)) continue;
-    let score = memory.importance * 30 + memory.confidence * 15;
+    // The current repo-map command already carries the same invocation and
+    // source citation. Keep the managed event in the durable ledger/history,
+    // but do not spend compact packet budget on a duplicate live item.
+    if (duplicatesCurrentCommand(memory, map) && !exactMemoryIds.has(memory.id)) continue;
+    const graphId = memoryGraphIds.get(memory.id);
+    let score = (graphId ? graphScores[graphId] ?? 0 : 0) +
+      memory.importance * 30 + memory.confidence * 15;
+    if (exactMemoryIds.has(memory.id)) {
+      score += 1_100;
+      exactTiers.set(tierKey("memory", memory.id), 5);
+      if (graphId) seedIds.add(graphId);
+    }
     if (memory.appliesTo.some((value) => exactPaths.has(value.toLowerCase()))) {
       score += 800;
-      exactTiers.set(memory.id, 1);
+      const key = tierKey("memory", memory.id);
+      exactTiers.set(key, Math.max(exactTiers.get(key) ?? 0, 1));
+      if (graphId) seedIds.add(graphId);
     }
     score += overlap(
       queryTokens,
@@ -290,15 +418,19 @@ export function buildContextPacket(
   }
   const graphNeighbors = new Set<string>();
   for (const seed of seedIds) {
-    for (const id of neighborhood(graph, seed, graphHops).nodeIds) graphNeighbors.add(id);
+    for (const id of neighborhood(contextGraph, seed, graphHops).nodeIds) graphNeighbors.add(id);
   }
   for (const candidate of candidates) {
-    if (graphNeighbors.has(candidate.id) && !seedIds.has(candidate.id)) candidate.score += 20;
+    const graphId = candidate.type === "memory"
+      ? memoryGraphIds.get(candidate.id) ?? candidate.id
+      : candidate.id;
+    if (graphNeighbors.has(graphId) && !seedIds.has(graphId)) candidate.score += 20;
   }
 
   candidates.sort(
     (a, b) =>
-      (exactTiers.get(b.id) ?? 0) - (exactTiers.get(a.id) ?? 0) ||
+      (exactTiers.get(tierKey(b.type, b.id)) ?? 0) -
+        (exactTiers.get(tierKey(a.type, a.id)) ?? 0) ||
       b.score - a.score ||
       compareText(a.type, b.type) ||
       compareText(a.id, b.id),
@@ -325,6 +457,8 @@ export function buildContextPacket(
       query: packetQuery,
       sourceFingerprint: map.sourceFingerprint,
       memoryFingerprint: snapshot.memoryFingerprint,
+      repositoryTopology: "current",
+      ...(memoryAsOf ? { memoryAsOf } : {}),
       budget: {
         maxCharacters,
         maxTokens: requestedTokens,
@@ -399,6 +533,7 @@ export function renderContextPacketMarkdown(packet: ContextPacket): string {
     "# Provena context packet",
     "",
     `Query: ${markdownText(packet.query || "(repository overview)")}`,
+    `Memory: ${packet.memoryAsOf ? `historical as of ${markdownCode(packet.memoryAsOf)}` : "current"}; repository topology: current`,
     `Budget: ${packet.budget.usedCharacters}/${packet.budget.maxCharacters} characters (~${packet.budget.estimatedTokens} tokens)${packet.budget.truncated ? "; truncated" : ""}`,
     "",
   ];

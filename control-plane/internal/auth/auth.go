@@ -48,6 +48,8 @@ type APIKey struct {
 	KeyID       string    `json:"key_id"`
 	TenantID    string    `json:"tenant_id"`
 	Role        Role      `json:"role"`
+	PrincipalID string    `json:"principal_id,omitempty"`
+	Groups      []string  `json:"groups,omitempty"`
 	HashedKey   string    `json:"hashed_key"`
 	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -124,10 +126,16 @@ func (ks *KeyStore) Validate(rawToken string) (*AuthContext, bool) {
 			if !key.ExpiresAt.IsZero() && time.Now().After(key.ExpiresAt) {
 				return nil, false
 			}
+			principalID := strings.TrimSpace(key.PrincipalID)
+			if principalID == "" {
+				principalID = key.KeyID
+			}
 			return &AuthContext{
-				KeyID:    key.KeyID,
-				TenantID: key.TenantID,
-				Role:     key.Role,
+				KeyID:       key.KeyID,
+				TenantID:    key.TenantID,
+				Role:        key.Role,
+				PrincipalID: principalID,
+				Groups:      append([]string(nil), key.Groups...),
 			}, true
 		}
 	}
@@ -164,15 +172,23 @@ func AuthMiddleware(ks *KeyStore, authEnabled bool) func(http.Handler) http.Hand
 				return
 			}
 
-			ac.PrincipalID = strings.TrimSpace(r.Header.Get("X-Provena-Principal-Id"))
-			if ac.PrincipalID == "" {
-				ac.PrincipalID = ac.KeyID
-			}
-			ac.Groups = splitCSV(r.Header.Get("X-Provena-Groups"))
-
 			ctx := context.WithValue(r.Context(), authContextKey, ac)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
+	}
+}
+
+// VerifiedKeyHandler succeeds only when AuthMiddleware validated a configured
+// API key. It deliberately rejects the anonymous context injected when gateway
+// auth is disabled so downstream services can fail closed during validation.
+func VerifiedKeyHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ac, ok := FromContext(r.Context())
+		if !ok || ac.KeyID == "" || ac.KeyID == "anonymous" {
+			http.Error(w, `{"error":"verified API key required"}`, http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -193,8 +209,14 @@ func splitCSV(value string) []string {
 
 // WritePermissionMiddleware rejects viewer keys on mutating memory routes.
 func WritePermissionMiddleware(next http.Handler) http.Handler {
+	readOnlyPosts := map[string]struct{}{
+		"/v1/agent/context":           {},
+		"/v1/memories/graph/temporal": {},
+		"/v1/memories/search":         {},
+	}
 	writePrefixes := []string{
 		"/v1/memories",
+		"/v1/repositories",
 		"/v1/project-snapshots",
 		"/v1/admin/",
 		"/v1/integrations/",
@@ -206,6 +228,12 @@ func WritePermissionMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		path := r.URL.Path
+		if r.Method == http.MethodPost {
+			if _, ok := readOnlyPosts[path]; ok {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
 		needsWrite := false
 		for _, prefix := range writePrefixes {
 			if strings.HasPrefix(path, prefix) {

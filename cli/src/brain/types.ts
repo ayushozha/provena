@@ -59,6 +59,13 @@ export interface RepoPackage {
   commandIds: string[];
 }
 
+export interface RepoScanDiagnostics {
+  /** False when caps, read failures, or malformed supported manifests made the map partial. */
+  complete: boolean;
+  /** Bounded repo-relative reasons that made this scan incomplete. */
+  warnings: string[];
+}
+
 export interface RepoMap {
   schemaVersion: typeof REPO_BRAIN_SCHEMA_VERSION;
   repository: {
@@ -66,6 +73,7 @@ export interface RepoMap {
     description: string | null;
   };
   sourceFingerprint: string;
+  scan: RepoScanDiagnostics;
   languages: string[];
   directories: RepoDirectory[];
   files: RepoFile[];

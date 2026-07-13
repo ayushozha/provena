@@ -138,11 +138,32 @@ services:
     environment:
       PROVENA_AUTH_ENABLED: "true"
       PROVENA_API_KEYS: >-
-        [{"key_id":"platform-admin","tenant_id":"tenant-prod","role":"admin","hashed_key":"<sha256-hex-of-raw-token>","description":"Primary platform admin key"}]
+        [{"key_id":"platform-admin","tenant_id":"tenant-prod","role":"admin","principal_id":"platform-admin-user","groups":["platform-admins"],"hashed_key":"<sha256-hex-of-raw-token>","description":"Primary platform admin key"}]
+  mcp:
+    environment:
+      PROVENA_MCP_REQUIRE_AUTH: "true"
 ```
 
 `PROVENA_API_KEYS` must be a JSON array. Each `hashed_key` is the SHA-256 hex
-digest of the raw bearer token, not the raw token itself.
+digest of the raw bearer token, not the raw token itself. `principal_id` and
+`groups` are verified authorization claims attached to the key. If
+`principal_id` is omitted, Provena uses `key_id`. When gateway auth is enabled,
+caller-supplied `X-Provena-*` identity or group headers are discarded and
+rebuilt from these verified claims; clients cannot select another principal by
+adding headers.
+
+The network MCP service requires a caller Bearer token by default and validates
+it through the gateway's fail-closed `GET /v1/auth/validate` endpoint before
+serving RPC metadata or opening SSE. It never substitutes an internal
+service credential for an anonymous request. The shipped local Compose file is
+the explicit exception: it disables MCP auth only while binding the host port
+to `127.0.0.1`, matching the auth-disabled local gateway. Do not carry that
+override into a remote deployment.
+
+The proxy caps RPC JSON bodies at 100 KiB, rate-limits connection attempts by
+client IP, and admits at most 64 concurrent SSE streams per process. These are
+process-level safeguards, not a replacement for ingress limits or horizontal
+capacity planning.
 
 ### Operator-supplied and overrideable variables
 
@@ -156,6 +177,7 @@ digest of the raw bearer token, not the raw token itself.
 | `PROVENA_LIFECYCLE_HOST_PORT` | No | Host port bound to lifecycle. Defaults to `8092`. |
 | `PROVENA_QUEUE_HOST_PORT` | No | Host port bound to queue. Defaults to `8091`. |
 | `PROVENA_MCP_HOST_PORT` | No | Host port bound to MCP. Defaults to `8090`. |
+| `PROVENA_MCP_REQUIRE_AUTH` | Yes for deployed MCP | Defaults to `true`; accepts only Bearer-authenticated MCP requests. The gateway validates the token. |
 | `PROVENA_ORCHESTRATION_HOST_PORT` | No | Host port bound to orchestration. Defaults to `50051`. |
 
 Inside compose, the shipped internal URLs remain:
@@ -219,21 +241,27 @@ docker compose down
 
 ### Connected-mode scheduled sync ticks
 
-Polyglot deployments use the same scheduler script as an internal operator
-task, cron job, or Kubernetes `CronJob`. Run it anywhere that shares the
-Provena store database and code checkout, for example inside the `store`
-container or another internal task container built from the same image:
+The shipped polyglot stack does not include a runnable scheduler container. The
+`store` image intentionally contains only the API application and migrations;
+it does not copy `scripts/run_scheduler_tick.py`, and the bundled connector
+registry has no real workers. Therefore `docker compose exec store python
+scripts/run_scheduler_tick.py` is not a supported shipped command.
 
-```powershell
-cd services/provena
-docker compose exec store python .\scripts\run_scheduler_tick.py --tenant-id tenant-prod
+An operator can package the source script in a separate internal task image,
+register real connector workers, and run that task as a cron job or Kubernetes
+`CronJob` against the same store database. In such an operator-authored image,
+the task command is:
+
+```text
+python /app/scripts/run_scheduler_tick.py --tenant-id tenant-prod
 ```
 
 This keeps cadence evaluation inside the existing store and integration-plane
-boundary. The resulting sync jobs appear through the normal connector sync-job
-and coverage APIs exposed by the gateway, while direct
+boundary. With a registered worker, resulting sync jobs appear through the
+normal connector sync-job and coverage APIs exposed by the gateway, while direct
 `POST /v1/integrations/connectors/{connector_id}/sync-jobs` remains available
-for manual or upstream-driven writes.
+for manual or upstream-driven writes. Without an operator-supplied worker, the
+script reports `provider_not_implemented` and writes no sync job.
 
 ## Calling Provena from another project
 
@@ -243,8 +271,10 @@ for manual or upstream-driven writes.
   `uvicorn`
 - `Polyglot`: `http://<host>:8080` by default, or the host port bound through
   `PROVENA_GATEWAY_HOST_PORT`
-- `MCP`: `http://<host>:8090` only for MCP-capable clients using `/rpc` or
-  `/sse`, or the host port bound through `PROVENA_MCP_HOST_PORT`
+- `MCP local Compose`: `http://127.0.0.1:8090` only for MCP-capable clients
+  using `/rpc` or `/sse`, or the loopback port selected through
+  `PROVENA_MCP_HOST_PORT`. A remote endpoint requires an operator-managed
+  ingress and Bearer-authenticated gateway configuration.
 
 For ordinary product integrations, use the HTTP API or an SDK against the
 standalone or polyglot base URL. Do not treat MCP as the general application
@@ -258,7 +288,8 @@ integration surface.
   local development.
 - `Polyglot production`: set `PROVENA_AUTH_ENABLED=true` and provide
   `PROVENA_API_KEYS`, then call the gateway with `Authorization: Bearer
-  <raw-token>`.
+  <raw-token>`. Put the intended principal and groups on the API-key record;
+  the gateway ignores identity headers supplied by the caller.
 
 ### HTTP example
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,7 @@ import {
   chunkSymbolKey,
   emitMemories,
   emptyIndexState,
+  memoryFingerprint,
 } from "../dist/indexer/emit.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -94,6 +96,38 @@ assert.notEqual(
   chunkSymbolKey("duplicates.ts", methods[0]),
   chunkSymbolKey("duplicates.ts", methods[1]),
   "same-name methods need collision-free index keys",
+);
+
+const fingerprintScope = { tenant_id: "chunk-test", project_id: "fixture" };
+const generatedIdentity = "a".repeat(64);
+const generatedFingerprintInput = [
+  JSON.stringify(fingerprintScope),
+  "artifact",
+  "generated title",
+  "generated content",
+  "provena-generated-v2",
+  generatedIdentity,
+].join("|");
+assert.equal(
+  memoryFingerprint(
+    fingerprintScope,
+    "artifact",
+    " Generated Title ",
+    " Generated Content ",
+    generatedIdentity,
+  ),
+  createHash("sha256").update(generatedFingerprintInput, "utf8").digest("hex"),
+  "local generated-memory dedupe must mirror the store v2 fingerprint",
+);
+assert.notEqual(
+  memoryFingerprint(fingerprintScope, "artifact", "Title", "content-a", generatedIdentity),
+  memoryFingerprint(fingerprintScope, "artifact", "Title", "content-b", generatedIdentity),
+  "generated identity must not erase title/content from the dedupe boundary",
+);
+assert.equal(
+  memoryFingerprint(fingerprintScope, "artifact", "Title", "content", "not-a-sha256"),
+  memoryFingerprint(fingerprintScope, "artifact", "Title", "content"),
+  "invalid generated identities must not enter the trusted dedupe formula",
 );
 
 console.log("chunk-typescript.test: ok");

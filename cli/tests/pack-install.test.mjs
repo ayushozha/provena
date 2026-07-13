@@ -3,7 +3,7 @@
  * Does not hit the npm registry (plan 26 pre-publish gate).
  */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
@@ -18,8 +18,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer as createNetServer } from "node:net";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 const cliRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const npmCli =
@@ -59,6 +63,144 @@ function waitFor(check, attempts = 20) {
 
 function waitForExit(pids, attempts = 20) {
   return waitFor(() => ![...pids].some(processAlive), attempts);
+}
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function unusedPort() {
+  const server = createNetServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const port = address.port;
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return port;
+}
+
+async function assertPortReleased(port) {
+  const server = createNetServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+
+async function waitForAsync(check, label, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      if (await check()) return;
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(25);
+  }
+  throw new Error(`${label} timed out${lastError ? `: ${lastError.message}` : ""}`);
+}
+
+async function waitForChildExit(child, timeoutMs = 5_000) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("HTTP launcher did not exit")), timeoutMs);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+function assertGenericLauncherError(result, cwd, hostile, pattern) {
+  assert.equal(result.status, 1, result.stderr || result.stdout);
+  assert.match(result.stderr, pattern);
+  assert(Buffer.byteLength(result.stderr) < 1_024);
+  assert(!result.stderr.includes(cwd), "launcher error must omit absolute repository path");
+  assert(!result.stderr.includes(hostile), "launcher error must not reflect hostile input");
+  assert.doesNotMatch(result.stderr, /\bat\s+[^\r\n]+:\d+:\d+/u, "launcher error must omit stacks");
+}
+
+function assertInvalidHttpLauncher(executable, prefixArgs, cwd, label) {
+  const hostile = `PACKED_HTTP_OPTION_SENTINEL_${label}\u001b[31m`;
+  const result = spawnSync(
+    executable,
+    [...prefixArgs, "mcp", "serve", "--http", "--port", hostile],
+    {
+      cwd,
+      encoding: "utf8",
+      shell: false,
+      timeout: 5_000,
+      env: { ...process.env, PROVENA_NPM_REGISTRY: "http://127.0.0.1:1" },
+    },
+  );
+  assertGenericLauncherError(result, cwd, hostile, /invalid MCP serve options|MCP command failed/);
+}
+
+async function exerciseHttpLauncher(executable, prefixArgs, cwd, label) {
+  const port = await unusedPort();
+  const args = [...prefixArgs, "mcp", "serve", "--http", "--port", String(port)];
+  const child = spawn(executable, args, {
+    cwd,
+    env: { ...process.env, PROVENA_NPM_REGISTRY: "http://127.0.0.1:1" },
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (value) => { stdout += value; });
+  child.stderr.on("data", (value) => { stderr += value; });
+  let client;
+  try {
+    await waitForAsync(async () => {
+      if (child.exitCode !== null) throw new Error(`launcher exited ${child.exitCode}: ${stderr}`);
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`, { cache: "no-store" });
+      return response.status === 200;
+    }, `${label} HTTP health`);
+    await waitForAsync(() => stdout.includes("Provena MCP HTTP listening"), `${label} startup line`);
+    assert.match(stdout, new RegExp(`host=127\\.0\\.0\\.1 port=${port} .*mcp=http://127\\.0\\.0\\.1:${port}/mcp startupMs=\\d+(?:\\.\\d+)?`));
+    assert(!stdout.includes(cwd));
+
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`));
+    client = new Client({ name: `packed-http-${label}`, version: "1.0.0" });
+    await client.connect(transport);
+    assert.deepEqual(
+      (await client.listTools()).tools.map((tool) => tool.name).sort(),
+      ["provena_context", "provena_graph_neighbors", "provena_graph_path", "provena_maintenance_context", "provena_maintenance_plan", "provena_refresh", "provena_remember"].sort(),
+    );
+    const brain = await client.readResource({ uri: "provena://repo/brain" });
+    assert.match(brain.contents[0]?.text ?? "", /repo brain/i);
+    const context = await client.callTool({
+      name: "provena_context",
+      arguments: { query: "authenticate", maxTokens: 256 },
+    });
+    assert.match(context.content[0]?.text ?? "", /src\/index\.ts/);
+
+    const collision = spawnSync(executable, args, {
+      cwd,
+      encoding: "utf8",
+      shell: false,
+      timeout: 5_000,
+      env: { ...process.env, PROVENA_NPM_REGISTRY: "http://127.0.0.1:1" },
+    });
+    assertGenericLauncherError(collision, cwd, "PACKED_HTTP_COLLISION_SENTINEL", /failed to listen|MCP command failed/);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/healthz`)).status, 200);
+  } finally {
+    await client?.close().catch(() => {});
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    try {
+      await waitForChildExit(child);
+    } catch {
+      child.kill("SIGKILL");
+      await waitForChildExit(child).catch(() => {});
+    }
+  }
+  assert.equal(stderr, "", `${label} HTTP launcher must not emit errors`);
+  await assertPortReleased(port);
 }
 
 const pack = run("npm", ["pack", "--silent"], cliRoot);
@@ -110,9 +252,20 @@ try {
     encoding: "utf8",
   });
   assert.equal(helpRun.status, 0, helpRun.stderr);
-  for (const cmd of ["init", "refresh", "context", "remember", "graph", "mcp"]) {
+  for (const cmd of ["init", "refresh", "context", "maintain", "remember", "graph", "mcp", "sync"]) {
     assert.ok(helpRun.stdout.includes(cmd), `help missing ${cmd}`);
   }
+  const contextHelp = run(process.execPath, [cliBin, "context", "--help"], scratch);
+  assert.equal(contextHelp.status, 0, contextHelp.stderr || contextHelp.stdout);
+  assert.match(contextHelp.stdout, /--memory-as-of requires YYYY-MM-DDTHH:mm:ss\.sssZ/);
+  const graphHelp = run(process.execPath, [cliBin, "graph", "--help"], scratch);
+  assert.equal(graphHelp.status, 0, graphHelp.stderr || graphHelp.stdout);
+  assert.match(graphHelp.stdout, /timeline[\s\S]*--memory-as-of YYYY-MM-DDTHH:mm:ss\.sssZ/);
+  const mcpHelp = run(process.execPath, [cliBin, "mcp", "--help"], scratch);
+  assert.equal(mcpHelp.status, 0, mcpHelp.stderr || mcpHelp.stdout);
+  assert.match(mcpHelp.stdout, /provena mcp serve --http \[--port <port>\]/);
+  assert.match(mcpHelp.stdout, /127\.0\.0\.1 only and defaults to port 18093/);
+  assertInvalidHttpLauncher(process.execPath, [cliBin], scratch, "installed");
 
   const initRun = run(process.execPath, [cliBin, "init", "--no-daemon"], scratch);
   assert.equal(initRun.status, 0, initRun.stderr || initRun.stdout);
@@ -122,6 +275,7 @@ try {
     ".provena/repo.brain.md",
     ".provena/repo.map.json",
     ".provena/graph.json",
+    ".provena/maintenance.plan.json",
     ".provena/manifest.json",
     ".provena/memory/events.jsonl",
     ".provena/views/decisions.md",
@@ -136,6 +290,20 @@ try {
   ]) {
     assert.ok(existsSync(join(scratch, ...path.split("/"))), `init missing ${path}`);
   }
+  const syncDryRun = run(
+    process.execPath,
+    [cliBin, "sync", "store", "--dry-run", "--json"],
+    scratch,
+  );
+  assert.equal(syncDryRun.status, 0, syncDryRun.stderr || syncDryRun.stdout);
+  const syncDryRunResult = JSON.parse(syncDryRun.stdout);
+  assert.equal(syncDryRunResult.dry_run, true);
+  assert.equal(
+    syncDryRunResult.received_events,
+    3,
+    "init projects one package fact and two declared workflows into the ledger",
+  );
+  assert.match(syncDryRunResult.ledger_fingerprint, /^[0-9a-f]{64}$/);
   const ignore = readFileSync(join(scratch, ".gitignore"), "utf8");
   assert.match(ignore, /^node_modules\/$/m, "preserves consumer ignore rules");
   assert.match(ignore, /^\.provena\/\*$/m, "unknown and local .provena state is ignored");
@@ -146,6 +314,7 @@ try {
     ".provena/repo.brain.md",
     ".provena/repo.map.json",
     ".provena/graph.json",
+    ".provena/maintenance.plan.json",
     ".provena/manifest.json",
     ".provena/memory/events.jsonl",
     ".provena/schema/memory-event.schema.json",
@@ -178,16 +347,20 @@ try {
     assert.equal(manifest.memoryFingerprint, expected, `${message} (manifest)`);
   };
 
-  assert.equal(readFileSync(ledgerPath).byteLength, 0, "init creates an empty ledger");
-  const emptyContextRun = run(
+  const initialLedger = readFileSync(ledgerPath, "utf8");
+  const initialEvents = initialLedger.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.equal(initialEvents.length, 3, "init creates package and workflow observations");
+  assert.equal(initialEvents.filter((event) => event.kind === "fact").length, 1);
+  assert.equal(initialEvents.filter((event) => event.kind === "workflow").length, 2);
+  const initialContextRun = run(
     process.execPath,
     [cliBin, "context", "authentication", "--json", "--max-tokens", "256"],
     scratch,
   );
-  assert.equal(emptyContextRun.status, 0, emptyContextRun.stderr);
+  assert.equal(initialContextRun.status, 0, initialContextRun.stderr);
   assertPacketMatchesLedger(
-    JSON.parse(emptyContextRun.stdout),
-    "empty-ledger packet fingerprint must hash exact ledger bytes",
+    JSON.parse(initialContextRun.stdout),
+    "managed-memory packet fingerprint must hash exact ledger bytes",
   );
 
   appendFileSync(ledgerPath, "\n", "utf8");
@@ -236,6 +409,130 @@ try {
   );
   assert.equal(rememberRun.status, 0, rememberRun.stderr);
   assert.match(readFileSync(join(scratch, ".provena", "views", "decisions.md"), "utf8"), /Keep authentication explicit/);
+
+  const installedPackage = join(scratch, "node_modules", "@provena", "cli");
+  const installedApi = await import(
+    pathToFileURL(join(installedPackage, "dist", "index.js")).href
+  );
+  const packedHistory = await installedApi.appendMemoryEvent(scratch, {
+    id: "packed-temporal-history",
+    kind: "decision",
+    subjectType: "file",
+    title: "Packed historical authentication",
+    body: "Use the historical authentication rule at this effective boundary.",
+    appliesTo: ["src/index.ts"],
+    sources: [{ path: "src/index.ts", startLine: 1 }],
+    provenance: { actor: "pack-install-test", method: "explicit" },
+    authority: "human",
+    confidence: 1,
+    importance: 1,
+    sensitivity: "internal",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const packedCurrent = await installedApi.appendMemoryEvent(scratch, {
+    id: "packed-temporal-current",
+    kind: "decision",
+    subjectType: "file",
+    title: "Packed current authentication",
+    body: "Use the successor authentication rule now.",
+    appliesTo: ["src/index.ts"],
+    sources: [{ path: "src/index.ts", startLine: 1 }],
+    provenance: { actor: "pack-install-test", method: "explicit" },
+    authority: "human",
+    confidence: 1,
+    importance: 1,
+    sensitivity: "internal",
+    createdAt: "2026-03-01T00:00:00.000Z",
+    updatedAt: "2026-03-01T00:00:00.000Z",
+    supersedes: [packedHistory.id],
+  });
+  await installedApi.refreshRepoBrain(scratch);
+  const packedBoundary = "2026-02-01T00:00:00.000Z";
+  const temporalContextRun = run(
+    process.execPath,
+    [
+      cliBin,
+      "context",
+      "packed historical authentication",
+      "--memory-as-of",
+      packedBoundary,
+      "--json",
+      "--max-tokens",
+      "512",
+    ],
+    scratch,
+  );
+  assert.equal(temporalContextRun.status, 0, temporalContextRun.stderr || temporalContextRun.stdout);
+  const temporalPacket = JSON.parse(temporalContextRun.stdout);
+  assert.equal(temporalPacket.memoryAsOf, packedBoundary);
+  assert.equal(temporalPacket.repositoryTopology, "current");
+  assert(temporalPacket.items.some((item) => item.id === packedHistory.id));
+  assert(!temporalPacket.items.some((item) => item.id === packedCurrent.id));
+  assertPacketMatchesLedger(temporalPacket, "packed temporal context must attest the full ledger");
+
+  const rawTimelineRun = run(
+    process.execPath,
+    [cliBin, "graph", "timeline", packedHistory.id, "--json"],
+    scratch,
+  );
+  const namespacedTimelineRun = run(
+    process.execPath,
+    [cliBin, "graph", "timeline", `memory:${packedHistory.id}`, "--json"],
+    scratch,
+  );
+  assert.equal(rawTimelineRun.status, 0, rawTimelineRun.stderr || rawTimelineRun.stdout);
+  assert.equal(namespacedTimelineRun.status, 0, namespacedTimelineRun.stderr || namespacedTimelineRun.stdout);
+  assert.deepEqual(JSON.parse(rawTimelineRun.stdout), JSON.parse(namespacedTimelineRun.stdout));
+  assert(
+    JSON.parse(rawTimelineRun.stdout).entries.some((entry) => entry.eventId === packedCurrent.id),
+  );
+
+  const temporalGraphRun = run(
+    process.execPath,
+    [cliBin, "graph", "stats", "--memory-as-of", packedBoundary, "--json"],
+    scratch,
+  );
+  assert.equal(temporalGraphRun.status, 0, temporalGraphRun.stderr || temporalGraphRun.stdout);
+  const temporalGraph = JSON.parse(temporalGraphRun.stdout);
+  assert.equal(temporalGraph.memoryAsOf, packedBoundary);
+  assert.equal(temporalGraph.memoryFingerprint, temporalPacket.memoryFingerprint);
+
+  const installedMcp = await import(
+    pathToFileURL(join(installedPackage, "dist", "mcp", "server.js")).href
+  );
+  const packedServer = await installedMcp.createRepoMcpServer(scratch);
+  const packedClient = new Client({ name: "packed-temporal-client", version: "1.0.0" });
+  const [packedClientTransport, packedServerTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await Promise.all([
+      packedServer.connect(packedServerTransport),
+      packedClient.connect(packedClientTransport),
+    ]);
+    const mcpContext = await packedClient.callTool({
+      name: "provena_context",
+      arguments: {
+        query: "packed historical authentication",
+        memoryAsOf: packedBoundary,
+        maxTokens: 512,
+      },
+    });
+    assert.match(mcpContext.content[0]?.text ?? "", /Packed historical authentication/);
+    const mcpAttestation = JSON.parse(mcpContext.content[1]?.text ?? "{}");
+    assert.equal(mcpAttestation.memoryAsOf, packedBoundary);
+    assert.equal(mcpAttestation.memoryFingerprint, temporalPacket.memoryFingerprint);
+    const mcpNeighbors = await packedClient.callTool({
+      name: "provena_graph_neighbors",
+      arguments: { node: packedHistory.id, depth: 0, memoryAsOf: packedBoundary },
+    });
+    const mcpGraph = JSON.parse(mcpNeighbors.content[0]?.text ?? "{}");
+    assert.equal(mcpGraph.root.metadata.eventId, packedHistory.id);
+    assert.equal(mcpGraph.memoryFingerprint, temporalPacket.memoryFingerprint);
+  } finally {
+    await packedClient.close();
+    await packedServer.close();
+  }
+  await exerciseHttpLauncher(process.execPath, [cliBin], scratch, "installed");
 
   const graphRun = run(process.execPath, [cliBin, "graph", "stats", "--json"], scratch);
   assert.equal(graphRun.status, 0, graphRun.stderr);
@@ -292,7 +589,7 @@ try {
   daemonPids.add(daemonBeforeRepair.pid);
   const daemonLog = join(scratch, ".provena", "daemon.log");
   assert.equal(
-    waitFor(() => / refreshed\r?\n/.test(readFileSync(daemonLog, "utf8")), 40),
+    waitFor(() => / refreshed memory .*\r?\n/.test(readFileSync(daemonLog, "utf8")), 40),
     true,
     "daemon must complete its first refresh before the blocked-restart fixture",
   );
@@ -364,9 +661,12 @@ try {
   assert.equal(run(process.execPath, [cliBin, "daemon", "status"], scratch).status, 1);
   daemonPids.delete(daemonAfterRepair.pid);
   renameSync(join(scratch, "node_modules", "@provena", "cli"), join(scratch, "node_modules", "@provena", "cli-disabled"));
+  const portableRunner = join(scratch, ".provena", "runtime", "runtime.mjs");
+  assertInvalidHttpLauncher(process.execPath, [portableRunner], scratch, "persisted-runtime");
+  await exerciseHttpLauncher(process.execPath, [portableRunner], scratch, "persisted-runtime");
   const portableRun = run(
     process.execPath,
-    [join(scratch, ".provena", "runtime", "runtime.mjs"), "refresh", "--quiet"],
+    [portableRunner, "refresh", "--quiet"],
     scratch,
   );
   assert.equal(portableRun.status, 0, portableRun.stderr || portableRun.stdout);

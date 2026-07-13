@@ -33,6 +33,31 @@ try {
   const claude = JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"));
   assert.equal(claude.mcpServers.existing.command, "existing");
   assert.equal(claude.mcpServers.provena.command, "node");
+  const expectedStdioArgs = [
+    ".provena/runtime/node_modules/@provena/cli/dist/cli.js",
+    "mcp",
+    "serve",
+  ];
+  assert.deepEqual(claude.mcpServers.provena.args, expectedStdioArgs);
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(root, ".cursor", "mcp.json"), "utf8")).mcpServers.provena.args,
+    expectedStdioArgs,
+  );
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(root, ".vscode", "mcp.json"), "utf8")).servers.provena.args,
+    expectedStdioArgs,
+  );
+  const codexConfig = readFileSync(join(root, ".codex", "config.toml"), "utf8");
+  assert.match(codexConfig, /args = \["\.provena\/runtime\/node_modules\/@provena\/cli\/dist\/cli\.js", "mcp", "serve"\]/);
+  for (const path of [
+    ".mcp.json",
+    ".cursor/mcp.json",
+    ".vscode/mcp.json",
+    ".codex/config.toml",
+  ]) {
+    const content = readFileSync(join(root, ...path.split("/")), "utf8");
+    assert.doesNotMatch(content, /--http|18093|127\.0\.0\.1/, `${path} must remain stdio-managed`);
+  }
   assert.deepEqual(installMcpConfigs(root).map((item) => item.action), [
     "unchanged",
     "unchanged",

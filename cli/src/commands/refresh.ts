@@ -1,6 +1,20 @@
 import { getGitRoot, loadConfig } from "../config.js";
 import { refreshRepoBrain } from "../brain/index.js";
 
+function reconciliationRecord(result: Awaited<ReturnType<typeof refreshRepoBrain>>) {
+  const value = result.reconciliation;
+  return {
+    candidates: value.candidates,
+    added: value.added,
+    noops: value.noops,
+    superseded: value.superseded,
+    retracted: value.retracted,
+    deferred: value.deferred,
+    conflicts: value.conflicts,
+    duration_ms: value.durationMs,
+  };
+}
+
 export function printRefreshHelp(): void {
   console.log("Usage: provena refresh [--json] [--quiet]");
   console.log("");
@@ -29,6 +43,7 @@ export async function runRefreshCommand(
           symbols: result.map.symbols.length,
           nodes: result.graph.nodes.length,
           edges: result.graph.edges.length,
+          reconciliation: reconciliationRecord(result),
           written: result.written,
         },
         null,
@@ -44,6 +59,13 @@ export async function runRefreshCommand(
       result.written.length
         ? `  updated: ${result.written.join(", ")}`
         : "  brain already current",
+    );
+    const memory = reconciliationRecord(result);
+    console.log(
+      `  memory: ${memory.candidates} candidates; ${memory.added} added, ` +
+        `${memory.noops} no-op, ${memory.superseded} superseded, ` +
+        `${memory.retracted} retracted, ${memory.deferred} deferred, ` +
+        `${memory.conflicts} conflicts (${memory.duration_ms.toFixed(3)} ms)`,
     );
   }
   return 0;

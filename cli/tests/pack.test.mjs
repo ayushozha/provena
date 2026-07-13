@@ -36,7 +36,22 @@ if (dry.status !== 0) {
 
 const dryResult = parsePackJson(dry, "npm pack --dry-run");
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+const portableRuntime = readFileSync(join(root, "dist", "integrations", "runtime.js"), "utf8");
+if (
+  !portableRuntime.includes("const NPM_COMMAND_TIMEOUT_MS = 15 * 60 * 1_000;") ||
+  !portableRuntime.includes("timeout: NPM_COMMAND_TIMEOUT_MS")
+) {
+  console.error("portable runtime npm commands must retain the 15-minute Windows CI budget");
+  process.exit(1);
+}
 const bundled = new Set(dryResult.bundled ?? []);
+const packedPaths = new Set(dryResult.files.map((file) => file.path));
+for (const path of ["dist/mcp/http.js", "dist/mcp/http.d.ts", "dist/commands/mcp.js"] ) {
+  if (!packedPaths.has(path)) {
+    console.error(`HTTP MCP runtime missing from package: ${path}`);
+    process.exit(1);
+  }
+}
 for (const dependency of Object.keys(packageJson.dependencies ?? {})) {
   if (!bundled.has(dependency)) {
     console.error(`production dependency is not bundled: ${dependency}`);

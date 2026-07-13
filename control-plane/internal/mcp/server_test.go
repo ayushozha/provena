@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,7 +10,7 @@ import (
 )
 
 func newTestServer(upstream *httptest.Server) *MCPServer {
-	return NewMCPServer("provena-test", "0.0.0", upstream.URL, "")
+	return NewMCPServer("provena-test", "0.0.0", upstream.URL)
 }
 
 func callTool(t *testing.T, server *MCPServer, name string, args map[string]any) ToolResult {
@@ -23,7 +24,7 @@ func callTool(t *testing.T, server *MCPServer, name string, args map[string]any)
 }
 
 func TestToolsListHasNineTools(t *testing.T) {
-	server := NewMCPServer("provena-test", "0.0.0", "http://example.com", "")
+	server := NewMCPServer("provena-test", "0.0.0", "http://example.com")
 	resp := server.HandleToolsList(&RPCRequest{})
 	raw, err := json.Marshal(resp.Result)
 	if err != nil {
@@ -176,5 +177,127 @@ func TestGetEventStatusUsesHistory(t *testing.T) {
 	})
 	if path != "/v1/memories/mem_42/history?limit=10" {
 		t.Fatalf("unexpected history path: %s", path)
+	}
+}
+
+func TestRequireBearerAuth(t *testing.T) {
+	handler := RequireBearerAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, test := range []struct {
+		name   string
+		header string
+		want   int
+	}{
+		{name: "missing", want: http.StatusUnauthorized},
+		{name: "wrong scheme", header: "Basic abc", want: http.StatusUnauthorized},
+		{name: "bearer", header: "Bearer caller-key", want: http.StatusNoContent},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/rpc", nil)
+			if test.header != "" {
+				req.Header.Set("Authorization", test.header)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != test.want {
+				t.Fatalf("got %d, want %d", rec.Code, test.want)
+			}
+		})
+	}
+}
+
+func TestRequireGatewayBearerAuthRejectsInvalidToken(t *testing.T) {
+	seenAuthorization := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuthorization <- r.Header.Get("Authorization")
+		http.Error(w, `{"error":"invalid"}`, http.StatusUnauthorized)
+	}))
+	defer upstream.Close()
+	handler := newTestServer(upstream).RequireGatewayBearerAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	req.Header.Set("Authorization", "Bearer invalid-key")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("got %d, want 401", rec.Code)
+	}
+	if got := <-seenAuthorization; got != "Bearer invalid-key" {
+		t.Fatalf("upstream Authorization: got %q", got)
+	}
+}
+
+func TestLimitConcurrentConnectionsRejectsOverflow(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	handler := LimitConcurrentConnections(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}), 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/sse", nil).WithContext(ctx))
+	}()
+	<-started
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sse", nil))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("overflow got %d, want 429", rec.Code)
+	}
+	close(release)
+	<-firstDone
+}
+
+func TestRPCHandlerBoundsBodyAndRejectsTrailingDocuments(t *testing.T) {
+	server := NewMCPServer("provena-test", "0.0.0", "http://example.com")
+	handler := server.RPCHandler()
+	prefix := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"pad":"`
+	suffix := `"}}`
+	atLimit := prefix + strings.Repeat("a", int(maxRPCRequestBytes)-len(prefix)-len(suffix)) + suffix
+	for _, test := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "at limit", body: atLimit, want: http.StatusOK},
+		{name: "over limit", body: atLimit + " ", want: http.StatusRequestEntityTooLarge},
+		{name: "trailing document", body: `{"jsonrpc":"2.0","id":1,"method":"initialize"} {}`, want: http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/rpc", strings.NewReader(test.body)))
+			if rec.Code != test.want {
+				t.Fatalf("got %d, want %d; body=%s", rec.Code, test.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestToolForwardsOnlyCallerAuthorization(t *testing.T) {
+	upstreamAuth := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamAuth <- r.Header.Get("Authorization")
+		w.Write([]byte(`{"memory":{}}`))
+	}))
+	defer upstream.Close()
+	server := newTestServer(upstream)
+
+	_, err := server.executeTool(ToolCallParams{
+		Name:      "memory_get",
+		Arguments: map[string]any{"id": "memory-1"},
+	}, "Bearer caller-key")
+	if err != nil {
+		t.Fatalf("execute tool: %v", err)
+	}
+	if got := <-upstreamAuth; got != "Bearer caller-key" {
+		t.Fatalf("upstream Authorization: got %q", got)
 	}
 }

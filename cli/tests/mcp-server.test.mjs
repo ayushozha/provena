@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
+  appendMemoryEvent,
   createDefaultConfig,
+  readMemoryLedgerSnapshot,
   readMemoryEvents,
   refreshRepoBrain,
   writeConfig,
@@ -21,6 +23,38 @@ try {
   writeFileSync(join(root, "src", "auth.ts"), "export function authorize() { return true; }\n");
   writeConfig(root, createDefaultConfig({ cwd: root, gitRoot: root }));
   await refreshRepoBrain(root);
+  const first = await appendMemoryEvent(root, {
+    kind: "decision",
+    subjectType: "file",
+    title: "Historical authorization branch",
+    body: "Use the historical authorization workflow at this boundary.",
+    appliesTo: ["src/auth.ts"],
+    sources: [{ path: "src/auth.ts", startLine: 1 }],
+    provenance: { actor: "mcp-test", method: "explicit" },
+    authority: "human",
+    confidence: 1,
+    importance: 1,
+    sensitivity: "internal",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const second = await appendMemoryEvent(root, {
+    kind: "decision",
+    subjectType: "file",
+    title: "Current authorization branch",
+    body: "Use the successor authorization workflow now.",
+    appliesTo: ["src/auth.ts"],
+    sources: [{ path: "src/auth.ts", startLine: 1 }],
+    provenance: { actor: "mcp-test", method: "explicit" },
+    authority: "human",
+    confidence: 1,
+    importance: 1,
+    sensitivity: "internal",
+    createdAt: "2026-03-01T00:00:00.000Z",
+    updatedAt: "2026-03-01T00:00:00.000Z",
+    supersedes: [first.id],
+  });
+  await refreshRepoBrain(root);
 
   server = await createRepoMcpServer(root);
   client = new Client({ name: "provena-test-client", version: "1.0.0" });
@@ -34,6 +68,8 @@ try {
     "provena_remember",
     "provena_graph_neighbors",
     "provena_graph_path",
+    "provena_maintenance_plan",
+    "provena_maintenance_context",
   ]) {
     assert.ok(tools.tools.some((tool) => tool.name === name), `MCP missing ${name}`);
   }
@@ -46,6 +82,54 @@ try {
     arguments: { query: "authorize", maxTokens: 256 },
   });
   assert.match(context.content[0]?.text ?? "", /src\/auth\.ts/);
+
+  const boundary = "2026-02-01T00:00:00.000Z";
+  const historicalContext = await client.callTool({
+    name: "provena_context",
+    arguments: { query: "historical authorization", memoryAsOf: boundary, maxTokens: 512 },
+  });
+  const historicalPacket = JSON.parse(historicalContext.content[1]?.text ?? "{}");
+  assert.equal(historicalPacket.memoryAsOf, boundary);
+  assert.equal(historicalPacket.repositoryTopology, "current");
+  assert.equal(
+    historicalPacket.memoryFingerprint,
+    (await readMemoryLedgerSnapshot(root)).memoryFingerprint,
+  );
+  assert.match(historicalContext.content[0]?.text ?? "", /Historical authorization branch/);
+  assert.doesNotMatch(historicalContext.content[0]?.text ?? "", /Current authorization branch/);
+
+  const historicalNeighbors = await client.callTool({
+    name: "provena_graph_neighbors",
+    arguments: { node: first.id, depth: 0, memoryAsOf: boundary },
+  });
+  const neighborsPayload = JSON.parse(historicalNeighbors.content[0]?.text ?? "{}");
+  assert.equal(neighborsPayload.root.metadata.eventId, first.id);
+  assert.equal(neighborsPayload.memoryAsOf, boundary);
+  assert.equal(neighborsPayload.memoryFingerprint, historicalPacket.memoryFingerprint);
+
+  const historicalPath = await client.callTool({
+    name: "provena_graph_path",
+    arguments: { from: first.id, to: "src/auth.ts", memoryAsOf: boundary },
+  });
+  const pathPayload = JSON.parse(historicalPath.content[0]?.text ?? "{}");
+  assert.equal(pathPayload.from.metadata.eventId, first.id);
+  assert.equal(pathPayload.to.path, "src/auth.ts");
+  assert(pathPayload.path.length >= 2);
+  assert.equal(pathPayload.memoryFingerprint, historicalPacket.memoryFingerprint);
+
+  const hostileBoundary = "not-a-time-secret\u001b[31m";
+  for (const request of [
+    { name: "provena_context", arguments: { query: "authorization", memoryAsOf: hostileBoundary } },
+    { name: "provena_graph_neighbors", arguments: { node: first.id, memoryAsOf: hostileBoundary } },
+    { name: "provena_graph_path", arguments: { from: first.id, to: "src/auth.ts", memoryAsOf: hostileBoundary } },
+  ]) {
+    const invalid = await client.callTool(request);
+    assert.equal(invalid.isError, true);
+    const message = invalid.content[0]?.text ?? "";
+    assert.match(message, /memoryAsOf|canonical UTC/i);
+    assert(!message.includes("not-a-time-secret"));
+    assert(!message.includes("\u001b"));
+  }
 
   const mapPath = join(root, ".provena", "repo.map.json");
   const storedMap = readFileSync(mapPath, "utf8");
@@ -73,7 +157,12 @@ try {
     },
   });
   assert.match(remembered.content[0]?.text ?? "", /Keep authorization explicit/);
-  assert.equal((await readMemoryEvents(root)).length, 1);
+  const memories = await readMemoryEvents(root);
+  assert.equal(
+    memories.filter((event) => event.title === "Keep authorization explicit").length,
+    1,
+    "the explicit MCP decision must be appended once alongside managed observations",
+  );
 
   const rejected = await client.callTool({
       name: "provena_remember",

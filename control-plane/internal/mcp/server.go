@@ -4,11 +4,14 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,6 +22,8 @@ type RPCRequest struct {
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
 }
+
+const maxRPCRequestBytes int64 = 100 * 1024
 
 type RPCResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -55,21 +60,19 @@ type ToolContent struct {
 }
 
 type MCPServer struct {
-	name          string
-	version       string
-	upstreamURL   string
-	serviceAPIKey string
-	client        *http.Client
-	tools         []ToolDefinition
+	name        string
+	version     string
+	upstreamURL string
+	client      *http.Client
+	tools       []ToolDefinition
 }
 
-func NewMCPServer(name, version, upstreamURL, serviceAPIKey string) *MCPServer {
+func NewMCPServer(name, version, upstreamURL string) *MCPServer {
 	server := &MCPServer{
-		name:          name,
-		version:       version,
-		upstreamURL:   upstreamURL,
-		serviceAPIKey: serviceAPIKey,
-		client:        &http.Client{Timeout: 30 * time.Second},
+		name:        name,
+		version:     version,
+		upstreamURL: upstreamURL,
+		client:      &http.Client{Timeout: 30 * time.Second},
 	}
 	server.tools = []ToolDefinition{
 		{
@@ -381,16 +384,6 @@ func erasePayloadFromArgs(args map[string]any) (map[string]any, error) {
 	return payload, nil
 }
 
-func (s *MCPServer) resolveAuthHeader(incoming string) string {
-	if incoming != "" {
-		return incoming
-	}
-	if s.serviceAPIKey != "" {
-		return "Bearer " + s.serviceAPIKey
-	}
-	return ""
-}
-
 func (s *MCPServer) request(method, path string, payload map[string]any, authHeader string) ([]byte, error) {
 	var body io.Reader
 	if payload != nil {
@@ -408,8 +401,8 @@ func (s *MCPServer) request(method, path string, payload map[string]any, authHea
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if auth := s.resolveAuthHeader(authHeader); auth != "" {
-		req.Header.Set("Authorization", auth)
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
 	}
 
 	resp, err := s.client.Do(req)
@@ -429,6 +422,75 @@ func (s *MCPServer) request(method, path string, payload map[string]any, authHea
 		data = []byte(`{"status":"ok"}`)
 	}
 	return data, nil
+}
+
+// RequireBearerAuth rejects anonymous network MCP requests. The gateway still
+// performs the authoritative API-key validation; this boundary prevents the
+// MCP process from acting as an unauthenticated credential bridge.
+func RequireBearerAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Fields(r.Header.Get("Authorization"))
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+			http.Error(w, `{"error":"missing or invalid Authorization header"}`, http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequireGatewayBearerAuth verifies a syntactically valid bearer token at the
+// authoritative gateway before admitting any network MCP request. This covers
+// initialize, tools/list, and SSE requests that do not otherwise call upstream.
+func (s *MCPServer) RequireGatewayBearerAuth(next http.Handler) http.Handler {
+	return RequireBearerAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodGet,
+			strings.TrimRight(s.upstreamURL, "/")+"/v1/auth/validate",
+			nil,
+		)
+		if err == nil {
+			req.Header.Set("Authorization", r.Header.Get("Authorization"))
+		}
+		var resp *http.Response
+		if err == nil {
+			resp, err = s.client.Do(req)
+		}
+		if err != nil {
+			http.Error(w, `{"error":"authentication service unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			http.Error(w, `{"error":"invalid or expired API key"}`, http.StatusUnauthorized)
+			return
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			http.Error(w, `{"error":"authentication service unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
+// LimitConcurrentConnections bounds long-lived transports such as SSE.
+func LimitConcurrentConnections(next http.Handler, maximum int) http.Handler {
+	if maximum < 1 {
+		panic("maximum concurrent connections must be positive")
+	}
+	semaphore := make(chan struct{}, maximum)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case semaphore <- struct{}{}:
+			defer func() { <-semaphore }()
+			next.ServeHTTP(w, r)
+		default:
+			http.Error(w, `{"error":"too many active connections"}`, http.StatusTooManyRequests)
+		}
+	})
 }
 
 func (s *MCPServer) toolResult(body []byte, err error) (ToolResult, error) {
@@ -472,17 +534,37 @@ func (s *MCPServer) RPCHandler() http.HandlerFunc {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
+		r.Body = http.MaxBytesReader(w, r.Body, maxRPCRequestBytes)
+		decoder := json.NewDecoder(r.Body)
 		var req RPCRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
+		if err := decoder.Decode(&req); err != nil {
+			status := http.StatusBadRequest
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				status = http.StatusRequestEntityTooLarge
+			}
+			w.WriteHeader(status)
 			json.NewEncoder(w).Encode(RPCResponse{
 				JSONRPC: "2.0",
 				Error:   &RPCError{Code: -32700, Message: "parse error"},
 			})
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
+		var trailing json.RawMessage
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			status := http.StatusBadRequest
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				status = http.StatusRequestEntityTooLarge
+			}
+			w.WriteHeader(status)
+			json.NewEncoder(w).Encode(RPCResponse{
+				JSONRPC: "2.0",
+				Error:   &RPCError{Code: -32700, Message: "parse error"},
+			})
+			return
+		}
 		json.NewEncoder(w).Encode(s.HandleRPC(&req, r.Header.Get("Authorization")))
 	}
 }

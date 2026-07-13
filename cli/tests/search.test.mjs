@@ -92,7 +92,7 @@ async function testClientSearchRouting() {
   const calls = [];
 
   const fetchImpl = async (url, init) => {
-    calls.push({ url: String(url), method: init?.method, body: init?.body });
+    calls.push({ url: String(url), method: init?.method, body: init?.body, headers: init?.headers });
     const path = String(url);
     if (path.endsWith("/healthz")) {
       return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
@@ -152,6 +152,7 @@ async function testClientSearchRouting() {
   const pipelineClient = new ProvenaClient({
     storeUrl: "http://127.0.0.1:18092",
     intelligenceUrl: "http://127.0.0.1:18081",
+    apiKey: "pipeline-test-key",
     fetchImpl,
   });
 
@@ -165,6 +166,11 @@ async function testClientSearchRouting() {
     calls.some((call) => call.url.endsWith("/v1/pipeline/search")),
     "pipeline search should be used when intelligence_url is set",
   );
+  const pipelineCall = calls.find((call) => call.url.endsWith("/v1/pipeline/search"));
+  assert.equal(pipelineCall.headers["X-Provena-Tenant-Id"], "t");
+  assert.equal(pipelineCall.headers["X-Provena-Principal-Id"], "provena-cli");
+  assert.equal(pipelineCall.headers["X-Provena-Role"], "editor");
+  assert.equal(pipelineCall.headers.Authorization, "Bearer pipeline-test-key");
 
   const storeClient = new ProvenaClient({
     storeUrl: "http://127.0.0.1:18092",

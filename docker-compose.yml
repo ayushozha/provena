@@ -14,7 +14,7 @@ services:
     environment:
       - RUST_LOG=info
     healthcheck:
-      # gRPC server — curl cannot speak gRPC. Use TCP connectivity check.
+      # Internal HTTP service; use a dependency-light TCP readiness check.
       test: ["CMD", "sh", "-c", "nc -z localhost 50051 || exit 1"]
       interval: 10s
       timeout: 3s
@@ -70,10 +70,13 @@ services:
       args:
         CMD: mcp
     ports:
-      - "${PROVENA_MCP_HOST_PORT:-8090}:8090"
+      - "127.0.0.1:${PROVENA_MCP_HOST_PORT:-8090}:8090"
     environment:
       - PROVENA_MCP_LISTEN_ADDR=:8090
       - PROVENA_GATEWAY_URL=http://gateway:8080
+      # Local-only Compose pairs this with a loopback host binding. Deployed
+      # MCP endpoints should omit this override and require caller Bearer auth.
+      - PROVENA_MCP_REQUIRE_AUTH=false
     depends_on:
       gateway:
         condition: service_healthy

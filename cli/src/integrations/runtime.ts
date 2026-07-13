@@ -22,7 +22,9 @@ export interface RuntimeInstallResult {
   reused: boolean;
 }
 
-const NPM_COMMAND_TIMEOUT_MS = 5 * 60 * 1_000;
+// Hosted Windows runners can need more than five minutes to unpack the bundled
+// portable runtime even though npm is still making progress.
+const NPM_COMMAND_TIMEOUT_MS = 15 * 60 * 1_000;
 
 function packageRoot(): string {
   // dist/integrations/runtime.js -> package root
@@ -44,6 +46,7 @@ function runtimeSource(version: string): string {
 import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { refreshRepoBrain } from "./node_modules/@provena/cli/dist/brain/index.js";
+import { runMcpCommand } from "./node_modules/@provena/cli/dist/commands/mcp.js";
 import { assertSafeRepoPath } from "./node_modules/@provena/cli/dist/security/paths.js";
 
 const VERSION = ${JSON.stringify(version)};
@@ -54,11 +57,19 @@ const repoRoot = resolve(process.cwd());
 
 async function refresh() {
   const result = await refreshRepoBrain(repoRoot);
-  if (!quiet) console.log(\`Provena \${VERSION}: refreshed \${result.map.files.length} files\`);
+  if (!quiet) console.log(\`Provena \${VERSION}: refreshed \${result.map.files.length} files; memory candidates=\${result.reconciliation.candidates} +\${result.reconciliation.added} ~\${result.reconciliation.superseded} -\${result.reconciliation.retracted} =\${result.reconciliation.noops} deferred=\${result.reconciliation.deferred} conflicts=\${result.reconciliation.conflicts} \${result.reconciliation.durationMs.toFixed(3)}ms\`);
+  return result;
 }
 
 if (command === "refresh") {
   await refresh();
+} else if (command === "mcp") {
+  try {
+    process.exitCode = await runMcpCommand(args.slice(1), repoRoot);
+  } catch {
+    console.error("provena runtime: MCP command failed");
+    process.exitCode = 1;
+  }
 } else if (command === "daemon") {
   const intervalAt = args.indexOf("--interval-ms");
   const interval = intervalAt >= 0 ? Number(args[intervalAt + 1]) : 900000;
@@ -117,9 +128,9 @@ if (command === "refresh") {
   heartbeat();
   const tick = async () => {
     try {
-      await refresh();
+      const result = await refresh();
       safe(logPath);
-      appendFileSync(logPath, \`\${new Date().toISOString()} refreshed\\n\`, "utf8");
+      appendFileSync(logPath, \`\${new Date().toISOString()} refreshed memory candidates=\${result.reconciliation.candidates} +\${result.reconciliation.added} ~\${result.reconciliation.superseded} -\${result.reconciliation.retracted} =\${result.reconciliation.noops} deferred=\${result.reconciliation.deferred} conflicts=\${result.reconciliation.conflicts} \${result.reconciliation.durationMs.toFixed(3)}ms\\n\`, "utf8");
     } catch (error) {
       try {
         safe(logPath);

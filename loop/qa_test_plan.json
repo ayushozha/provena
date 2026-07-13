@@ -1,6 +1,6 @@
 {
   "product": "Provena",
-  "updatedAt": "2026-04-15T14:30:43Z",
+  "updatedAt": "2026-07-13T19:27:50Z",
   "epics": [
     {
       "epicId": "EPIC-PRODUCTIZE",
@@ -192,6 +192,111 @@
           "mitigatedBy": [
             "PROVENA-011-T06",
             "PROVENA-011-T07"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R19",
+          "severity": "critical",
+          "risk": "An incomplete repository scan can be mistaken for a real deletion and permanently retract valid operating memories.",
+          "whyItMatters": "The living-memory promise becomes actively harmful if a file cap, unreadable manifest, or transient scan failure erases context that still exists.",
+          "mitigatedBy": [
+            "PROVENA-013-T07"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R20",
+          "severity": "critical",
+          "risk": "Malformed managed metadata, duplicate heads, reserved-id collisions, or partial writes can corrupt the append-only lineage and make future refreshes nondeterministic.",
+          "whyItMatters": "The repository ledger is the portable source of truth; ambiguous ownership or a mixed generation would make every downstream context packet unverifiable.",
+          "mitigatedBy": [
+            "PROVENA-013-T09",
+            "PROVENA-013-T11",
+            "PROVENA-013-T12"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R21",
+          "severity": "high",
+          "risk": "Manual refresh, session start, hooks, MCP, daemon, and packed runtime paths can drift into different reconciliation behavior or append duplicates under concurrency.",
+          "whyItMatters": "Automatic memory is only trustworthy if every installed trigger reuses one locked implementation and produces the same ledger for the same observations.",
+          "mitigatedBy": [
+            "PROVENA-013-T12",
+            "PROVENA-013-T14",
+            "PROVENA-013-T15"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R22",
+          "severity": "high",
+          "risk": "Documentation or output can overclaim semantic change detection that the current RepoMap does not expose, especially script bodies and dependency versions.",
+          "whyItMatters": "Agents must understand what Provena actually observed; claiming freshness for invisible content changes creates false confidence in the repo brain.",
+          "mitigatedBy": [
+            "PROVENA-013-T06",
+            "PROVENA-013-T15"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R23",
+          "severity": "high",
+          "risk": "Manifest-controlled values can smuggle credentials into automatically generated memory, error output, or derived artifacts.",
+          "whyItMatters": "Automatic extraction expands the untrusted-input surface and must preserve the existing guarantee that secrets are never persisted in repository memory.",
+          "mitigatedBy": [
+            "PROVENA-013-T10"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R24",
+          "severity": "critical",
+          "risk": "Incorrect half-open boundaries, equal-time handling, branches, or backdated appends can return the wrong memory as active for a historical query.",
+          "whyItMatters": "Agents may act on a decision or workflow that was not effective at the requested time, undermining the temporal-memory guarantee.",
+          "mitigatedBy": [
+            "PROVENA-014-T04",
+            "PROVENA-014-T08",
+            "PROVENA-014-T09"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R25",
+          "severity": "critical",
+          "risk": "Memory bodies, arbitrary structured data, credentials, or stale historical paths can leak into the portable graph or Neo4j projection.",
+          "whyItMatters": "The graph is a broad indexing surface and must remain a bounded metadata projection rather than a second uncontrolled memory store.",
+          "mitigatedBy": [
+            "PROVENA-014-T03",
+            "PROVENA-014-T05",
+            "PROVENA-014-T12"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R26",
+          "severity": "high",
+          "risk": "Graph, manifest, context, ledger, and Neo4j projection fingerprints can diverge or stale cleanup can remain keyed only to source changes.",
+          "whyItMatters": "A source-only projection identity cannot distinguish two memory generations over the same code snapshot.",
+          "mitigatedBy": [
+            "PROVENA-014-T01",
+            "PROVENA-014-T12",
+            "PROVENA-014-T14"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R27",
+          "severity": "high",
+          "risk": "Successor interval construction can become quadratic on long chains or wide branches.",
+          "whyItMatters": "A living ledger grows continuously, so super-linear temporal projection would eventually make routine refresh and session startup unusable.",
+          "mitigatedBy": [
+            "PROVENA-014-T04",
+            "PROVENA-014-T06"
+          ]
+        },
+        {
+          "id": "EPIC-PRODUCTIZE-R28",
+          "severity": "high",
+          "risk": "Graph schema v2 or temporal query plumbing can break graph v1 reads, existing algorithms, CLI and MCP parity, packed installs, or canonical sync bytes.",
+          "whyItMatters": "Temporal memory must extend the portable repo brain without invalidating existing installations or agent integrations.",
+          "mitigatedBy": [
+            "PROVENA-014-T10",
+            "PROVENA-014-T11",
+            "PROVENA-014-T13",
+            "PROVENA-014-T15"
           ]
         }
       ]
@@ -914,6 +1019,393 @@
             "PROVENA-011-T07"
           ],
           "commands": []
+        }
+      ]
+    },
+    {
+      "featureId": "FEATURE-CANONICAL-EVENT-PLANE",
+      "epicId": "EPIC-CONNECTED",
+      "featureTitle": "Canonical repository event plane",
+      "storyIds": [
+        "PROVENA-012"
+      ],
+      "regressionCoverage": [
+        {
+          "id": "FEATURE-CANONICAL-EVENT-PLANE-RC1",
+          "area": "Exact-byte attestation and complete validation",
+          "goal": "Require the store to verify the SHA-256 of the exact JSONL bytes and reject an invalid batch before any checkpoint can advance.",
+          "tests": [
+            "PROVENA-012-T01",
+            "PROVENA-012-T02"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-CANONICAL-EVENT-PLANE-RC2",
+          "area": "Lossless deterministic projection",
+          "goal": "Keep stable repository-scoped identities and preserve the complete canonical event contract across the local-to-governed boundary.",
+          "tests": [
+            "PROVENA-012-T03"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-CANONICAL-EVENT-PLANE-RC3",
+          "area": "Lifecycle, causality, and retrieval",
+          "goal": "Project superseded and retracted states plus every causal edge while retaining the underlying audit records and excluding inactive projections from normal reads.",
+          "tests": [
+            "PROVENA-012-T04"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-CANONICAL-EVENT-PLANE-RC4",
+          "area": "Replay and checkpoint safety",
+          "goal": "Prove identical replays are no-ops and failed later batches do not corrupt or advance the last successful repository checkpoint.",
+          "tests": [
+            "PROVENA-012-T05"
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ]
+        },
+        {
+          "id": "FEATURE-CANONICAL-EVENT-PLANE-RC5",
+          "area": "Portable CLI transport and local fallback",
+          "goal": "Ensure `provena sync store` sends one consistent ledger snapshot through the configured store endpoint and does not weaken the existing zero-service refresh path.",
+          "tests": [
+            "PROVENA-012-T06",
+            "PROVENA-012-T07"
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/repo-memory-sync.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-CANONICAL-EVENT-PLANE-RC6",
+          "area": "Public contract and cross-service continuity",
+          "goal": "Keep OpenAPI and the existing cross-service verification path aligned with the new measured replication boundary.",
+          "tests": [
+            "PROVENA-012-T08"
+          ],
+          "commands": [
+            "python scripts/export_openapi.py",
+            "python scripts/run_e2e.py"
+          ]
+        }
+      ]
+    },
+    {
+      "featureId": "FEATURE-LIVING-REPO-MEMORY",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "Living source-grounded repository memory",
+      "storyIds": [
+        "PROVENA-013"
+      ],
+      "regressionCoverage": [
+        {
+          "id": "FEATURE-LIVING-REPO-MEMORY-RC1",
+          "area": "Source-grounded candidate contract and determinism",
+          "goal": "Derive only package facts and command workflows from RepoMap, preserve exact source attestation, and keep logical identity deterministic across harmless representation changes.",
+          "tests": [
+            "PROVENA-013-T01",
+            "PROVENA-013-T02",
+            "PROVENA-013-T06"
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-LIVING-REPO-MEMORY-RC2",
+          "area": "Exact-byte no-op and fingerprint attestation",
+          "goal": "Preserve arbitrary pre-existing ledger bytes, append only real transitions, and keep every fingerprint consumer bound to the committed raw ledger.",
+          "tests": [
+            "PROVENA-013-T03",
+            "PROVENA-013-T04",
+            "PROVENA-013-T13"
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs",
+            "cd cli && node tests/context-packet.test.mjs",
+            "cd cli && node tests/repo-memory-sync.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-LIVING-REPO-MEMORY-RC3",
+          "area": "Append-only lifecycle and scan completeness",
+          "goal": "Prove ADD, NOOP, SUPERSEDE, RETRACT, repeat absence, resurrection, and deletion deferral without mutating retained history.",
+          "tests": [
+            "PROVENA-013-T05",
+            "PROVENA-013-T07"
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-LIVING-REPO-MEMORY-RC4",
+          "area": "Authority, lineage, and secret safety",
+          "goal": "Protect explicit and higher-authority memories, reject ambiguous managed lineages and reserved collisions, and prevent candidate-controlled secrets from entering any artifact.",
+          "tests": [
+            "PROVENA-013-T08",
+            "PROVENA-013-T09",
+            "PROVENA-013-T10"
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs",
+            "cd cli && node tests/security.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-LIVING-REPO-MEMORY-RC5",
+          "area": "Generation atomicity, crash recovery, and concurrency",
+          "goal": "Keep ledger and derived artifacts coherent across handled write failures, abrupt process loss, same-process races, cross-process races, and explicit append races.",
+          "tests": [
+            "PROVENA-013-T11",
+            "PROVENA-013-T12"
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs",
+            "cd cli && node tests/repo-brain-lock.test.mjs",
+            "cd cli && node tests/repo-brain-events.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-LIVING-REPO-MEMORY-RC6",
+          "area": "Measured reconciliation output",
+          "goal": "Expose complete, internally consistent action counters and elapsed milliseconds without persisting timing noise or changing quiet behavior.",
+          "tests": [
+            "PROVENA-013-T13"
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs",
+            "cd cli && node tests/cli-behavior.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-LIVING-REPO-MEMORY-RC7",
+          "area": "Installed trigger and package continuity",
+          "goal": "Reuse one reconciler through session start, managed hooks, MCP, daemon, offline runtime reuse, and a real packed consumer install.",
+          "tests": [
+            "PROVENA-013-T14",
+            "PROVENA-013-T15"
+          ],
+          "commands": [
+            "cd cli && node tests/install-integrations.test.mjs",
+            "cd cli && node tests/mcp-server.test.mjs",
+            "cd cli && node tests/daemon-state.test.mjs",
+            "cd cli && node tests/pack-install.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-LIVING-REPO-MEMORY-RC8",
+          "area": "Honest documentation and full regression",
+          "goal": "Document the zero-service lifecycle and explicit-only boundary without overclaiming current RepoMap observability, then keep every CLI regression green.",
+          "tests": [
+            "PROVENA-013-T15"
+          ],
+          "commands": [
+            "cd cli && npm test"
+          ]
+        }
+      ]
+    },
+    {
+      "featureId": "FEATURE-TEMPORAL-MEMORY-GRAPH",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "Temporal repository memory graph",
+      "storyIds": [
+        "PROVENA-014"
+      ],
+      "regressionCoverage": [
+        {
+          "id": "FEATURE-TEMPORAL-MEMORY-GRAPH-RC1",
+          "area": "Locked generation and fingerprint attestation",
+          "goal": "Build graph v2 from the final reconciled ledger and bind graph, manifest, context, and projection identity to its exact bytes.",
+          "tests": [
+            "PROVENA-014-T01",
+            "PROVENA-014-T14"
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/temporal-memory-graph.test.mjs",
+            "cd cli && node tests/context-packet.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-TEMPORAL-MEMORY-GRAPH-RC2",
+          "area": "Schema, identity, privacy, and current-source relationships",
+          "goal": "Preserve code identities, namespace memory identities, reject collisions, project only bounded fields, and create no dangling source edges.",
+          "tests": [
+            "PROVENA-014-T02",
+            "PROVENA-014-T03",
+            "PROVENA-014-T05"
+          ],
+          "commands": [
+            "cd cli && node tests/temporal-memory-graph.test.mjs",
+            "cd cli && node tests/security.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-TEMPORAL-MEMORY-GRAPH-RC3",
+          "area": "Effective intervals and point-in-time selection",
+          "goal": "Prove chain, retraction, equal-time, branch, boundary, and backdated-append semantics over the canonical ledger.",
+          "tests": [
+            "PROVENA-014-T04",
+            "PROVENA-014-T08"
+          ],
+          "commands": [
+            "cd cli && node tests/repo-brain-events.test.mjs",
+            "cd cli && node tests/temporal-memory-graph.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-TEMPORAL-MEMORY-GRAPH-RC4",
+          "area": "Linear construction and deterministic bytes",
+          "goal": "Use deterministic visit diagnostics to prove temporal work is linear and keep sorted structural output stable.",
+          "tests": [
+            "PROVENA-014-T06"
+          ],
+          "commands": [
+            "cd cli && node tests/temporal-memory-graph.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-TEMPORAL-MEMORY-GRAPH-RC5",
+          "area": "Temporal context and induced-graph ranking",
+          "goal": "Expose the selected boundary while retaining current code topology, the full ledger fingerprint, and ranking unaffected by inactive history.",
+          "tests": [
+            "PROVENA-014-T09"
+          ],
+          "commands": [
+            "cd cli && node tests/context-packet.test.mjs",
+            "cd cli && node tests/temporal-memory-graph.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-TEMPORAL-MEMORY-GRAPH-RC6",
+          "area": "Canonical input and CLI/MCP parity",
+          "goal": "Validate one canonical timestamp format and reuse the same temporal helpers across context, graph, timeline, and MCP tools.",
+          "tests": [
+            "PROVENA-014-T07",
+            "PROVENA-014-T10",
+            "PROVENA-014-T11"
+          ],
+          "commands": [
+            "cd cli && node tests/cli-behavior.test.mjs",
+            "cd cli && node tests/mcp-server.test.mjs",
+            "cd cli && node tests/temporal-memory-graph.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-TEMPORAL-MEMORY-GRAPH-RC7",
+          "area": "Memory-sensitive Neo4j projection",
+          "goal": "Project temporal metadata and clean stale rows with a token sensitive to source and exact memory bytes without leaking credentials or bodies.",
+          "tests": [
+            "PROVENA-014-T12"
+          ],
+          "commands": [
+            "cd cli && node tests/neo4j-adapter.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-TEMPORAL-MEMORY-GRAPH-RC8",
+          "area": "Legacy compatibility, harness integrity, documentation, and distribution",
+          "goal": "Read graph v1, regenerate v2 safely, reject inconsistent stored artifacts, document scope honestly, and preserve packed and full regressions.",
+          "tests": [
+            "PROVENA-014-T13",
+            "PROVENA-014-T14",
+            "PROVENA-014-T15"
+          ],
+          "commands": [
+            "cd cli && node tests/repo-graph-algorithms.test.mjs",
+            "cd cli && node tests/repo-memory-sync.test.mjs",
+            "cd cli && node tests/pack-install.test.mjs",
+            "cd cli && npm test"
+          ]
+        }
+      ]
+    },
+    {
+      "featureId": "FEATURE-LOCAL-MCP-HTTP",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "Opt-in local Streamable HTTP MCP",
+      "storyIds": [
+        "PROVENA-015"
+      ],
+      "regressionCoverage": [
+        {
+          "id": "FEATURE-LOCAL-MCP-HTTP-RC1",
+          "area": "CLI and existing transport compatibility",
+          "goal": "Add explicit HTTP options while preserving stdio, managed configs, and the Python store command.",
+          "tests": [
+            "PROVENA-015-T01",
+            "PROVENA-015-T02"
+          ],
+          "commands": [
+            "cd cli && node tests/cli-behavior.test.mjs",
+            "cd cli && node tests/install-integrations.test.mjs",
+            "cd cli && node tests/mcp-server.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-LOCAL-MCP-HTTP-RC2",
+          "area": "HTTP protocol and lifecycle parity",
+          "goal": "Prove routes, repository-root binding, MCP parity, stateless request isolation, and concurrency cleanup.",
+          "tests": [
+            "PROVENA-015-T03",
+            "PROVENA-015-T04"
+          ],
+          "commands": [
+            "cd cli && node tests/mcp-http-server.test.mjs",
+            "cd cli && node tests/mcp-server.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-LOCAL-MCP-HTTP-RC3",
+          "area": "Loopback HTTP security boundary",
+          "goal": "Reject Host/Origin attacks, oversized input, and reflective errors before unsafe MCP handling.",
+          "tests": [
+            "PROVENA-015-T05",
+            "PROVENA-015-T06"
+          ],
+          "commands": [
+            "cd cli && node tests/mcp-http-server.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-LOCAL-MCP-HTTP-RC4",
+          "area": "Shutdown and offline distribution",
+          "goal": "Close cleanly on both signals and serve from the packed CLI and persisted runtime without the source tree or network.",
+          "tests": [
+            "PROVENA-015-T07",
+            "PROVENA-015-T08"
+          ],
+          "commands": [
+            "cd cli && node tests/pack.test.mjs",
+            "cd cli && node tests/pack-install.test.mjs"
+          ]
+        },
+        {
+          "id": "FEATURE-LOCAL-MCP-HTTP-RC5",
+          "area": "Documentation and complete regression",
+          "goal": "Document the local-process trust boundary honestly and retain every CLI and cross-service gate.",
+          "tests": [
+            "PROVENA-015-T09"
+          ],
+          "commands": [
+            "cd cli && npm test",
+            "python scripts/run_e2e.py"
+          ]
         }
       ]
     }
@@ -3059,6 +3551,1895 @@
           "covers": [
             "sentryChecks[0]",
             "feature regression: post-release runtime handoff"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-012",
+      "epicId": "EPIC-CONNECTED",
+      "featureId": "FEATURE-CANONICAL-EVENT-PLANE",
+      "title": "Replicate the source-attested repository ledger into governed storage",
+      "persona": "Developer using Provena as the durable memory layer for an existing repository",
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-012"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "Once Provena-owned telemetry is configured, monitor replication validation failures and fingerprint mismatches by repository without recording ledger contents.",
+          "Track p50 and p95 replication duration, event counts, retry or no-op rates, and checkpoint age so a stalled bridge is visible before connected context goes stale.",
+          "Alert on partial-projection recovery failures or repeated invalid-batch attempts while preserving tenant and repository identifiers as governed metadata."
+        ]
+      },
+      "executionNotes": [
+        "[2026-07-13T15:48:08Z] TESTER-EXECUTION green: T01-T12 passed. CLI build and focused sync/config/security tests passed in 5.282s; full CLI including pack-install passed in 343.736s; full Python reported 63 passed, 14 environment-skipped, and 3 subtests in 67.409s; focused ledger reported 8 passed and focused T09-T12 security reported 7 passed; Go control-plane passed; OpenAPI export was byte-identical with SHA-256 A83E9EB59CBA7C6D789A8802E1A911C93BAF4C54363ADB98C39D01FF072DA176; and run_e2e passed standalone, polyglot, SDK, Rust compile, and authenticated gateway sync in 83.458s. PostgreSQL's 13 contracts collected but skipped because PROVENA_DATABASE_URL is unset and Docker was unavailable; the dedicated CI service runs PostgreSQL 16. Live Redis was also unavailable while fakeredis coverage passed. Sentry credentials were absent, so telemetry verification remains pending."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-012-T01",
+          "title": "The store verifies the fingerprint of the exact raw ledger bytes",
+          "level": "api",
+          "automation": "pytest",
+          "preconditions": [
+            "Create a valid repository event ledger whose raw JSONL contains deterministic whitespace and a final newline."
+          ],
+          "steps": [
+            "POST the exact ledger string with its SHA-256 fingerprint, stable repository id, and tenant/project scope.",
+            "Repeat with one byte changed while retaining the original fingerprint.",
+            "Exercise the empty-ledger fingerprint so it cannot be confused with a hash of a parsed empty array."
+          ],
+          "expectedResults": [
+            "The exact valid bytes are accepted and the response echoes the verified fingerprint.",
+            "The changed and mismatched payload is rejected before projection or checkpoint advancement.",
+            "An empty ledger uses SHA-256 of zero bytes and remains independently verifiable."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-012-T02",
+          "title": "Whole-batch validation rejects malformed, duplicate, oversized, or schema-invalid events safely",
+          "level": "api",
+          "automation": "pytest",
+          "preconditions": [
+            "Prepare batches with invalid JSON, duplicate event ids, forbidden fields, invalid enums, and an oversized raw ledger."
+          ],
+          "steps": [
+            "Submit each invalid batch through the replication endpoint.",
+            "Inspect memories, sources, relations, history, and replication state after every rejection."
+          ],
+          "expectedResults": [
+            "Every invalid request returns a bounded validation error without leaking ledger contents.",
+            "No invalid batch changes a projection table or advances the durable checkpoint."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-012-T03",
+          "title": "Projection ids are stable and canonical event semantics remain recoverable",
+          "level": "storage",
+          "automation": "pytest",
+          "preconditions": [
+            "Build a ledger covering every repository event kind and representative subject, authority, sensitivity, provenance, applicability, structured data, source span, tag, trigger, and timestamp field."
+          ],
+          "steps": [
+            "Replicate the ledger and inspect each governed memory projection.",
+            "Recompute expected ids from repository id and event id.",
+            "Compare the stored canonical payload to the validated source event."
+          ],
+          "expectedResults": [
+            "Every event has the expected stable repository-scoped memory id.",
+            "The complete canonical payload is recoverable without coercing workflow, mistake, handoff, or invariant into an unrelated store kind.",
+            "Source citations retain path, symbol, commit/blob, and span metadata."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "expectedBehaviors[2]"
+          ]
+        },
+        {
+          "id": "PROVENA-012-T04",
+          "title": "Supersession and retraction preserve audit history while hiding stale projections",
+          "level": "integration",
+          "automation": "pytest",
+          "preconditions": [
+            "Create active, superseded, and retracted events with multiple valid supersedes targets."
+          ],
+          "steps": [
+            "Replicate the lifecycle ledger.",
+            "Search through the normal retrieval boundary and inspect direct audit records, source rows, history, and causal relations."
+          ],
+          "expectedResults": [
+            "Only active projections are eligible in normal retrieval.",
+            "Superseded and retracted records remain auditable with their canonical statuses and sources.",
+            "Every declared supersedes edge exists once and points to the deterministic repository-scoped target."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[3]",
+            "expectedBehaviors[3]"
+          ]
+        },
+        {
+          "id": "PROVENA-012-T05",
+          "title": "Replay is idempotent and checkpoint advancement is failure-safe",
+          "level": "integration",
+          "automation": "pytest",
+          "preconditions": [
+            "Have one successfully replicated ledger and its stored checkpoint."
+          ],
+          "steps": [
+            "Replay the identical fingerprint and compare all projection table counts.",
+            "Submit a later invalid fingerprint and inspect the checkpoint.",
+            "Submit a later valid ledger and inspect the updated checkpoint and counters."
+          ],
+          "expectedResults": [
+            "Identical replay reports a no-op and creates no duplicate memories, sources, relations, history, or checkpoint rows.",
+            "The failed later batch leaves the last successful fingerprint unchanged.",
+            "The valid later batch advances the same repository checkpoint and reports precise `duration_ms`."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[4]",
+            "acceptanceCriteria[5]",
+            "expectedBehaviors[4]",
+            "expectedBehaviors[5]"
+          ]
+        },
+        {
+          "id": "PROVENA-012-T06",
+          "title": "The CLI sends one consistent ledger snapshot through configured scope",
+          "level": "cli",
+          "automation": "node",
+          "preconditions": [
+            "Initialize a temporary repository with repository_id, store_url, tenant_id, project_id, and a known raw ledger."
+          ],
+          "steps": [
+            "Run `provena sync store` against a captured fetch implementation.",
+            "Verify the request contains the exact snapshot bytes and their matching fingerprint.",
+            "Verify success and failure output plus exit behavior."
+          ],
+          "expectedResults": [
+            "The CLI uses configured repository and scope values and never re-reads a potentially changed ledger after hashing.",
+            "Output reports received, created, unchanged, status, relation, fingerprint, and duration fields.",
+            "Transport or validation failure is explicit and does not mutate local brain artifacts."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/repo-memory-sync.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "acceptanceCriteria[5]"
+          ]
+        },
+        {
+          "id": "PROVENA-012-T07",
+          "title": "Local refresh remains independent of the governed store",
+          "level": "cli",
+          "automation": "node",
+          "preconditions": [
+            "Initialize a temporary repository without a running store."
+          ],
+          "steps": [
+            "Run the existing refresh and context paths without invoking sync.",
+            "Confirm the local ledger, manifest, brain, graph, and context packet still build."
+          ],
+          "expectedResults": [
+            "The canonical bridge is opt-in for this slice and does not turn local operation into a network dependency.",
+            "Existing deterministic source-attestation tests stay green."
+          ],
+          "commands": [
+            "cd cli && npm test"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[6]"
+          ]
+        },
+        {
+          "id": "PROVENA-012-T08",
+          "title": "OpenAPI and cross-service verification expose the real measured bridge",
+          "level": "integration",
+          "automation": "command",
+          "preconditions": [
+            "Run from the Provena product root with the direct Python 3.12 interpreter when the generic launcher is unavailable."
+          ],
+          "steps": [
+            "Export OpenAPI and verify the replication request and response schemas.",
+            "Run the existing end-to-end suite.",
+            "Review architecture docs to ensure the ledger-to-store edge is labeled as the explicit sync path."
+          ],
+          "expectedResults": [
+            "The checked-in API contract matches runtime validation and measured response fields.",
+            "Standalone and polyglot regression paths remain green.",
+            "Architecture documentation no longer implies an unwired direct ledger-to-store connection."
+          ],
+          "commands": [
+            "python scripts/export_openapi.py",
+            "python scripts/run_e2e.py"
+          ],
+          "covers": [
+            "acceptanceCriteria[6]",
+            "verificationCommands[3]",
+            "verificationCommands[4]"
+          ]
+        },
+        {
+          "id": "PROVENA-012-T09",
+          "title": "Connected-source permission levels gate every read and mutation surface",
+          "level": "security-integration",
+          "automation": "pytest",
+          "preconditions": [
+            "Register connected sources A and B, a source-A-backed memory, a tenant-local relation target, an unconnected local source, and separate authenticated editor-role and viewer-role identities for the same principal."
+          ],
+          "steps": [
+            "Before granting edit access, use both viewer-role and editor-role identities to create a memory claiming restricted connected source A; compare memory, source, search-index, and history state before and after each denial.",
+            "With no source grant, verify the principal cannot read the memory or feedback and cannot add feedback, update, relate, delete, or supersede it.",
+            "Grant `view`, `comment`, `edit`, and `owner` in sequence and verify each level enables only its documented operation set: read; read plus feedback; update, relation, and supersession; then delete.",
+            "At writable source levels, repeat every mutation with the viewer application role and verify the role boundary still denies feedback, update, relation, delete, and supersession.",
+            "Attempt to replace source A with source B while holding edit on both but lacking owner on removed source A, then repeat only after the caller has ACL share authority, owner on removed A, and edit or owner on added B; inspect memory, source, search-index, and history state after each attempt.",
+            "Verify an authenticated editor with an edit grant can create a source-A-backed memory, while anonymous creation using an unconnected local source remains compatible.",
+            "Verify every denial is non-enumerating and leaves memory content, status, sources, indexes, relations, feedback, and history unchanged."
+          ],
+          "expectedResults": [
+            "Source grants are operation-specific instead of acting as a single read-shaped allow bit across all memory surfaces.",
+            "Viewer-role and editor-role callers without edit or owner access cannot create memories that claim a restricted connected source, and rejection is atomic across memory, source, index, and history storage.",
+            "`view` cannot comment or mutate, `comment` cannot update/relate/supersede/delete, `edit` cannot delete, and only `owner` can delete.",
+            "A viewer application role cannot write even when its connected-source grant would otherwise permit the operation.",
+            "A source transition requires ACL share authority, owner on every removed connected source, and edit or owner on every retained or added connected source; a denial leaves all prior state unchanged.",
+            "Authenticated create and source transition succeed when the required edit or owner grants exist, and anonymous memories with unconnected local sources retain legacy compatibility.",
+            "Denied direct, source-claim, and causal operations do not leak the protected memory id or produce partial side effects."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q -k connected_source_permission_levels_gate_every_memory_surface"
+          ],
+          "covers": [
+            "acceptanceCriteria[3]",
+            "expectedBehaviors[3]",
+            "security regression: operation-aware connected-source authorization",
+            "security regression: viewer-role mutation denial",
+            "security regression: connected-source claim authorization",
+            "security regression: source-reference transition authorization",
+            "compatibility regression: anonymous unconnected-source creation"
+          ]
+        },
+        {
+          "id": "PROVENA-012-T10",
+          "title": "Tenant-admin mutations stay tenant-bound and the sync role contract is constrained in OpenAPI",
+          "level": "security-api",
+          "automation": "pytest-command",
+          "preconditions": [
+            "Create authenticated admin identities for two tenants and load the runtime OpenAPI schema from the Provena application."
+          ],
+          "steps": [
+            "Use tenant A's admin identity to attempt tenant B project-snapshot creation, retention-policy creation, legal-hold creation, and legal-hold release.",
+            "Inspect tenant B storage after each rejection, then repeat the owned-tenant mutation with tenant B's admin identity to prove valid administration still works.",
+            "Inspect `POST /v1/repositories/{repository_id}/memory-events/sync` in runtime and exported OpenAPI.",
+            "Verify `X-Provena-Role` is required and constrained to `editor`, `admin`, or `superadmin`, while the documented security alternatives require tenant plus principal or tenant plus key identity."
+          ],
+          "expectedResults": [
+            "A tenant-scoped admin receives 403 for every foreign-tenant mutation and cannot create, change, or release tenant B governance records.",
+            "The same operations succeed for the owning tenant without weakening tenant isolation.",
+            "Runtime and checked-in OpenAPI require a constrained write-capable role header and advertise the principal/key authentication alternatives plus 401, 403, 409, and 422 responses.",
+            "OpenAPI regeneration is deterministic and leaves the checked-in contract unchanged."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q -k \"tenant_admin_cannot_mutate_foreign_tenant_resources or repository_sync_openapi_documents_auth_and_conflicts\"",
+            "python scripts/export_openapi.py"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "acceptanceCriteria[6]",
+            "security regression: tenant-admin mutation isolation",
+            "contract regression: required constrained X-Provena-Role header"
+          ]
+        },
+        {
+          "id": "PROVENA-012-T11",
+          "title": "Authenticated gateway sync derives identity only from verified API-key claims",
+          "level": "security-e2e",
+          "automation": "go-node-command",
+          "preconditions": [
+            "Configure an auth-enabled gateway with separate admin, granted-viewer, denied-viewer, and editor keys whose records contain tenant, role, principal, and group claims.",
+            "Initialize a repository CLI config whose non-secret `store_api_key_env` is the fixed `PROVENA_API_KEY` name and place a disposable credential only in that environment variable."
+          ],
+          "steps": [
+            "Send spoofed `X-Provena-Tenant-Id`, role, principal, key, and group headers through the auth-enabled gateway and inspect the headers received by the store proxy.",
+            "Use granted and denied viewer keys while setting caller principal headers to the opposite identity, then compare retrieval results.",
+            "Call the repository sync route through the gateway with viewer and editor credentials and verify the role gate and route forwarding.",
+            "Run `provena sync store` with and without the configured API-key environment variable and inspect the captured request, config file, JSON output, reflected response fields, and transport/HTTP errors."
+          ],
+          "expectedResults": [
+            "The gateway strips every caller identity header and forwards only verified tenant, role, key, principal, and group claims; a missing principal claim defaults to key id.",
+            "Spoofed caller identity cannot gain a connected-source grant, while the verified granted identity retains access.",
+            "Viewer keys cannot sync and editor/admin keys reach the canonical sync endpoint.",
+            "The CLI reads the bearer credential only from `PROVENA_API_KEY`, rejects repository attempts to select another environment secret or credential-bearing URL, never persists or prints the token, redacts error text, and emits only the fixed attested response schema."
+          ],
+          "commands": [
+            "cd control-plane && go test ./...",
+            "cd cli && npm run build && node tests/config.test.mjs && node tests/repo-memory-sync.test.mjs",
+            "python scripts/run_e2e.py"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "acceptanceCriteria[1]",
+            "acceptanceCriteria[6]",
+            "security regression: gateway identity-header spoofing",
+            "security regression: authenticated repository-sync ingress",
+            "security regression: CLI bearer-secret non-persistence and redaction"
+          ]
+        },
+        {
+          "id": "PROVENA-012-T12",
+          "title": "Governed writes fail closed across ownership, scope, and late transaction failures",
+          "level": "security-storage",
+          "automation": "pytest",
+          "preconditions": [
+            "Create two tenants, connected sources with operation-specific grants, memories with exact scopes and ACLs, and enterprise connector/governance records with globally unique ids."
+          ],
+          "steps": [
+            "Attempt connected-source declassification and ACL widening with edit only, source owner only, and source owner plus ACL share authority.",
+            "Create relation payloads with a forged tenant or mismatched source and target scopes, then inspect stored relation scope.",
+            "Submit feedback with a spoofed payload principal while authenticated and inspect the stored actor.",
+            "Attempt tenant-B upserts using tenant-A connector, source, mapping, grant, sync-job, retention-policy, and legal-hold ids, including child writes under a foreign connector or source.",
+            "Send partially authenticated non-superadmin requests without a tenant and repeat a fully headerless local request.",
+            "Inject failures at the final vector and history steps of create and update, then compare core rows, sources, triggers, relations, search indexes, audit, history, target status, and cache generations before and after."
+          ],
+          "expectedResults": [
+            "Declassification and ACL changes require both source-owner and ACL share/admin authority; denials are non-enumerating and side-effect free.",
+            "Relations require one identical source/target/payload scope and persist only the scope derived from the records.",
+            "Authenticated feedback records the verified caller rather than a payload-selected actor.",
+            "Globally unique enterprise ids never move across tenants, malformed parent/child relationships are rejected, and same-tenant updates remain valid.",
+            "A partial authenticated context without tenant receives 401, while completely headerless private-local mode remains compatible.",
+            "Late failures roll back the complete write graph and do not invalidate cache."
+          ],
+          "commands": [
+            "python -m pytest tests/test_main.py -q -k \"connected_source_permission_levels or relation_scope_is_derived or enterprise_global_ids or authenticated_context_without_tenant or create_and_update_transactions_roll_back_late_failures\"",
+            "python -m pytest tests -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "acceptanceCriteria[3]",
+            "acceptanceCriteria[4]",
+            "security regression: connected-source declassification and ACL governance",
+            "security regression: relation scope derivation",
+            "security regression: feedback actor integrity",
+            "security regression: tenant-owned global ids",
+            "security regression: tenantless authenticated context",
+            "durability regression: atomic core, index, audit, history, vector, and cache behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-013",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureId": "FEATURE-LIVING-REPO-MEMORY",
+      "title": "Automatically reconcile manifest-backed repository memories during refresh",
+      "persona": "Developer relying on Provena to keep an existing repository understandable across agent sessions",
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-013"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "Once Provena-owned telemetry is configured, track reconciliation failures, structural conflicts, and rollback or recovery failures without recording candidate bodies or ledger contents.",
+          "Track p50 and p95 reconciliation duration by candidate count plus ADD, NOOP, SUPERSEDE, RETRACT, deferred, and conflict rates.",
+          "Alert when incomplete scans repeatedly defer removals or when installed runtime triggers stop refreshing a repository."
+        ]
+      },
+      "executionNotes": [
+        "[2026-07-13T18:03:58Z] TESTER-EXECUTION green: T01-T15 passed. npm run build passed in 2.262s; the focused reconciliation suite passed in 15.822s; nine supporting suites passed in 11.968s; and full npm test passed in 354.258s across all 30 Node test files, including Windows packed install. Reconciliation covered T01-T09 and T11; reconciliation plus security covered T10; reconciliation, lock, and events covered T12; reconciliation, context, sync, and CLI behavior covered T13; installation, MCP, daemon, and reconciliation covered T14; and build, packed install, full regression, and documentation review covered T15. All 13 acceptance criteria and nine expected behaviors are traced. Expected negative-test failure messages were asserted successfully. Sentry credentials were absent, so telemetry verification remains pending."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-013-T01",
+          "title": "RepoMap produces the exact source-grounded managed-memory contract without extra I/O",
+          "level": "unit",
+          "automation": "node",
+          "preconditions": [
+            "Build an injected RepoMap containing multiple package ecosystems, dependencies, commands, and corresponding manifest RepoFile SHA-256 values.",
+            "Instrument source scanning and network, model, database, and store entrypoints so any reconciler call fails the test."
+          ],
+          "steps": [
+            "Derive candidates from the injected map and inspect every candidate and appended first-observation event.",
+            "Verify the documented reserved metadata namespace and every required field: generator, generator version, logical key, candidate fingerprint, lifecycle action, source attestation, and predecessor when applicable."
+          ],
+          "expectedResults": [
+            "Exactly one fact candidate exists per package and one workflow candidate per command, with no candidate from files, symbols, environment variables, or inferred intent.",
+            "Every event is tool authority, observed provenance, internal sensitivity, source-cited by repository-relative manifest path and scanned SHA-256, and contains no decision, preference, or rationale.",
+            "No additional scan, file read, network request, model call, database call, or governed-store call occurs."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "acceptanceCriteria[1]",
+            "acceptanceCriteria[7]",
+            "expectedBehaviors[0]",
+            "expectedBehaviors[1]",
+            "expectedBehaviors[4]"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T02",
+          "title": "Logical keys, fingerprints, and event ids are deterministic across representation and clock boundaries",
+          "level": "unit",
+          "automation": "node",
+          "preconditions": [
+            "Prepare semantically equal maps with reordered packages, commands, dependencies, and files; different temporary roots; LF and CRLF source inputs; and Unicode names.",
+            "Inject a fixed clock, then a wall clock earlier than an existing predecessor."
+          ],
+          "steps": [
+            "Compare logical keys, canonical candidate fingerprints, event ids, and serialized events across all equivalent maps.",
+            "Change one canonical declaration while retaining its logical identity, then change only an unrelated manifest byte and its whole-file SHA.",
+            "Create a successor under the backward-clock fixture."
+          ],
+          "expectedResults": [
+            "Ordering, absolute root, line endings, Unicode normalization boundaries, and fixed-clock replay do not change identity or canonical bytes for equivalent observations.",
+            "Canonical declaration changes alter the candidate fingerprint while logical identity remains stable; unrelated whole-manifest hash changes do not churn unaffected candidate fingerprints.",
+            "Timestamps and duration never affect identity, and a backward clock cannot create a successor timestamp earlier than its predecessor or corrupt lifecycle order."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "acceptanceCriteria[6]"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T03",
+          "title": "First ADD preserves every pre-existing ledger byte and separator edge case",
+          "level": "integration",
+          "automation": "node",
+          "preconditions": [
+            "Seed valid ledgers covering CRLF records, blank lines, trailing blank lines, and a final record with no newline.",
+            "Use a map with known package and command candidates and fixed observation time."
+          ],
+          "steps": [
+            "Refresh each fixture once and compare the final raw Buffer against the original bytes.",
+            "Parse the appended records and verify source hashes, reserved metadata, deterministic ids, and counters."
+          ],
+          "expectedResults": [
+            "The original ledger is an exact byte prefix in every fixture; a missing final newline receives only the required separator and no existing byte is normalized.",
+            "Exactly one ADD event is appended per candidate, each event is valid JSONL, and every source blob equals the scanned manifest SHA.",
+            "The committed manifest reports the exact final ledger byte length and SHA-256."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[3]",
+            "acceptanceCriteria[9]",
+            "expectedBehaviors[2]",
+            "expectedBehaviors[6]"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T04",
+          "title": "An unchanged refresh is a true byte-level NOOP",
+          "level": "integration",
+          "automation": "node",
+          "preconditions": [
+            "Complete one successful refresh with generated package and command memories plus pre-existing explicit events."
+          ],
+          "steps": [
+            "Snapshot every managed artifact and ledger byte, then refresh repeatedly with an equivalent map and different injected duration values.",
+            "Count timestamp-provider calls and inspect reconciliation output."
+          ],
+          "expectedResults": [
+            "No ledger byte or derived artifact changes, the memory fingerprint is identical, and the observation clock is not consumed for NOOP candidates.",
+            "Every current candidate is reported once as NOOP with zero ADD, SUPERSEDE, RETRACT, deferred, or conflict actions.",
+            "Timing differences appear only in command output and never in persisted files."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[3]",
+            "acceptanceCriteria[6]",
+            "acceptanceCriteria[9]",
+            "expectedBehaviors[2]",
+            "expectedBehaviors[7]"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T05",
+          "title": "Package lineages survive A-B-A changes, deletion, repeat absence, and resurrection",
+          "level": "integration",
+          "automation": "node",
+          "preconditions": [
+            "Start with one package candidate whose logical key remains stable while its normalized dependency-name set can change."
+          ],
+          "steps": [
+            "Refresh through dependency-name states A, B, and A, then remove the package, repeat the absence, and re-add it.",
+            "Recompute every expected id from logical key, action, fingerprint, and predecessor and inspect the full append-only lineage."
+          ],
+          "expectedResults": [
+            "A is added, B supersedes A, the second A supersedes B with a distinct predecessor-bound id, removal appends one retracted tombstone, repeat absence is a NOOP, and resurrection supersedes the tombstone.",
+            "Every predecessor remains byte-identical and auditable; exactly one head exists after each transition.",
+            "Replaying any state produces the same expected event id and never duplicates an existing record."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "acceptanceCriteria[4]",
+            "expectedBehaviors[2]"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T06",
+          "title": "Command changes stay isolated and current RepoMap limitations are explicit NOOPs",
+          "level": "integration-doc",
+          "automation": "node",
+          "preconditions": [
+            "Create two packages with multiple scripts so one package manager or command declaration can change independently."
+          ],
+          "steps": [
+            "Change one package manager-derived command invocation, rename one command, and compare all package and sibling-command lineages.",
+            "Change only a script body and only dependency versions while preserving the RepoMap-visible command invocation and dependency names.",
+            "Inspect CLI documentation for the current observability limitation."
+          ],
+          "expectedResults": [
+            "Only the changed invocation supersedes; a command rename retracts the old logical key and adds the new key; unrelated packages, package facts, and sibling workflows remain NOOP.",
+            "Script-body-only and dependency-version-only edits produce no automatic supersession because the current RepoMap does not expose those values.",
+            "Documentation states this limitation directly and does not claim semantic freshness that Provena cannot observe."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "acceptanceCriteria[4]",
+            "acceptanceCriteria[11]"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T07",
+          "title": "Capped and unreadable scans defer every apparent removal until a complete scan",
+          "level": "integration",
+          "automation": "node",
+          "preconditions": [
+            "Create active managed package and command heads, then fixtures for file-count cap, total-byte cap, per-file skip, and unreadable manifest diagnostics."
+          ],
+          "steps": [
+            "Refresh each incomplete scan with one newly observed or changed candidate and one previously managed candidate absent.",
+            "Repeat the incomplete scan, then run a complete scan that confirms the absence."
+          ],
+          "expectedResults": [
+            "Observed additions and supersessions may commit, but every apparent deletion is counted as deferred and no retraction tombstone is appended while completeness is false.",
+            "Repeated incomplete scans remain stable, and the first complete confirming scan appends exactly one retraction.",
+            "Warnings and JSON counters distinguish complete, capped, skipped, and unreadable conditions without exposing file contents."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[5]",
+            "expectedBehaviors[3]"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T08",
+          "title": "Explicit and higher-authority memories are immutable override boundaries",
+          "level": "security-integration",
+          "automation": "node",
+          "preconditions": [
+            "Seed human, agent, and system-authored events plus a generated tool head, preserving the original raw bytes.",
+            "Add a valid higher-authority successor that claims the same managed logical key."
+          ],
+          "steps": [
+            "Refresh with matching and changed candidates for the protected key and unrelated candidates.",
+            "Compare every pre-existing explicit event and the higher-authority successor byte-for-byte."
+          ],
+          "expectedResults": [
+            "Ordinary explicit events are never treated as generated heads, mutated, retracted, or superseded automatically.",
+            "A higher-authority same-key successor blocks automatic regeneration, increments conflicts once, and leaves the protected lineage unchanged while unrelated candidates reconcile normally.",
+            "No automatic event uses decision, preference, or rationale fields."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[7]",
+            "acceptanceCriteria[8]",
+            "expectedBehaviors[4]",
+            "expectedBehaviors[5]"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T09",
+          "title": "Malformed reserved metadata, ambiguous heads, or deterministic-id collisions fail before persistence",
+          "level": "security-integration",
+          "automation": "node",
+          "preconditions": [
+            "Prepare independent ledgers with missing, mistyped, unknown-version, or mutually inconsistent reserved fields; a metadata-to-payload fingerprint mismatch; multiple generated heads; an orphan predecessor; and a reserved event id occupied by different payload."
+          ],
+          "steps": [
+            "Refresh each corrupt fixture and snapshot ledger, manifest, brain, map, graph, schema, and views before and after.",
+            "Run one valid managed lineage to prove the complete reserved metadata contract remains accepted."
+          ],
+          "expectedResults": [
+            "Every malformed lineage, metadata mismatch, orphan, multiple-head state, and id collision aborts with a bounded structural error before any file changes.",
+            "The error identifies the violated contract without printing event bodies or candidate-controlled values.",
+            "A valid lineage with exact generator, version, logical key, fingerprint, action, attestation, and predecessor metadata reconciles normally."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[8]",
+            "acceptanceCriteria[9]",
+            "expectedBehaviors[5]",
+            "expectedBehaviors[6]"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T10",
+          "title": "Candidate-controlled secrets are rejected generically across every derived field",
+          "level": "security",
+          "automation": "node",
+          "preconditions": [
+            "Inject representative API keys, bearer tokens, private-key material, and credential URLs independently into package name, dependency name, command name, invocation, cwd, source path, title/body derivation, and reserved structured metadata."
+          ],
+          "steps": [
+            "Attempt first ADD and later SUPERSEDE generation for every secret-bearing field.",
+            "Capture errors and search ledger plus every derived artifact for the secret and recognizable substrings."
+          ],
+          "expectedResults": [
+            "Every secret-bearing candidate fails before persistence through the shared memory secret boundary.",
+            "Errors are generic and never echo the secret, and no ledger, temporary file, log, view, brain, map, graph, or manifest contains secret material.",
+            "Non-secret lookalikes continue to reconcile so the guard is not an unconditional manifest rejection."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs",
+            "cd cli && node tests/security.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "acceptanceCriteria[7]",
+            "acceptanceCriteria[8]",
+            "security regression: generated-memory secret rejection and non-disclosure"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T11",
+          "title": "Handled write failures roll back, while abrupt crashes recover on the next refresh",
+          "level": "durability",
+          "automation": "node-child-process",
+          "preconditions": [
+            "Snapshot a consistent generation and provide deterministic failpoints before and after ledger and artifact atomic replacements."
+          ],
+          "steps": [
+            "Trigger each handled failpoint and compare all generation files and temporary paths to the baseline.",
+            "Force a child process to exit after a committed ledger transition but before all derived artifacts commit, then run a normal refresh."
+          ],
+          "expectedResults": [
+            "A caught generation failure restores the exact prior ledger and every prior artifact with no temporary-file residue.",
+            "An abrupt crash is treated as recovery rather than rollback: the next refresh recognizes the committed event, appends no duplicate, and repairs brain, map, graph, views, manifest, hashes, and byte counts to one coherent generation.",
+            "A normal refresh after either scenario reconciles each intended transition exactly once."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[8]",
+            "acceptanceCriteria[9]",
+            "expectedBehaviors[6]"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T12",
+          "title": "Same-process, cross-process, and explicit-append races serialize under one repository lock",
+          "level": "concurrency",
+          "automation": "node-child-process",
+          "preconditions": [
+            "Initialize one repository with managed candidates and an empty or known ledger."
+          ],
+          "steps": [
+            "Run concurrent refresh promises in one process, concurrent refresh child processes, and a refresh racing an explicit remember or append operation.",
+            "Parse the final ledger and compare the committed generation after every race."
+          ],
+          "expectedResults": [
+            "Exactly one generated event exists per transition, the explicit event exists exactly once, and all callers complete without deadlock or lock eviction.",
+            "No duplicate id, torn JSONL record, lost explicit append, mixed artifact generation, or stale memory fingerprint occurs.",
+            "A following refresh is a complete NOOP and every fingerprint consumer converges."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs",
+            "cd cli && node tests/repo-brain-lock.test.mjs",
+            "cd cli && node tests/repo-brain-events.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[3]",
+            "acceptanceCriteria[8]",
+            "acceptanceCriteria[9]",
+            "acceptanceCriteria[12]",
+            "expectedBehaviors[6]",
+            "expectedBehaviors[8]"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T13",
+          "title": "Counters, timing, and raw-ledger fingerprints are complete and internally consistent",
+          "level": "cli-integration",
+          "automation": "node",
+          "preconditions": [
+            "Prepare fixtures that independently produce ADD, NOOP, SUPERSEDE, RETRACT, deferred, and conflict outcomes."
+          ],
+          "steps": [
+            "Run JSON, human-readable, and quiet refresh paths and verify candidate/action accounting for each fixture.",
+            "Hash the exact committed ledger bytes and compare snapshot, manifest ledger artifact, context packet, session metadata and packet, status, and sync dry-run fingerprints.",
+            "Run with fixed and varying timers and inspect persisted outputs."
+          ],
+          "expectedResults": [
+            "JSON exposes candidates, added, noops, superseded, retracted, deferred, conflicts, and finite non-negative duration_ms; human and daemon-visible counts agree and quiet output remains silent.",
+            "For known fixtures, current candidates equal added plus noops plus superseded plus conflicts, while absent managed heads equal retracted plus deferred; no outcome is double-counted.",
+            "Every fingerprint and byte count matches the exact committed raw ledger, and duration or clock noise never enters a persisted artifact."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-memory-reconcile.test.mjs",
+            "cd cli && node tests/context-packet.test.mjs",
+            "cd cli && node tests/repo-memory-sync.test.mjs",
+            "cd cli && node tests/cli-behavior.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[3]",
+            "acceptanceCriteria[9]",
+            "acceptanceCriteria[10]",
+            "expectedBehaviors[7]"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T14",
+          "title": "Session, hook, portable runtime, MCP, and daemon all reuse the same reconciler",
+          "level": "runtime-integration",
+          "automation": "node-child-process",
+          "preconditions": [
+            "Install managed agent instructions, Git hooks, stdio MCP, portable runtime, and a short-interval daemon in a temporary repository."
+          ],
+          "steps": [
+            "Trigger a transition independently through session start, managed runtime refresh, a quiet Git hook, the MCP refresh tool, daemon startup, and one timed daemon refresh.",
+            "Inspect ledger actions, context/session fingerprints, hook output, daemon log counters, and process shutdown."
+          ],
+          "expectedResults": [
+            "Every trigger reaches the same refreshRepoBrain reconciliation path and records each source transition exactly once without a service, model, network, or database.",
+            "Session and MCP context see the newly committed memory fingerprint, the hook remains quiet and best-effort, and daemon logs expose the same reconciliation counts.",
+            "Repeated triggers are NOOPs and daemon stop leaves no orphan process or stale ownership state."
+          ],
+          "commands": [
+            "cd cli && node tests/install-integrations.test.mjs",
+            "cd cli && node tests/mcp-server.test.mjs",
+            "cd cli && node tests/daemon-state.test.mjs",
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[10]",
+            "acceptanceCriteria[12]",
+            "expectedBehaviors[8]"
+          ]
+        },
+        {
+          "id": "PROVENA-013-T15",
+          "title": "Packed one-click install, honest docs, and the full CLI regression gate remain green",
+          "level": "release-regression",
+          "automation": "node-command",
+          "preconditions": [
+            "Build an npm tarball and install it into a clean existing repository containing manifest-backed packages and commands."
+          ],
+          "steps": [
+            "Run installed init, initial refresh, unchanged refresh, context, session, MCP, hook, daemon, offline runtime reuse, and status paths.",
+            "Review CLI documentation for managed observed memories, lifecycle, explicit-only decisions and preferences, incomplete-scan deferral, zero-service execution, and current script-body and dependency-version limitations.",
+            "Run the complete CLI suite."
+          ],
+          "expectedResults": [
+            "The packed consumer creates source-attested managed memories on one-click init, remains byte-stable on repeat refresh, and ships every reconciler/runtime file without registry access after installation.",
+            "Documentation distinguishes implemented observation from future extraction and does not overclaim model inference, dependency-version awareness, script-body awareness, temporal graph, or remote services.",
+            "Build, focused reconciliation, security, lock, events, context, runtime, MCP, daemon, pack, packed-install, and all existing CLI regressions pass."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/repo-memory-reconcile.test.mjs",
+            "cd cli && node tests/pack-install.test.mjs",
+            "cd cli && npm test"
+          ],
+          "covers": [
+            "acceptanceCriteria[11]",
+            "acceptanceCriteria[12]",
+            "expectedBehaviors[8]",
+            "verificationCommands[0]",
+            "verificationCommands[1]",
+            "verificationCommands[2]"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-014",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureId": "FEATURE-TEMPORAL-MEMORY-GRAPH",
+      "title": "Project the canonical ledger as a deterministic temporal memory graph",
+      "persona": "Coding agent resuming repository work that needs the memories effective at a chosen point, their causal lineage, and their relationships to the current source graph",
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-014"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "SENTRY_AUTH_TOKEN and SENTRY_DSN are unavailable on this host, so no Provena-owned telemetry claims can be verified in this phase.",
+          "When telemetry is configured, track temporal graph construction failures, graph and manifest fingerprint mismatches, rejected memory-as-of inputs, and Neo4j projection cleanup failures without recording query values, memory bodies, structured data, credentials, or ledger contents.",
+          "Track p50 and p95 graph-build duration by event count and supersession-reference count, plus invalid-boundary and harness-integrity failure rates."
+        ]
+      },
+      "executionNotes": [],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-014-T01",
+          "title": "Locked refresh builds graph v2 from the final reconciled ledger and converges every fingerprint",
+          "level": "integration-durability",
+          "automation": "node",
+          "preconditions": [
+            "Create a temporary repository whose manifest causes reconciliation to append a known managed event to a seeded canonical ledger.",
+            "Use fixed source data and an injectable observation clock."
+          ],
+          "steps": [
+            "Run one locked refresh, then read the exact ledger Buffer, map, graph, manifest, and a context packet built from that generation.",
+            "Independently hash the committed ledger bytes and inspect whether the newly reconciled event is present as a graph memory node.",
+            "Run an unchanged second refresh and compare every generated artifact byte."
+          ],
+          "expectedResults": [
+            "The graph uses schemaVersion 2 and exposes sourceFingerprint, memoryFingerprint, projectionFingerprint, and timeSemantics equal to event-effective-time.",
+            "The graph includes the event appended by the same refresh, proving reconciliation completed before graph construction.",
+            "Graph, manifest, context packet, and ledger snapshot memory fingerprints all equal SHA-256 of the exact committed raw ledger bytes; graph and map source fingerprints agree.",
+            "The manifest hash and byte count for the graph match the committed graph bytes, and the unchanged second refresh is byte-stable."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/temporal-memory-graph.test.mjs",
+            "cd cli && node tests/context-packet.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T02",
+          "title": "Memory IDs are namespaced, code IDs remain stable, and collisions abort before overwrite",
+          "level": "unit-security",
+          "automation": "node",
+          "preconditions": [
+            "Freeze a RepoMap fixture and its graph-v1 code node and edge ID lists.",
+            "Prepare canonical events whose raw IDs resemble repository, file, symbol, and edge IDs.",
+            "Prepare independent test fixtures with duplicate node IDs and duplicate edge IDs carrying conflicting records."
+          ],
+          "steps": [
+            "Build graph v2 and compare its code-only node and edge IDs and canonical structural slices with the frozen graph-v1 fixture.",
+            "Reorder normalized map collections and rebuild from the same attested ledger.",
+            "Build each collision fixture through the refresh generation path while snapshotting existing artifacts."
+          ],
+          "expectedResults": [
+            "Every event creates one stable namespaced memory node, such as memory:<event-id>, and never aliases its raw event ID or any code node.",
+            "All pre-existing code node and edge IDs remain byte-identical, and equivalent normalized inputs produce identical sorted graph bytes.",
+            "Duplicate node or edge IDs throw before a Map or object can overwrite either record; the previous ledger and generated artifacts remain unchanged.",
+            "Errors identify the structural collision without including a memory body or arbitrary structured data."
+          ],
+          "commands": [
+            "cd cli && node tests/temporal-memory-graph.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T03",
+          "title": "Memory nodes expose an exact bounded indexing allowlist and no payload data",
+          "level": "security",
+          "automation": "node",
+          "preconditions": [
+            "Create valid events containing distinct safe sentinels in title, body, provenance, tags, triggers, source blobs, and nested structured data.",
+            "Include all permitted kind, subject, status, authority, confidence, importance, sensitivity, and timestamp fields."
+          ],
+          "steps": [
+            "Build graph v2 and inspect every memory node key and metadata key recursively.",
+            "Search canonical graph bytes for each sentinel and for field names associated with bodies, structured data, provenance, source blobs, tags, triggers, and credentials.",
+            "Run the existing memory secret-boundary regression to confirm real credentials remain invalid ledger input."
+          ],
+          "expectedResults": [
+            "A memory node projects only event id, title, kind, subject type, declared status, authority, confidence, importance, sensitivity, validFrom, and validTo in the documented bounded representation.",
+            "The title sentinel is present only in its allowed title or label location; body, arbitrary structured-data, provenance, source-blob, tag, and trigger sentinels are absent.",
+            "No body, structuredData object, credential field, or unbounded nested value appears anywhere in graph bytes.",
+            "The allowlist proof does not require manufacturing an invalid secret-bearing canonical ledger."
+          ],
+          "commands": [
+            "cd cli && node tests/temporal-memory-graph.test.mjs",
+            "cd cli && node tests/security.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[3]",
+            "expectedBehaviors[2]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T04",
+          "title": "A-to-B-to-retract, equal-time, and branched intervals obey exact half-open boundaries",
+          "level": "unit",
+          "automation": "node",
+          "preconditions": [
+            "Prepare canonical chain A active at t1, B active at t2 superseding A, and R retracted at t3 superseding B.",
+            "Prepare a declared-superseded event, an equal-time predecessor and successor, and a branch whose direct successors occur at different timestamps."
+          ],
+          "steps": [
+            "Derive temporal intervals and supersedes edges for every fixture.",
+            "Query immediately before, at, and after each validFrom and validTo boundary.",
+            "Add a later descendant on one branch and verify it does not replace the predecessor's earliest-direct-successor calculation."
+          ],
+          "expectedResults": [
+            "A is effective on [t1,t2), B on [t2,t3), and the declared retracted record has validTo equal to validFrom and is never an active head.",
+            "Every declared superseded or retracted record has validTo equal to validFrom; null validTo is used only for an open active leaf.",
+            "At an equal timestamp the successor is included and its predecessor is excluded.",
+            "An active predecessor's validTo is the earliest createdAt among direct successors, not a later descendant, and every branch remains represented by its own successor-to-predecessor edge."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-brain-events.test.mjs",
+            "cd cli && node tests/temporal-memory-graph.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[4]",
+            "expectedBehaviors[3]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T05",
+          "title": "Citations and applicability resolve only exact current repo, file, and symbol targets",
+          "level": "integration",
+          "automation": "node",
+          "preconditions": [
+            "Create a current RepoMap containing repo root, files, directories, and symbols with duplicate names in different files.",
+            "Create events citing an exact file, an exact file-and-symbol pair, a missing historical path, and an existing file with a missing symbol; include appliesTo values for dot, an exact file, a directory, and a missing path."
+          ],
+          "steps": [
+            "Build graph v2 and inspect citation and applies-to relationships by memory event.",
+            "Verify all relationship endpoints against the final node set and compare repeated builds.",
+            "Confirm the original ledger still retains every historical citation."
+          ],
+          "expectedResults": [
+            "Dot resolves only to repo:root; exact files resolve to their file nodes; and a source symbol resolves only when both source path and symbol identity match the current map.",
+            "A missing symbol creates no symbol relationship, though its exact current file may remain a file citation.",
+            "Missing historical paths and unsupported directory applicability remain in the ledger but create no graph edge.",
+            "No relationship dangles, duplicates, or resolves by basename, case-insensitive guess, fuzzy match, or cross-file symbol name."
+          ],
+          "commands": [
+            "cd cli && node tests/temporal-memory-graph.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[5]",
+            "expectedBehaviors[2]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T06",
+          "title": "Temporal reverse-reference and interval work is deterministically linear",
+          "level": "performance-correctness",
+          "automation": "node",
+          "preconditions": [
+            "Expose non-persisted deterministic diagnostics counting event-index visits, supersession-reference visits, successor-interval visits, and emitted temporal records.",
+            "Generate bounded large chain, wide fan-out, diamond, and mixed multi-predecessor fixtures at N and 2N events."
+          ],
+          "steps": [
+            "Build every fixture while collecting operation counts, then rebuild from the same canonical ledger.",
+            "Assert counts against fixed linear bounds in V plus E rather than using wall-clock time as the proof.",
+            "Run a large stress fixture as supporting evidence and compare sorted structural output across equivalent reordered RepoMap inputs while preserving canonical ledger order."
+          ],
+          "expectedResults": [
+            "Each event and supersession reference is visited only a fixed bounded number of times; doubling V plus E does not create quadratic diagnostic growth.",
+            "The implementation is stack-safe for the stress chain and fan-out and produces complete intervals and reverse references.",
+            "Repeated construction produces identical bytes and diagnostics.",
+            "The test never reorders raw ledger records because ledger order and its fingerprint are attested inputs; only semantically unordered map collections are permuted."
+          ],
+          "commands": [
+            "cd cli && node tests/temporal-memory-graph.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[6]",
+            "expectedBehaviors[3]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T07",
+          "title": "Memory-as-of accepts only canonical UTC milliseconds and never reflects hostile input",
+          "level": "security-api",
+          "automation": "node",
+          "preconditions": [
+            "Use a valid boundary in YYYY-MM-DDTHH:mm:ss.sssZ form.",
+            "Prepare offset timestamps, missing or extra fractional digits, lowercase z, date-only values, impossible dates, leading or trailing whitespace, controls, bidi markers, overlong input, and a credential-shaped hostile value."
+          ],
+          "steps": [
+            "Pass each value through the shared temporal parser, context builder, context CLI, graph CLI, and each MCP temporal input.",
+            "Capture thrown errors, stdout, stderr, MCP error text, context files, and generated artifacts."
+          ],
+          "expectedResults": [
+            "Only the exact canonical UTC millisecond form is accepted and returned unchanged.",
+            "Every invalid value produces one bounded generic error that does not include the submitted value, any credential substring, control character, or bidi text.",
+            "Omitting memoryAsOf remains valid and does not call the wall clock.",
+            "Rejected values never enter a context packet, graph view, manifest, log, or generated artifact."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-brain-events.test.mjs",
+            "cd cli && node tests/temporal-memory-graph.test.mjs",
+            "cd cli && node tests/context-packet.test.mjs",
+            "cd cli && node tests/cli-behavior.test.mjs",
+            "cd cli && node tests/mcp-server.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[7]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T08",
+          "title": "As-of selection uses the effective-time prefix and documents backdated revision",
+          "level": "unit-integration",
+          "automation": "node",
+          "preconditions": [
+            "Append A at t1 and B at t3 superseding A, then capture views before t1, at t1, at t2, and at t3.",
+            "Later append C at t2 superseding A and a retraction at t4 over the active branches."
+          ],
+          "steps": [
+            "Compute active heads for every boundary before and after appending C.",
+            "Compare the result with active-head evaluation over events whose createdAt is less than or equal to the boundary.",
+            "Inspect documentation for the effective-time and backdated-append caveat."
+          ],
+          "expectedResults": [
+            "Before C exists, the selected heads are none before t1, A at t1 and t2, and B at t3.",
+            "After the later backdated append, the t2 view contains C and the t3 view contains the explicit B and C branches; the prior effective view is allowed to change.",
+            "At t4 the retraction removes the superseded branches from active results.",
+            "Ledger append order remains attested and unchanged, but transaction-time history is not claimed; docs state this is effective-time behavior."
+          ],
+          "commands": [
+            "cd cli && node tests/temporal-memory-graph.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[8]",
+            "expectedBehaviors[4]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T09",
+          "title": "Current and memory-as-of context preserve full attestation and isolate ranking from inactive history",
+          "level": "integration",
+          "automation": "node",
+          "preconditions": [
+            "Create a current RepoMap and temporal graph with active and inactive memory history, including a high-degree inactive branch.",
+            "Create a comparison fixture with identical current code topology and active heads but without the inactive history."
+          ],
+          "steps": [
+            "Build current context without memoryAsOf and historical packets at chain boundaries.",
+            "Render JSON and Markdown and independently hash the complete raw ledger.",
+            "Compare selected items, scores, graph-neighbor boosts, and ordering between fixtures after excluding the intentionally different full-ledger fingerprint."
+          ],
+          "expectedResults": [
+            "Without memoryAsOf, existing current-head behavior remains deterministic, the optional field is absent, and no wall-clock value enters packet bytes.",
+            "With memoryAsOf, the packet exposes the canonical boundary and Markdown states that memory is historical as of that time while repository topology is current.",
+            "Every packet retains the SHA-256 of the complete raw ledger, not a prefix fingerprint, and retains the current source fingerprint.",
+            "Only active memory nodes for the selected boundary participate in ranking and graph proximity; inactive history cannot alter active-item scores or ordering.",
+            "Current files and symbols remain eligible even when they postdate the selected memory boundary."
+          ],
+          "commands": [
+            "cd cli && node tests/context-packet.test.mjs",
+            "cd cli && node tests/temporal-memory-graph.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[9]",
+            "expectedBehaviors[4]",
+            "expectedBehaviors[5]",
+            "expectedBehaviors[6]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T10",
+          "title": "CLI context, temporal graph queries, and timeline share deterministic semantics",
+          "level": "cli-integration",
+          "automation": "node-child-process",
+          "preconditions": [
+            "Install a temporary repo fixture with an A-to-B branch, a sibling branch, a retraction, and a later successor.",
+            "Record raw event IDs, their namespaced memory node IDs, and expected induced graphs at multiple boundaries."
+          ],
+          "steps": [
+            "Run context --memory-as-of and graph stats, neighbors, path, and components with --memory-as-of in JSON mode.",
+            "Run graph timeline with both a raw event ID and its namespaced memory ID.",
+            "Compare normalized CLI output with the pure temporal-view and context helpers."
+          ],
+          "expectedResults": [
+            "Each graph query uses the same induced graph for the same boundary and returns the same nodes, edges, paths, components, and fingerprints as the pure helper.",
+            "Raw and namespaced timeline lookups return identical complete predecessor, successor, sibling-branch, and retraction lineage in deterministic order.",
+            "Timeline output distinguishes declared status, validFrom, validTo, predecessors, and successors without copying body or arbitrary structured data.",
+            "Unknown or ambiguous IDs fail generically and do not produce a partial timeline."
+          ],
+          "commands": [
+            "cd cli && node tests/cli-behavior.test.mjs",
+            "cd cli && node tests/temporal-memory-graph.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[10]",
+            "expectedBehaviors[7]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T11",
+          "title": "MCP context, neighbors, and path match local temporal helpers without external calls",
+          "level": "mcp-integration",
+          "automation": "node",
+          "preconditions": [
+            "Create an in-process MCP client over a repository with known current and historical induced graph views.",
+            "Instrument network and model entrypoints to fail if called."
+          ],
+          "steps": [
+            "Invoke provena_context, provena_graph_neighbors, and provena_graph_path with the same valid memoryAsOf value used by the pure helpers and CLI tests.",
+            "Invoke each tool with an invalid hostile boundary.",
+            "Compare normalized MCP content with the corresponding pure-helper and CLI results."
+          ],
+          "expectedResults": [
+            "All three tools accept the same optional memoryAsOf field and return the same induced nodes, edges, path, packet boundary, and full ledger fingerprint.",
+            "Validation and boundary behavior are shared rather than reimplemented per tool.",
+            "Invalid input returns the same generic non-reflective failure.",
+            "No redundant MCP server, HTTP request, model call, database call, or Neo4j call occurs."
+          ],
+          "commands": [
+            "cd cli && node tests/mcp-server.test.mjs",
+            "cd cli && node tests/context-packet.test.mjs",
+            "cd cli && node tests/temporal-memory-graph.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[11]",
+            "expectedBehaviors[7]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T12",
+          "title": "Neo4j uses a source-and-memory projection token and leaks no payload or credential",
+          "level": "adapter-security",
+          "automation": "node-mock-driver",
+          "preconditions": [
+            "Freeze adapter namespace provena.neo4j.graph and projection version integer 2 directly in the test rather than importing either value from the production token helper.",
+            "Create graph-v2 fixtures where only source fingerprint changes, only memory fingerprint changes, and neither changes.",
+            "Use a recording mock driver and distinct sentinels for body, structured data, username, password, and URI."
+          ],
+          "steps": [
+            "Independently compute SHA-256 of the canonical tuple containing namespace provena.neo4j.graph, integer version 2, source fingerprint, and memory fingerprint.",
+            "Run sync for each fixture and inspect all Cypher, parameters, cleanup predicates, and returned results.",
+            "Recursively search captured query data and results for payload and credential sentinels."
+          ],
+          "expectedResults": [
+            "The independently computed token equals graph and sync projectionFingerprint and changes when either source or memory fingerprint changes.",
+            "Every node and relationship receives the projection token, and stale node and edge cleanup is keyed to that token rather than source fingerprint alone.",
+            "Sync results return repoId, sourceFingerprint, memoryFingerprint, projectionFingerprint, node count, and edge count.",
+            "Projected memory properties contain only bounded graph metadata and temporal fields.",
+            "No body, arbitrary structured data, username, password, credential-bearing URI, or raw credential material appears in Cypher, parameters, results, or errors.",
+            "The test records that query construction is proven with a mock driver; live Neo4j integration is not claimed."
+          ],
+          "commands": [
+            "cd cli && node tests/neo4j-adapter.test.mjs",
+            "cd cli && node tests/temporal-memory-graph.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[12]",
+            "expectedBehaviors[8]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T13",
+          "title": "Graph v1 remains readable and the next locked refresh regenerates v2 without schema drift",
+          "level": "compatibility-integration",
+          "automation": "node",
+          "preconditions": [
+            "Write a valid graph-v1 artifact and matching map and manifest into a temporary initialized repository with a nontrivial canonical ledger.",
+            "Record memory-event schema bytes, manifest schema version, exact ledger bytes, canonical sync bytes, and graph-algorithm outputs."
+          ],
+          "steps": [
+            "Read the stored graph through public artifact APIs and run PageRank, degree, components, neighborhood, and shortest path.",
+            "Run one locked refresh and inspect regenerated artifacts.",
+            "Run algorithms and context against graph v2, then compare ledger, schemas, and canonical sync output with the baseline."
+          ],
+          "expectedResults": [
+            "Graph v1 is accepted as a code-only legacy artifact and every existing graph algorithm runs deterministically on both v1 and v2.",
+            "The next refresh replaces graph v1 with graph v2 and valid temporal attestation.",
+            "Memory-event schema remains version 1, manifest remains version 1, and the exact ledger and canonical sync bytes remain unchanged when reconciliation has no transition.",
+            "No separate migration, database write, or unlocked rewrite is required."
+          ],
+          "commands": [
+            "cd cli && node tests/repo-graph-algorithms.test.mjs",
+            "cd cli && node tests/temporal-memory-graph.test.mjs",
+            "cd cli && node tests/repo-memory-sync.test.mjs",
+            "cd cli && node tests/context-packet.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[13]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T14",
+          "title": "Stored-artifact validation rejects fingerprint drift and malformed temporal endpoints before repair",
+          "level": "harness-security",
+          "automation": "node",
+          "preconditions": [
+            "Expose a pure stored-artifact integrity validator used by the harness before any refresh or repair.",
+            "Prepare a valid generation plus independent corruptions for graph-versus-manifest memory fingerprint mismatch, source mismatch, noncanonical validFrom, validTo before validFrom, null validTo on a declared non-active record, and a temporal edge with a missing endpoint."
+          ],
+          "steps": [
+            "Invoke the pure validator and harness pre-repair checks for each corruption while snapshotting stored bytes.",
+            "Run the same checks against the valid generation.",
+            "After proving rejection, run normal refresh separately and confirm it can repair the stored graph."
+          ],
+          "expectedResults": [
+            "Every mismatch or malformed endpoint yields a named failing check before repair and sets the harness report to failed.",
+            "Validation details identify the invariant but do not include memory bodies, structured data, credentials, or hostile timestamp values.",
+            "The pure validator performs no writes, and the valid generation passes.",
+            "A later explicit refresh may regenerate a coherent graph, but repair is not mistaken for proof that the corrupted stored generation was valid."
+          ],
+          "commands": [
+            "cd cli && node tests/temporal-memory-graph.test.mjs",
+            "cd cli && node tests/temporal-memory-harness.test.mjs",
+            "cd cli && node tests/cli-behavior.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[14]"
+          ]
+        },
+        {
+          "id": "PROVENA-014-T15",
+          "title": "Help, documentation, packed installation, and the full CLI regression remain honest and green",
+          "level": "release-regression",
+          "automation": "node-command",
+          "preconditions": [
+            "Build an npm tarball and install it into a clean existing repository with a manifest-backed workflow and a seeded temporal ledger."
+          ],
+          "steps": [
+            "Capture context and graph help and verify timeline plus --memory-as-of syntax and canonical UTC requirements.",
+            "Review CLI and architecture documentation for effective-time semantics, backdated revision, current-only code topology, and stated exclusions.",
+            "Run installed init, refresh, current context, historical context, timeline, graph queries, MCP temporal tools, offline runtime reuse, pack checks, and the complete CLI suite."
+          ],
+          "expectedResults": [
+            "Help documents the new option and timeline command without claiming a historical code snapshot.",
+            "Documentation explicitly says the implementation has one event-effective-time axis and does not provide transaction-time history, bi-temporal facts, historical repo maps, or live Neo4j integration proof.",
+            "Documentation explains that later backdated appends may revise an earlier effective view and that code topology remains current.",
+            "The tarball contains every temporal runtime module and the installed package works without TypeScript source or a second registry access.",
+            "Every listed PROVENA-014 verification command passes, the new temporal suite is included in npm test, and existing pack, install, graph, context, MCP, events, reconciliation, sync, security, and algorithm regressions remain green."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/repo-brain-events.test.mjs",
+            "cd cli && node tests/temporal-memory-graph.test.mjs",
+            "cd cli && node tests/context-packet.test.mjs",
+            "cd cli && node tests/neo4j-adapter.test.mjs",
+            "cd cli && node tests/mcp-server.test.mjs",
+            "cd cli && node tests/pack.test.mjs",
+            "cd cli && node tests/pack-install.test.mjs",
+            "cd cli && npm test"
+          ],
+          "covers": [
+            "acceptanceCriteria[14]",
+            "expectedBehaviors[9]",
+            "verificationCommands[0]",
+            "verificationCommands[1]",
+            "verificationCommands[2]",
+            "verificationCommands[3]",
+            "verificationCommands[4]",
+            "verificationCommands[5]",
+            "verificationCommands[6]"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-015",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureId": "FEATURE-LOCAL-MCP-HTTP",
+      "title": "Serve the portable repository MCP over a bounded loopback HTTP endpoint",
+      "persona": "Developer using a local coding agent or IDE that can connect to Streamable HTTP MCP but cannot launch project stdio reliably",
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-015"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "SENTRY_AUTH_TOKEN and SENTRY_DSN are unavailable on this host, so no telemetry claims are verified in tester planning.",
+          "When configured, track bind/startup failures, rejected Host and Origin requests, 413 and protocol failures, active requests, transport/tool failures, and graceful-shutdown failures.",
+          "Track p50/p95 startup and request duration without attaching bodies, headers, absolute repo paths, memory content, environment values, or credentials."
+        ]
+      },
+      "executionNotes": [],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-015-T01",
+          "title": "CLI help, default port, and strict option parsing are deterministic",
+          "level": "cli-security",
+          "automation": "node-command",
+          "preconditions": [
+            "Create an initialized temporary repository and make default port 18093 available."
+          ],
+          "steps": [
+            "Inspect `mcp --help`, start HTTP with no port, and exercise valid explicit ports.",
+            "Try missing, repeated, signed, zero-padded, fractional, exponential, zero, overflow, NaN, host, port-without-http, unknown, and control-character option inputs."
+          ],
+          "expectedResults": [
+            "Help shows `serve --http [--port <port>]`; no-port HTTP binds 127.0.0.1:18093 and an explicit canonical port is honored.",
+            "Only one canonical base-10 integer from 1 through 65535 is accepted; every other input exits nonzero before listening with a bounded generic error that omits the hostile value."
+          ],
+          "commands": [
+            "cd cli && node tests/cli-behavior.test.mjs",
+            "cd cli && node tests/mcp-http-server.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-015-T02",
+          "title": "Stdio MCP, managed configs, and the Python store command do not regress",
+          "level": "compatibility",
+          "automation": "node-command",
+          "preconditions": [
+            "Initialize a clean repository with managed MCP integrations and capture their command arrays."
+          ],
+          "steps": [
+            "Run the existing stdio MCP exchange without `--http` and inspect stdout plus open listeners.",
+            "Reinstall integrations and inspect top-level `serve` help/defaults."
+          ],
+          "expectedResults": [
+            "Stdio remains protocol-only on stdout and opens no HTTP port; existing resources and tools still pass.",
+            "Managed clients still launch stdio, while top-level `provena serve` remains the optional Python store on 127.0.0.1:18092."
+          ],
+          "commands": [
+            "cd cli && node tests/mcp-server.test.mjs",
+            "cd cli && node tests/install-integrations.test.mjs",
+            "cd cli && node tests/cli-behavior.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-015-T03",
+          "title": "Fixed loopback binding, routes, health, timing, and collision behavior are exact",
+          "level": "http-contract",
+          "automation": "node",
+          "preconditions": [
+            "Create a temporary initialized repository and reserve one nondefault loopback port."
+          ],
+          "steps": [
+            "Start programmatically and through the CLI, inspect the listener address, start result, and startup line, then attempt a second bind.",
+            "Call health, MCP with wrong methods, health with a wrong method, and unknown routes without sending valid MCP work."
+          ],
+          "expectedResults": [
+            "The only listener is 127.0.0.1; wildcard/LAN access fails and a collision exits promptly without an orphan.",
+            "Health is bounded non-sensitive JSON; POST is the sole MCP method; known wrong methods return 405 with Allow and unknown routes return 404 without invoking MCP.",
+            "Start result and one CLI line contain actual host, port, MCP URL, and finite nonnegative monotonic startupMs, never the absolute repo path."
+          ],
+          "commands": [
+            "cd cli && node tests/mcp-http-server.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "acceptanceCriteria[7]",
+            "expectedBehaviors[0]",
+            "expectedBehaviors[4]"
+          ]
+        },
+        {
+          "id": "PROVENA-015-T04",
+          "title": "Real MCP parity, stateless per-request lifecycle, root isolation, and concurrency hold",
+          "level": "protocol-integration",
+          "automation": "node",
+          "preconditions": [
+            "Prepare two distinct initialized repositories and an HTTP MCP client using the bundled SDK."
+          ],
+          "steps": [
+            "Start from a subdirectory of repository A, snapshot artifacts, then initialize and list tools/resources over HTTP.",
+            "Read brain/map/graph/manifest, call context, and call remember; compare names and results with the existing in-memory/stdin MCP fixture.",
+            "Run two clients and concurrent read/mutation requests while instrumenting server/transport creation and close paths, including one failed request."
+          ],
+          "expectedResults": [
+            "The same five tools and four core resources work with equivalent sensitivity, integrity, and mutation behavior; startup performs no refresh.",
+            "Every response remains bound to repository A and request data cannot select repository B.",
+            "Each POST creates and closes one stateless JSON-response server/transport, emits no MCP session ID, exposes no GET SSE or DELETE flow, shares no protocol state, and concurrent mutations leave a valid ledger with no leaked lock/temp state."
+          ],
+          "commands": [
+            "cd cli && node tests/mcp-http-server.test.mjs",
+            "cd cli && node tests/mcp-server.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[3]",
+            "acceptanceCriteria[4]",
+            "expectedBehaviors[2]",
+            "expectedBehaviors[3]"
+          ]
+        },
+        {
+          "id": "PROVENA-015-T05",
+          "title": "Host and Origin validation stop rebinding and cross-origin requests before MCP",
+          "level": "security",
+          "automation": "node-http",
+          "preconditions": [
+            "Start the server on a known loopback port and instrument MCP factory invocation count."
+          ],
+          "steps": [
+            "Send raw requests with absent, malformed, non-local, and local Host values.",
+            "Repeat with absent Origin, each exact allowed local origin, and null, remote, malformed, credential-bearing, wrong-scheme, and wrong-port origins."
+          ],
+          "expectedResults": [
+            "Only the SDK local Host set passes; missing, malformed, or non-local Host receives 403 before MCP creation.",
+            "Absent Origin and exact 127.0.0.1, localhost, or bracketed ::1 HTTP origins at the bound port pass; every other Origin receives 403 and no Access-Control-Allow-Origin header.",
+            "Rejected responses are bounded and do not reflect hostile header values."
+          ],
+          "commands": [
+            "cd cli && node tests/mcp-http-server.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[5]",
+            "expectedBehaviors[4]"
+          ]
+        },
+        {
+          "id": "PROVENA-015-T06",
+          "title": "Body limits, response headers, and generic errors fail closed without disclosure",
+          "level": "security-resilience",
+          "automation": "node-http",
+          "preconditions": [
+            "Prepare exact 100 KiB and 100 KiB plus one-byte requests and safe sentinels in body, headers, repo path, environment, and a forced tool error."
+          ],
+          "steps": [
+            "Send boundary and oversized JSON, malformed JSON, unsupported media types, invalid JSON-RPC, invalid tool input, and a forced internal failure across documented and unknown routes.",
+            "Inspect status, body size/content, headers, stdout, and stderr for every response."
+          ],
+          "expectedResults": [
+            "100 KiB reaches normal parsing and larger input is rejected with 413 before MCP; other failures return bounded protocol-appropriate 4xx/5xx responses.",
+            "Every response has Cache-Control no-store and X-Content-Type-Options nosniff.",
+            "No response or log contains sentinels, control characters, stack traces, absolute paths, memory content, environment values, credentials, bodies, or header values."
+          ],
+          "commands": [
+            "cd cli && node tests/mcp-http-server.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[6]",
+            "expectedBehaviors[4]"
+          ]
+        },
+        {
+          "id": "PROVENA-015-T07",
+          "title": "SIGINT and SIGTERM close cleanly, release the port, and leave no HTTP state",
+          "level": "process-lifecycle",
+          "automation": "node-command",
+          "preconditions": [
+            "Spawn foreground HTTP servers in isolated repositories and record baseline `.provena` files."
+          ],
+          "steps": [
+            "After readiness, send SIGINT to one child and SIGTERM to another, including a request-error cleanup path.",
+            "Wait for exit, inspect descendants and files, then bind a new server to each released port."
+          ],
+          "expectedResults": [
+            "Both signals stop acceptance, close listener/transports, exit successfully, and leave no child or listener.",
+            "Ports rebind immediately and no pid, heartbeat, stop, session, token, database, lock, or temporary HTTP state is created."
+          ],
+          "commands": [
+            "cd cli && node tests/mcp-http-server.test.mjs",
+            "cd cli && node tests/cli-behavior.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[7]",
+            "expectedBehaviors[5]"
+          ]
+        },
+        {
+          "id": "PROVENA-015-T08",
+          "title": "Packed CLI and persisted runtime complete offline HTTP exchanges",
+          "level": "distribution-integration",
+          "automation": "node-command",
+          "preconditions": [
+            "Pack the CLI, install it into a fresh existing repository, and run init without a daemon."
+          ],
+          "steps": [
+            "With registry/network access disabled and the source checkout unavailable, start HTTP through the installed CLI and complete initialize/resource/tool calls, then stop it.",
+            "Repeat through `.provena/runtime/runtime.mjs mcp serve --http`, then run its existing refresh and daemon lifecycle checks."
+          ],
+          "expectedResults": [
+            "The tarball contains the HTTP implementation and both launch paths serve from their own bundled SDK dependencies without Python, Docker, a model, or another install.",
+            "The persisted runtime delegates rather than duplicating routes/protocol code; both servers stop without orphaning and refresh/daemon behavior remains green."
+          ],
+          "commands": [
+            "cd cli && node tests/pack.test.mjs",
+            "cd cli && node tests/pack-install.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[8]",
+            "expectedBehaviors[6]"
+          ]
+        },
+        {
+          "id": "PROVENA-015-T09",
+          "title": "Help, documentation, full CLI, and cross-service regression remain honest and green",
+          "level": "release-regression",
+          "automation": "node-command-review",
+          "preconditions": [
+            "Use the final built package and current README, CLI README, Quickstart, and architecture documents."
+          ],
+          "steps": [
+            "Review help and docs for command, URLs, health, foreground shutdown, stdio default, Python/Go separation, and the unauthenticated local-process trust boundary.",
+            "Verify TLS, auth, remote binding, CORS, sessions/SSE, daemonization, client-config migration, rate limiting, and enterprise-proxy replacement are not claimed.",
+            "Run every story verification command, including full CLI and cross-service E2E."
+          ],
+          "expectedResults": [
+            "Docs replace absolute no-port claims with default-stdio and explicit-loopback wording and warn that any local process can invoke read and mutation tools.",
+            "No new dependency, database migration, Python service coupling, remote-listener claim, or authenticated-enterprise substitution is introduced.",
+            "All nine verification commands pass and the HTTP test is included in npm test."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/mcp-http-server.test.mjs",
+            "cd cli && node tests/mcp-server.test.mjs",
+            "cd cli && node tests/cli-behavior.test.mjs",
+            "cd cli && node tests/install-integrations.test.mjs",
+            "cd cli && node tests/pack.test.mjs",
+            "cd cli && node tests/pack-install.test.mjs",
+            "cd cli && npm test",
+            "python scripts/run_e2e.py"
+          ],
+          "covers": [
+            "acceptanceCriteria[9]",
+            "expectedBehaviors[7]",
+            "verificationCommands[0]",
+            "verificationCommands[1]",
+            "verificationCommands[2]",
+            "verificationCommands[3]",
+            "verificationCommands[4]",
+            "verificationCommands[5]",
+            "verificationCommands[6]",
+            "verificationCommands[7]",
+            "verificationCommands[8]"
+          ]
+        }
+      ]
+    },
+    {
+    "storyId": "PROVENA-016",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureId": "FEATURE-LIVING-MAINTENANCE",
+      "title": "Compile bounded maintenance proposals and subagent-ready context packets",
+      "persona": "Developer using multiple coding agents who needs safe, reviewable maintenance work instead of silent repository-memory self-modification",
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-016"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "SENTRY_AUTH_TOKEN and SENTRY_DSN are unavailable on this host, so no maintenance telemetry claims are verified.",
+          "When configured, track compiler and attestation failures, issue/task/truncation/deferred counts, invalid task contexts, and p50/p95 duration by active-event/reference count.",
+          "Never attach memory content, IDs, plan paths, source paths, environment values, request bodies, or credentials to telemetry."
+        ]
+      },
+    "executionNotes": [
+      "T01-T09 passed across focused maintenance, attestation, temporal harness, context, CLI, stdio/HTTP MCP, sync, security, Go control-plane, and cross-service identity regressions. Independent general, security, test-writer, and doc-writer gates report no unresolved P0/P1/blocking P2 findings.",
+      "T10 passed: `npm test` completed in 429.2 seconds with every CLI suite green, including `pack-install.test`; `python scripts/run_e2e.py` through the repository virtual environment completed in 131.1 seconds with 47 Python tests plus TypeScript, Go, Rust, OpenAPI, standalone, and polyglot verification.",
+      "Residual environment gates are explicit: PostgreSQL 16 remains CI-only on this host, live Redis and Neo4j were unavailable, Neo4j is mock-driver proven only, Sentry credentials were unavailable, and `go test -race` could not run because CGO is disabled. No live-service or competitive superiority claim is made."
+    ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-016-T01",
+          "title": "Maintenance plan is one manifest-attested canonical refresh artifact",
+          "level": "artifact-integrity",
+          "automation": "node",
+          "preconditions": [
+            "Initialize a temporary repository with a fixed RepoMap and ledger snapshot."
+          ],
+          "steps": [
+            "Refresh twice and compare plan bytes, source/memory/plan fingerprints, manifest entry, artifact order, and written paths.",
+            "Independently tamper plan fields, planFingerprint, manifest hash/size, source fingerprint, memory fingerprint, and artifact membership before a stored read and harness inspection.",
+            "Fault-inject a write before the manifest and then simulate an interrupted generation repaired by the next refresh."
+          ],
+          "expectedResults": [
+            "Identical inputs produce byte-identical plan and manifest declarations; the second refresh is stable.",
+            "Every coordinated or isolated tamper fails generically before consumption; oversized artifacts fail before allocation.",
+            "Handled failures restore the prior generation and the next locked refresh repairs a crash-partial generation."
+          ],
+          "commands": [
+            "cd cli && node tests/maintenance-plan.test.mjs",
+            "cd cli && node tests/temporal-memory-harness.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "acceptanceCriteria[1]",
+            "expectedBehaviors[0]"
+          ]
+        },
+        {
+          "id": "PROVENA-016-T02",
+          "title": "Four issue classes use exact active-head definitions and stable identities",
+          "level": "deterministic-unit",
+          "automation": "node",
+          "preconditions": [
+            "Create active, superseded, retracted, branched, sourced, scoped, unscoped, missing-path, dot-scoped, and normalized duplicate memories."
+          ],
+          "steps": [
+            "Compile the plan across ledger order and RepoMap collection permutations.",
+            "Change whitespace/case where normalization permits it and change each identity field where it must create a distinct overlap group.",
+            "Verify successors remove inactive predecessors from issue classification while retaining ledger history elsewhere."
+          ],
+          "expectedResults": [
+            "Evidence gaps require both empty sources and appliesTo; missing source and scope paths use the complete current map with dot exempted.",
+            "Exact overlap requires identical normalized kind, subject type, title, body, and appliesTo and groups at least two active heads.",
+            "Issue/task IDs and ordering are deterministic and never depend on collection order or wall time."
+          ],
+          "commands": [
+            "cd cli && node tests/maintenance-plan.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "expectedBehaviors[1]"
+          ]
+        },
+        {
+          "id": "PROVENA-016-T03",
+          "title": "Incomplete scans defer all absence advice without hiding other exact issues",
+          "level": "safety-regression",
+          "automation": "node",
+          "preconditions": [
+            "Produce equivalent complete and incomplete maps with memories referring to paths omitted from the incomplete map."
+          ],
+          "steps": [
+            "Compile both plans and compare missing-source, missing-scope, evidence-gap, overlap, and deferred counters.",
+            "Repeat capped, unreadable, malformed-manifest, and injected enumeration-failure scan diagnostics."
+          ],
+          "expectedResults": [
+            "Incomplete maps emit no source-not-in-map or scope-not-in-map issue and disclose bounded deferred path checks.",
+            "Evidence gaps and exact overlaps remain deterministic because they do not infer absence from current topology.",
+            "A later complete refresh emits the previously deferred advice without modifying the ledger."
+          ],
+          "commands": [
+            "cd cli && node tests/maintenance-plan.test.mjs",
+            "cd cli && node tests/repo-memory-reconcile.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[3]",
+            "expectedBehaviors[2]"
+          ]
+        },
+        {
+          "id": "PROVENA-016-T04",
+          "title": "Compiler work is linear and independent of models, services, and rescans",
+          "level": "complexity-performance",
+          "automation": "node",
+          "preconditions": [
+            "Generate large active ledgers with chains, fan-out, unique claims, one large duplicate group, sources, and scopes."
+          ],
+          "steps": [
+            "Assert event, source, scope, and overlap-key visit diagnostics at two input sizes.",
+            "Disable network, database, model environment, and source-scan helpers while compiling from provided map and snapshot.",
+            "Freeze the canonical overlap hash tuple and compare output across repeated runs."
+          ],
+          "expectedResults": [
+            "Visits scale with events plus references and no all-pairs comparison occurs.",
+            "Compilation succeeds offline without filesystem enumeration, database, embeddings, model, or network calls.",
+            "Diagnostics are test-only/non-timing data and do not introduce wall-clock noise into the plan."
+          ],
+          "commands": [
+            "cd cli && node tests/maintenance-plan.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[4]",
+            "expectedBehaviors[3]"
+          ]
+        },
+        {
+          "id": "PROVENA-016-T05",
+          "title": "Count, list, byte, and confidentiality caps truncate deterministically",
+          "level": "security-boundary",
+          "automation": "node",
+          "preconditions": [
+            "Create more than 256 issues/tasks, more than 32 members/paths in groups, multibyte paths, and safe sentinels in every forbidden memory field."
+          ],
+          "steps": [
+            "Compile plans at every boundary and one beyond, then measure UTF-8 serialized bytes.",
+            "Inspect the entire artifact for titles, bodies, structured data, provenance, commands, environment values, snippets, credentials, and sentinels.",
+            "Reorder inputs and verify retained work, omitted counts, truncation, and fingerprints."
+          ],
+          "expectedResults": [
+            "At most 256 issues/tasks and 32 sorted unique IDs/paths per record are emitted and the canonical artifact never exceeds 512 KiB.",
+            "Truncation is deterministic and summary counters disclose total, emitted, omitted, and deferred work.",
+            "Only fixed planner text, enums, IDs, normalized repo-relative paths, fingerprints, versions, booleans, and numeric counters appear; the secret guard passes."
+          ],
+          "commands": [
+            "cd cli && node tests/maintenance-plan.test.mjs",
+            "cd cli && node tests/security.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[5]",
+            "acceptanceCriteria[6]",
+            "expectedBehaviors[4]"
+          ]
+        },
+        {
+          "id": "PROVENA-016-T06",
+          "title": "Planning and task compilation are proposal-only and preserve authoritative state",
+          "level": "no-write-contract",
+          "automation": "node",
+          "preconditions": [
+            "Capture exact ledger bytes, artifact hashes, source tree, Git config, daemon state, external store spy, and local lock/temp state."
+          ],
+          "steps": [
+            "Generate a plan directly, read it repeatedly, invoke CLI plan, compile contexts, and call both read-only MCP maintenance tools.",
+            "Exercise missing task, tampered plan, malformed task, and context-budget failures.",
+            "Compare all authoritative and external state, accounting only for the documented normal CLI refresh and ignored context output."
+          ],
+          "expectedResults": [
+            "No operation appends, supersedes, retracts, approves, deletes, syncs, or creates a memory and raw ledger bytes remain exact.",
+            "Read-only library and MCP operations perform no refresh; CLI plan refreshes once and context writes only existing ignored latest context output.",
+            "Failures leave no partial plan, ledger, external call, lock, temp, daemon, or Git mutation."
+          ],
+          "commands": [
+            "cd cli && node tests/maintenance-plan.test.mjs",
+            "cd cli && node tests/mcp-server.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[7]",
+            "expectedBehaviors[5]"
+          ]
+        },
+        {
+          "id": "PROVENA-016-T07",
+          "title": "Exact memory selectors produce cited, sensitive-safe, temporal, budgeted contexts",
+          "level": "context-quality",
+          "automation": "node",
+          "preconditions": [
+            "Create active, inactive, confidential, restricted, no-source, sourced, equal-score, and as-of memory candidates plus nearby graph nodes."
+          ],
+          "steps": [
+            "Build ordinary contexts with repeatable memory IDs and task contexts with each maintenance issue kind.",
+            "Try duplicate, unknown, inactive, future, sensitive, malformed, excessive, and hostile IDs under small and large budgets.",
+            "Compare CLI, library, and MCP JSON/Markdown selection, citations, fingerprints, and graph expansion."
+          ],
+          "expectedResults": [
+            "Requested eligible active memories occupy the highest exact tier, seed bounded graph neighbors, carry memory/source citations, and preserve exact snapshot fingerprints.",
+            "Sensitivity and memory-as-of rules still exclude unavailable records and task requests fail generically rather than silently substituting context.",
+            "Every output obeys existing item/character/token budgets and deterministic tie-breaking."
+          ],
+          "commands": [
+            "cd cli && node tests/context-packet.test.mjs",
+            "cd cli && node tests/maintenance-plan.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[8]",
+            "acceptanceCriteria[10]",
+            "expectedBehaviors[6]"
+          ]
+        },
+        {
+          "id": "PROVENA-016-T08",
+          "title": "Maintain CLI parsing, defaults, rendering, and files are strict and bounded",
+          "level": "cli-integration",
+          "automation": "node-command",
+          "preconditions": [
+            "Initialize a repository with more tasks than the default plan limit."
+          ],
+          "steps": [
+            "Exercise help, human and JSON plan output, default and boundary limits, task contexts, repeatable context memory IDs, and context output files.",
+            "Try missing values, repeated scalar flags, zero, signed, padded, fractional, exponential, overflow, unknown flags/subcommands, extra positionals, and hostile task IDs.",
+            "Count refresh invocations and inspect stdout/stderr for reflection or absolute paths."
+          ],
+          "expectedResults": [
+            "Plan defaults to 32 tasks and context to 1500 tokens; valid values are honored and output is deterministic.",
+            "Unknown or malformed inputs fail before mutation with generic bounded errors and no hostile-value reflection.",
+            "Each command refreshes once at most and only task context writes the existing ignored latest JSON or Markdown file."
+          ],
+          "commands": [
+            "cd cli && node tests/cli-behavior.test.mjs",
+            "cd cli && node tests/maintenance-plan.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[9]",
+            "expectedBehaviors[6]"
+          ]
+        },
+        {
+          "id": "PROVENA-016-T09",
+          "title": "Stdio and loopback HTTP MCP expose identical bounded maintenance tools",
+          "level": "protocol-security",
+          "automation": "node-mcp",
+          "preconditions": [
+            "Start in-memory stdio and real loopback HTTP clients against the same initialized repository."
+          ],
+          "steps": [
+            "List tools and call maintenance plan/context with default and boundary schemas over both transports.",
+            "Exercise concurrent reads with remember/refresh, tampered plan, unknown task, invalid limit/budget, large arrays, and hostile values.",
+            "Verify existing resources/tools, HTTP lifecycle/error bounds, root fixation, and ledger locking."
+          ],
+          "expectedResults": [
+            "Both transports expose exactly the two new read-only tools in addition to the existing surface and return equivalent plan/task results.",
+            "Schemas cap input before amplification; errors remain generic/non-reflective and HTTP responses remain stateless, bounded, no-store, and nosniff.",
+            "Concurrent mutations retain the existing lock and every fresh HTTP server/transport closes without changing maintenance read semantics."
+          ],
+          "commands": [
+            "cd cli && node tests/mcp-server.test.mjs",
+            "cd cli && node tests/mcp-http-server.test.mjs"
+          ],
+          "covers": [
+            "acceptanceCriteria[11]",
+            "expectedBehaviors[7]"
+          ]
+        },
+        {
+          "id": "PROVENA-016-T10",
+          "title": "Lifecycle triggers, packed runtime, docs, and full cross-stack regression stay honest",
+          "level": "release-regression",
+          "automation": "node-command-review",
+          "preconditions": [
+            "Use the final source package, generated runtime, installation fixtures, and current product/architecture documentation."
+          ],
+          "steps": [
+            "Change map and memory inputs, then trigger manual refresh, session start, Git hook runtime, daemon tick, mutating MCP, packed CLI, and persisted runtime paths.",
+            "Review durable artifact, bootloader, CLI, MCP, lifecycle, security, architecture, status table, and roadmap claims.",
+            "Run every story verification command, the full CLI suite, packed install, and repository-venv cross-stack E2E."
+          ],
+          "expectedResults": [
+            "Every existing refresh trigger regenerates the same attested plan without a second scheduler, process runner, service, network, model, database, dependency, or migration.",
+            "Packed and persisted runtimes contain the plan/compiler/CLI/MCP surface and work offline.",
+            "Docs call this deterministic proposal planning and subagent-ready context, not semantic consolidation, decay, autonomous DAG execution, approval/apply, transaction-time history, historical code maps, or self-modifying intelligence; all nine commands pass."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/maintenance-plan.test.mjs",
+            "cd cli && node tests/context-packet.test.mjs",
+            "cd cli && node tests/mcp-server.test.mjs",
+            "cd cli && node tests/mcp-http-server.test.mjs",
+            "cd cli && node tests/cli-behavior.test.mjs",
+            "cd cli && node tests/pack.test.mjs",
+            "cd cli && npm test",
+            "python scripts/run_e2e.py"
+          ],
+          "covers": [
+            "acceptanceCriteria[12]",
+            "expectedBehaviors[8]",
+            "verificationCommands[0]",
+            "verificationCommands[1]",
+            "verificationCommands[2]",
+            "verificationCommands[3]",
+            "verificationCommands[4]",
+            "verificationCommands[5]",
+            "verificationCommands[6]",
+            "verificationCommands[7]",
+            "verificationCommands[8]"
           ]
         }
       ]

@@ -1,18 +1,30 @@
 import { dirname, extname, posix } from "node:path";
-import type { RepoMap, RepoPackage } from "../brain/types.js";
-import { compareText, stableId } from "../brain/utils.js";
+import {
+  assertMemoryLedgerSnapshotAttestation,
+  memoryEventToRecord,
+  type MemoryLedgerSnapshot,
+} from "../brain/events.js";
+import type { MemoryEvent, RepoMap, RepoPackage } from "../brain/types.js";
+import { canonicalJson, compareText, sha256, stableId } from "../brain/utils.js";
 import type {
-  RepoGraph,
   RepoGraphEdge,
   RepoGraphEdgeType,
   RepoGraphNode,
+  RepoGraphV2,
+  TemporalGraphDiagnostics,
 } from "./types.js";
+import {
+  deriveMemoryTemporalRecords,
+  memoryGraphNodeId,
+  repoGraphProjectionFingerprint,
+} from "./temporal.js";
 
 function edge(
   from: string,
   to: string,
   type: RepoGraphEdgeType,
   weight = 1,
+  effectiveAt?: string,
 ): RepoGraphEdge {
   return {
     id: stableId("edge", from, type, to),
@@ -20,7 +32,39 @@ function edge(
     to,
     type,
     weight,
+    ...(effectiveAt ? { effectiveAt } : {}),
   };
+}
+
+function sameStructure(left: unknown, right: unknown): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+interface GraphMemoryInput {
+  events: readonly MemoryEvent[];
+  memoryFingerprint: string;
+}
+
+function graphMemoryInput(
+  memory?: MemoryLedgerSnapshot | MemoryEvent[],
+): GraphMemoryInput {
+  let snapshot: MemoryLedgerSnapshot;
+  if (memory === undefined || Array.isArray(memory)) {
+    const events = memory ?? [];
+    const rawLedger = events
+      .map((event) => canonicalJson(memoryEventToRecord(event)))
+      .join("");
+    snapshot = {
+      events,
+      rawLedger,
+      bytes: Buffer.byteLength(rawLedger, "utf8"),
+      memoryFingerprint: sha256(rawLedger),
+    };
+  } else {
+    snapshot = memory;
+  }
+  assertMemoryLedgerSnapshotAttestation(snapshot);
+  return { events: snapshot.events, memoryFingerprint: snapshot.memoryFingerprint };
 }
 
 function parentDirectory(path: string): string | null {
@@ -108,11 +152,33 @@ function resolveImport(
   return candidates.find((candidate) => knownFiles.has(candidate)) ?? null;
 }
 
-export function buildRepoGraph(map: RepoMap): RepoGraph {
+export interface RepoGraphBuildResult {
+  graph: RepoGraphV2;
+  diagnostics: TemporalGraphDiagnostics;
+}
+
+export function buildRepoGraphWithDiagnostics(
+  map: RepoMap,
+  memory?: MemoryLedgerSnapshot | MemoryEvent[],
+): RepoGraphBuildResult {
   const nodes = new Map<string, RepoGraphNode>();
   const edges = new Map<string, RepoGraphEdge>();
-  const addNode = (node: RepoGraphNode) => nodes.set(node.id, node);
-  const addEdge = (item: RepoGraphEdge) => edges.set(item.id, item);
+  const addNode = (node: RepoGraphNode): void => {
+    if (nodes.has(node.id)) throw new Error("repo graph node id collision");
+    nodes.set(node.id, node);
+  };
+  // Dependencies are deliberately shared by ecosystem/name across packages.
+  const ensureDependencyNode = (node: RepoGraphNode): void => {
+    const existing = nodes.get(node.id);
+    if (existing && !sameStructure(existing, node)) {
+      throw new Error("repo graph node id collision");
+    }
+    if (!existing) nodes.set(node.id, node);
+  };
+  const addEdge = (item: RepoGraphEdge): void => {
+    if (edges.has(item.id)) throw new Error("repo graph edge id collision");
+    edges.set(item.id, item);
+  };
 
   const rootId = "repo:root";
   addNode({
@@ -123,7 +189,14 @@ export function buildRepoGraph(map: RepoMap): RepoGraph {
     metadata: { description: map.repository.description },
   });
 
-  const directoryIds = new Map(map.directories.map((item) => [item.path, item.id]));
+  const directoryIds = new Map<string, string>();
+  for (const directory of map.directories) {
+    const existing = directoryIds.get(directory.path);
+    if (existing && existing !== directory.id) {
+      throw new Error("repo graph directory path collision");
+    }
+    directoryIds.set(directory.path, directory.id);
+  }
   for (const directory of map.directories) {
     addNode({
       id: directory.id,
@@ -138,7 +211,14 @@ export function buildRepoGraph(map: RepoMap): RepoGraph {
   }
 
   const knownFiles = new Set(map.files.map((file) => file.path));
-  const fileIds = new Map(map.files.map((file) => [file.path, file.id]));
+  const fileIds = new Map<string, string>();
+  for (const file of map.files) {
+    const existing = fileIds.get(file.path);
+    if (existing && existing !== file.id) {
+      throw new Error("repo graph file path collision");
+    }
+    fileIds.set(file.path, file.id);
+  }
   for (const file of map.files) {
     addNode({
       id: file.id,
@@ -177,7 +257,11 @@ export function buildRepoGraph(map: RepoMap): RepoGraph {
     if (fileId) addEdge(edge(fileId, symbol.id, "defines"));
   }
 
-  const commands = new Map(map.commands.map((command) => [command.id, command]));
+  const commands = new Map<string, (typeof map.commands)[number]>();
+  for (const command of map.commands) {
+    if (commands.has(command.id)) throw new Error("repo graph command id collision");
+    commands.set(command.id, command);
+  }
   for (const pkg of map.packages) {
     addNode({
       id: pkg.id,
@@ -202,7 +286,7 @@ export function buildRepoGraph(map: RepoMap): RepoGraph {
     }
     for (const dependency of pkg.dependencies) {
       const dependencyId = stableId("dependency", pkg.ecosystem, dependency);
-      addNode({
+      ensureDependencyNode({
         id: dependencyId,
         type: "dependency",
         label: dependency,
@@ -225,9 +309,80 @@ export function buildRepoGraph(map: RepoMap): RepoGraph {
     }
   }
 
-  return {
-    schemaVersion: 1,
+  const memoryInput = graphMemoryInput(memory);
+  const temporal = deriveMemoryTemporalRecords(memoryInput.events);
+  const recordsById = new Map(temporal.records.map((record) => [record.eventId, record]));
+  const symbolIdsByLocation = new Map<string, string[]>();
+  for (const symbol of map.symbols) {
+    const key = `${symbol.path}\u0000${symbol.name}`;
+    const ids = symbolIdsByLocation.get(key) ?? [];
+    if (!ids.includes(symbol.id)) ids.push(symbol.id);
+    symbolIdsByLocation.set(key, ids.sort(compareText));
+  }
+
+  for (const record of temporal.records) {
+    addNode({
+      id: memoryGraphNodeId(record.eventId),
+      type: "memory",
+      label: record.title,
+      metadata: {
+        eventId: record.eventId,
+        title: record.title,
+        kind: record.kind,
+        subjectType: record.subjectType,
+        declaredStatus: record.declaredStatus,
+        authority: record.authority,
+        confidence: record.confidence,
+        importance: record.importance,
+        sensitivity: record.sensitivity,
+        validFrom: record.validFrom,
+        validTo: record.validTo,
+      },
+    });
+  }
+  for (const event of memoryInput.events) {
+    const from = memoryGraphNodeId(event.id);
+    const effectiveAt = recordsById.get(event.id)!.validFrom;
+    for (const predecessorId of event.supersedes) {
+      addEdge(edge(
+        from,
+        memoryGraphNodeId(predecessorId),
+        "supersedes",
+        1,
+        effectiveAt,
+      ));
+    }
+    const citationTargets = new Set<string>();
+    for (const source of event.sources) {
+      const fileId = fileIds.get(source.path);
+      if (!fileId) continue;
+      citationTargets.add(fileId);
+      if (!source.symbol) continue;
+      const symbolIds = symbolIdsByLocation.get(`${source.path}\u0000${source.symbol}`) ?? [];
+      if (symbolIds.length === 1) citationTargets.add(symbolIds[0]!);
+    }
+    for (const target of [...citationTargets].sort(compareText)) {
+      addEdge(edge(from, target, "cites", 1, effectiveAt));
+    }
+    const applicabilityTargets = new Set<string>();
+    for (const appliesTo of event.appliesTo) {
+      const target = appliesTo === "." ? rootId : fileIds.get(appliesTo);
+      if (target) applicabilityTargets.add(target);
+    }
+    for (const target of [...applicabilityTargets].sort(compareText)) {
+      addEdge(edge(from, target, "applies_to", 1, effectiveAt));
+    }
+  }
+
+  const graph: RepoGraphV2 = {
+    schemaVersion: 2,
     sourceFingerprint: map.sourceFingerprint,
+    memoryFingerprint: memoryInput.memoryFingerprint,
+    projectionFingerprint: repoGraphProjectionFingerprint(
+      map.sourceFingerprint,
+      memoryInput.memoryFingerprint,
+    ),
+    timeSemantics: "event-effective-time",
     nodes: [...nodes.values()].sort((a, b) => compareText(a.id, b.id)),
     edges: [...edges.values()].sort(
       (a, b) =>
@@ -236,4 +391,12 @@ export function buildRepoGraph(map: RepoMap): RepoGraph {
         compareText(a.to, b.to),
     ),
   };
+  return { graph, diagnostics: temporal.diagnostics };
+}
+
+export function buildRepoGraph(
+  map: RepoMap,
+  memory?: MemoryLedgerSnapshot | MemoryEvent[],
+): RepoGraphV2 {
+  return buildRepoGraphWithDiagnostics(map, memory).graph;
 }

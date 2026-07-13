@@ -1,12 +1,60 @@
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+import json
+import math
+import re
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _validate_repository_json_value(value: Any, path: str = "event") -> None:
+    if isinstance(value, str):
+        if "\x00" in value or any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+            raise ValueError(f"{path} contains text that cannot be persisted portably")
+        return
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{path} must contain only finite JSON numbers")
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _validate_repository_json_value(key, f"{path}.key")
+            _validate_repository_json_value(item, f"{path}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _validate_repository_json_value(item, f"{path}[{index}]")
+
+
+_REPOSITORY_SECRET_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+        r"\bsk-(?:proj-|ant-api\d+-)?[A-Za-z0-9_-]{16,}\b",
+        r"\bsk_[A-Za-z0-9_-]{16,}\b",
+        r"\bgh[pousr]_[A-Za-z0-9]{20,}\b",
+        r"\bgithub_pat_[A-Za-z0-9_]{20,}\b",
+        r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b",
+        r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b",
+        r"\bglpat-[A-Za-z0-9_-]{16,}\b",
+        r"\bsk_live_[A-Za-z0-9]{16,}\b",
+        r"\bAIza[A-Za-z0-9_-]{30,}\b",
+        r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b",
+        r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s/@]+@",
+        r"\b(?:password|passwd|token|secret|api[_-]?key)[\"']?\s*[:=]\s*[\"']?[^\s\"',}]{8,}",
+    )
+)
+
+
+def _assert_no_repository_secret_material(value: Any) -> None:
+    serialized = json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    if any(pattern.search(serialized) for pattern in _REPOSITORY_SECRET_PATTERNS):
+        raise ValueError(
+            "repository memory appears to contain a credential or private key"
+        )
 
 
 class MemoryKind(str, Enum):
@@ -20,6 +68,10 @@ class MemoryKind(str, Enum):
     METRIC = "metric"
     STAKEHOLDER = "stakeholder"
     SOURCE = "source"
+    WORKFLOW = "workflow"
+    MISTAKE = "mistake"
+    HANDOFF = "handoff"
+    INVARIANT = "invariant"
 
 
 class MemoryStatus(str, Enum):
@@ -27,6 +79,7 @@ class MemoryStatus(str, Enum):
     SUPERSEDED = "superseded"
     DELETED = "deleted"
     HELD = "held"
+    RETRACTED = "retracted"
 
 
 class RelationKind(str, Enum):
@@ -160,6 +213,295 @@ class MemoryRecord(BaseModel):
 class MemoryWriteResult(BaseModel):
     created: bool
     memory: MemoryRecord
+
+
+class RepositoryMemoryEventKind(str, Enum):
+    FACT = "fact"
+    DECISION = "decision"
+    WORKFLOW = "workflow"
+    MISTAKE = "mistake"
+    PREFERENCE = "preference"
+    HANDOFF = "handoff"
+    INVARIANT = "invariant"
+
+
+class RepositoryMemorySubjectType(str, Enum):
+    REPO = "repo"
+    FILE = "file"
+    SYMBOL = "symbol"
+    COMMAND = "command"
+    TEST = "test"
+    API = "api"
+    ARCHITECTURE = "architecture"
+    TASK = "task"
+
+
+class RepositoryMemoryEventStatus(str, Enum):
+    ACTIVE = "active"
+    SUPERSEDED = "superseded"
+    RETRACTED = "retracted"
+
+
+class RepositoryMemoryAuthority(str, Enum):
+    HUMAN = "human"
+    AGENT = "agent"
+    TOOL = "tool"
+    SYSTEM = "system"
+
+
+class RepositoryMemorySensitivity(str, Enum):
+    PUBLIC = "public"
+    INTERNAL = "internal"
+    CONFIDENTIAL = "confidential"
+    RESTRICTED = "restricted"
+
+
+MAX_REPOSITORY_LEDGER_BYTES = 64 * 1024 * 1024
+
+
+def _validate_repository_relative_path(
+    value: str,
+    field: str,
+    *,
+    allow_repository_root: bool = False,
+) -> None:
+    normalized = value.replace("\\", "/")
+    if allow_repository_root and normalized == ".":
+        return
+    if normalized != value or normalized.startswith("/") or normalized == ".":
+        raise ValueError(f"{field} must be a normalized repository-relative file path")
+    if any(part in {"", ".", ".."} for part in normalized.split("/")):
+        raise ValueError(f"{field} must stay inside the repository")
+    if len(normalized) >= 2 and normalized[1] == ":":
+        raise ValueError(f"{field} must be repository-relative")
+
+
+def _utf16_sort_key(value: str) -> bytes:
+    """Match JavaScript's locale-independent UTF-16 code-unit ordering."""
+    return value.encode("utf-16-be", errors="surrogatepass")
+
+
+def _canonical_repository_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _trimmed_repository_text(value: str) -> str:
+    """Match the ledger writer's requiredText(): trim boundaries only."""
+    return value.strip()
+
+
+class RepositoryMemorySource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=4096)
+    symbol: str | None = Field(default=None, max_length=50_000)
+    start_line: int | None = Field(default=None, ge=1, strict=True)
+    end_line: int | None = Field(default=None, ge=1, strict=True)
+    blob: str | None = Field(default=None, max_length=50_000)
+    commit: str | None = Field(default=None, max_length=50_000)
+
+    @model_validator(mode="after")
+    def validate_repository_source(self) -> "RepositoryMemorySource":
+        _validate_repository_relative_path(self.path, "source path")
+        for name in ("symbol", "blob", "commit"):
+            value = getattr(self, name)
+            if value is not None and (
+                not value or value != _canonical_repository_text(value)
+            ):
+                raise ValueError(f"source {name} must be a canonical trimmed string")
+        if self.start_line is not None and self.end_line is not None and self.end_line < self.start_line:
+            raise ValueError("source end_line must not precede start_line")
+        return self
+
+
+class RepositoryMemoryProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actor: str = Field(min_length=1, max_length=512)
+    method: Literal["explicit", "observed", "imported"]
+    agent: str | None = Field(default=None, max_length=50_000)
+    session_id: str | None = Field(default=None, max_length=50_000)
+    command: str | None = Field(default=None, max_length=8192)
+
+    @model_validator(mode="after")
+    def validate_canonical_provenance(self) -> "RepositoryMemoryProvenance":
+        if self.actor != _trimmed_repository_text(self.actor):
+            raise ValueError("provenance.actor must be a canonical trimmed string")
+        for name in ("agent", "session_id", "command"):
+            value = getattr(self, name)
+            if value is not None and (
+                not value or value != _canonical_repository_text(value)
+            ):
+                raise ValueError(f"provenance.{name} must be a canonical trimmed string")
+        return self
+
+
+class RepositoryMemoryEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$")
+    kind: RepositoryMemoryEventKind
+    subject_type: RepositoryMemorySubjectType
+    title: str = Field(min_length=1, max_length=512)
+    body: str = Field(min_length=1, max_length=50_000)
+    structured_data: dict[str, Any] = Field(default_factory=dict)
+    status: RepositoryMemoryEventStatus
+    applies_to: list[str] = Field(default_factory=list, max_length=256)
+    sources: list[RepositoryMemorySource] = Field(default_factory=list, max_length=256)
+    provenance: RepositoryMemoryProvenance
+    authority: RepositoryMemoryAuthority
+    confidence: float = Field(ge=0.0, le=1.0, strict=True)
+    importance: float = Field(ge=0.0, le=1.0, strict=True)
+    sensitivity: RepositoryMemorySensitivity
+    created_at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+    updated_at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+    supersedes: list[str] = Field(default_factory=list, max_length=256)
+    tags: list[str] = Field(default_factory=list, max_length=256)
+    triggers: list[str] = Field(default_factory=list, max_length=256)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def validate_strict_schema_version(cls, value: Any) -> Any:
+        if type(value) is not int or value != 1:
+            raise ValueError("schema_version must be the integer 1")
+        return value
+
+    @model_validator(mode="after")
+    def validate_canonical_event(self) -> "RepositoryMemoryEvent":
+        portable_event = self.model_dump(mode="python")
+        _validate_repository_json_value(portable_event)
+        _assert_no_repository_secret_material(portable_event)
+        created_at = datetime.fromisoformat(self.created_at.replace("Z", "+00:00"))
+        updated_at = datetime.fromisoformat(self.updated_at.replace("Z", "+00:00"))
+        if updated_at < created_at:
+            raise ValueError("updated_at must not precede created_at")
+        if self.id in self.supersedes:
+            raise ValueError("a memory event cannot supersede itself")
+        if self.sensitivity not in {
+            RepositoryMemorySensitivity.PUBLIC,
+            RepositoryMemorySensitivity.INTERNAL,
+        }:
+            raise ValueError(
+                "confidential and restricted events cannot originate from the Git-tracked repository ledger"
+            )
+        if (
+            self.title != _trimmed_repository_text(self.title)
+            or self.body != _trimmed_repository_text(self.body)
+        ):
+            raise ValueError("title and body must be canonical boundary-trimmed strings")
+        if len(json.dumps(self.structured_data, ensure_ascii=False, separators=(",", ":"))) > 100_000:
+            raise ValueError("structured_data must not exceed 100000 serialized characters")
+        for name, values in {
+            "applies_to": self.applies_to,
+            "supersedes": self.supersedes,
+            "tags": self.tags,
+            "triggers": self.triggers,
+        }.items():
+            if any(
+                not value or value != _canonical_repository_text(value)
+                for value in values
+            ):
+                raise ValueError(f"{name} entries must be canonical non-empty strings")
+            if values != sorted(set(values), key=_utf16_sort_key):
+                raise ValueError(f"{name} must be sorted and contain no duplicates")
+        for path in self.applies_to:
+            _validate_repository_relative_path(
+                path,
+                "applies_to path",
+                allow_repository_root=True,
+            )
+        expected_sources = sorted(
+            self.sources,
+            key=lambda source: (
+                _utf16_sort_key(source.path),
+                source.start_line or 0,
+                _utf16_sort_key(source.symbol or ""),
+            ),
+        )
+        if self.sources != expected_sources:
+            raise ValueError("sources must use canonical repository path and span ordering")
+        has_rationale = "rationale" in self.structured_data
+        if (self.kind in {RepositoryMemoryEventKind.DECISION, RepositoryMemoryEventKind.PREFERENCE} or has_rationale) and self.provenance.method != "explicit":
+            raise ValueError("decision, preference, and rationale events must be explicit")
+        if self.kind in {RepositoryMemoryEventKind.DECISION, RepositoryMemoryEventKind.PREFERENCE} and self.authority not in {RepositoryMemoryAuthority.HUMAN, RepositoryMemoryAuthority.AGENT}:
+            raise ValueError("decision and preference events require human or agent authority")
+        return self
+
+
+class RepositoryMemorySyncScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: str = Field(min_length=1, max_length=512)
+    project_id: str = Field(min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def validate_canonical_scope(self) -> "RepositoryMemorySyncScope":
+        if self.tenant_id != self.tenant_id.strip() or self.project_id != self.project_id.strip():
+            raise ValueError("repository sync scope identifiers must be boundary-trimmed")
+        for value in (self.tenant_id, self.project_id):
+            if any(
+                ord(character) < 0x20
+                or 0x7F <= ord(character) <= 0x9F
+                or 0xD800 <= ord(character) <= 0xDFFF
+                for character in value
+            ):
+                raise ValueError(
+                    "repository sync scope identifiers must not contain control characters or surrogates"
+                )
+        return self
+
+
+class RepositoryMemorySyncRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    scope: RepositoryMemorySyncScope
+    ledger_path: Literal[".provena/memory/events.jsonl"]
+    memory_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ledger_bytes: int = Field(ge=0, le=MAX_REPOSITORY_LEDGER_BYTES, strict=True)
+    ledger: str = Field(max_length=MAX_REPOSITORY_LEDGER_BYTES)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def validate_strict_schema_version(cls, value: Any) -> Any:
+        if type(value) is not int or value != 1:
+            raise ValueError("schema_version must be the integer 1")
+        return value
+
+    @model_validator(mode="after")
+    def validate_repository_scope(self) -> "RepositoryMemorySyncRequest":
+        return self
+
+
+class RepositoryMemorySyncTimings(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    validation: float = Field(alias="validate", ge=0.0)
+    write: float = Field(ge=0.0)
+    relations: float = Field(ge=0.0)
+    total: float = Field(ge=0.0)
+
+
+class RepositoryMemorySyncResponse(BaseModel):
+    schema_version: Literal[1] = 1
+    repository_id: str
+    ledger_fingerprint: str
+    events_fingerprint: str
+    received_events: int = Field(ge=0)
+    created_memories: int = Field(ge=0)
+    unchanged_memories: int = Field(ge=0)
+    repaired_memories: int = Field(default=0, ge=0)
+    suppressed_events: int = Field(default=0, ge=0)
+    status_updates: int = Field(ge=0)
+    created_relations: int = Field(ge=0)
+    repaired_relations: int = Field(default=0, ge=0)
+    unchanged_relations: int = Field(ge=0)
+    suppressed_relations: int = Field(default=0, ge=0)
+    checkpoint_updated: bool
+    no_op: bool
+    duration_ms: float = Field(ge=0.0)
+    timings_ms: RepositoryMemorySyncTimings
 
 
 class SearchRequest(BaseModel):
@@ -623,7 +965,7 @@ class SearchExplainCandidate(BaseModel):
     score: float
     reasons: list[str] = Field(default_factory=list)
     rejection_reasons: list[str] = Field(default_factory=list)
-    fts_rank: int | None = None
+    fts_rank: float | None = None
     rank: int | None = None
 
 
@@ -642,6 +984,7 @@ class StorageTierOverview(BaseModel):
     memories_active: int = 0
     memories_superseded: int = 0
     memories_deleted: int = 0
+    memories_retracted: int = 0
     memories_held: int = 0
     conversation_layer_total: int = 0
     session_layer_total: int = 0

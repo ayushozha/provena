@@ -48,7 +48,17 @@ process.once("exit", () => {
 
 async function ownerAt(path: string): Promise<LockOwner | null> {
   try {
-    return JSON.parse(await readFile(join(path, "owner.json"), "utf8")) as LockOwner;
+    const owner = JSON.parse(await readFile(join(path, "owner.json"), "utf8")) as Partial<LockOwner>;
+    return (
+      typeof owner.token === "string" &&
+      owner.token.length > 0 &&
+      Number.isInteger(owner.pid) &&
+      owner.pid! > 0 &&
+      typeof owner.acquiredAt === "string" &&
+      Number.isFinite(Date.parse(owner.acquiredAt))
+    )
+      ? owner as LockOwner
+      : null;
   } catch {
     return null;
   }
@@ -56,19 +66,22 @@ async function ownerAt(path: string): Promise<LockOwner | null> {
 
 async function stale(path: string): Promise<{ owner: LockOwner | null } | null> {
   const owner = await ownerAt(path);
-  let acquired = owner ? Date.parse(owner.acquiredAt) : Number.NaN;
-  if (!Number.isFinite(acquired)) {
-    try {
-      acquired = (await stat(path)).mtimeMs;
-    } catch {
-      return null;
-    }
+  if (owner) {
+    // A validated dead owner can no longer mutate the repository, so waiting
+    // for the age grace would make crash recovery slower than lock timeout.
+    return isProcessRunning(owner.pid) ? null : { owner };
+  }
+  let acquired: number;
+  try {
+    acquired = (await stat(path)).mtimeMs;
+  } catch {
+    return null;
   }
   const age = Date.now() - acquired;
   // A slow refresh must never lose its lock merely because it exceeded a
-  // wall-clock timeout. Reclaim only when the owner is confirmed dead (or no
-  // owner was ever written) and the grace period has elapsed.
-  return age > STALE_MS && (!owner || !isProcessRunning(owner.pid)) ? { owner } : null;
+  // wall-clock timeout. Ownerless or malformed locks retain a grace period so
+  // another process cannot steal the directory between mkdir and owner write.
+  return age > STALE_MS ? { owner: null } : null;
 }
 
 async function reclaimStaleLock(repoRoot: string, path: string): Promise<boolean> {

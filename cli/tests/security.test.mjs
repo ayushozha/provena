@@ -85,26 +85,46 @@ function testLoopbackStoreUrlValidation() {
   assert.doesNotThrow(() => assertLoopbackStoreUrl("http://127.0.0.1:18092"));
   assert.doesNotThrow(() => assertLoopbackStoreUrl("http://localhost:18092"));
   assert.doesNotThrow(() => assertLoopbackStoreUrl("http://[::1]:18092"));
+  assert.throws(
+    () => assertLoopbackStoreUrl("http://user:secret@127.0.0.1:18092"),
+    /must not include credentials/,
+  );
+  assert.throws(
+    () => assertLoopbackStoreUrl("http://127.0.0.1:18092?token=secret"),
+    /must not include credentials/,
+  );
 
   assert.throws(
     () => assertLoopbackStoreUrl("http://192.168.1.10:18092"),
+    /HTTPS/,
+  );
+  assert.throws(
+    () => assertLoopbackStoreUrl("https://memory.example.test"),
     /loopback host/,
   );
 
-  const prev = process.env.PROVENA_INSECURE_BIND;
-  process.env.PROVENA_INSECURE_BIND = "1";
+  const prev = process.env.PROVENA_ALLOW_REMOTE_STORE;
+  process.env.PROVENA_ALLOW_REMOTE_STORE = "1";
   try {
-    assert.doesNotThrow(() => assertLoopbackStoreUrl("http://192.168.1.10:18092"));
+    assert.doesNotThrow(() => assertLoopbackStoreUrl("https://memory.example.test"));
+    assert.throws(
+      () => assertLoopbackStoreUrl("https://user:secret@memory.example.test"),
+      /must not include credentials/,
+    );
     const validated = validateConfig({
       ...base,
-      store_url: "http://192.168.1.10:18092",
+      store_url: "https://memory.example.test",
     });
-    assert.equal(validated.store_url, "http://192.168.1.10:18092");
+    assert.equal(validated.store_url, "https://memory.example.test");
+    assert.throws(
+      () => assertLoopbackStoreUrl("http://memory.example.test"),
+      /HTTPS/,
+    );
   } finally {
     if (prev === undefined) {
-      delete process.env.PROVENA_INSECURE_BIND;
+      delete process.env.PROVENA_ALLOW_REMOTE_STORE;
     } else {
-      process.env.PROVENA_INSECURE_BIND = prev;
+      process.env.PROVENA_ALLOW_REMOTE_STORE = prev;
     }
   }
 
@@ -112,7 +132,7 @@ function testLoopbackStoreUrlValidation() {
     () =>
       validateConfig({
         ...base,
-        store_url: "http://10.0.0.5:18092",
+        store_url: "https://memory.example.test",
       }),
     /loopback host/,
   );

@@ -199,6 +199,57 @@ CREATE TABLE IF NOT EXISTS replication_state (
     created_at      TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS repo_memory_event_projections (
+    tenant_id        TEXT NOT NULL,
+    project_id       TEXT NOT NULL,
+    repository_id    TEXT NOT NULL,
+    event_id          TEXT NOT NULL,
+    event_fingerprint TEXT NOT NULL,
+    projection_version INTEGER NOT NULL DEFAULT 1,
+    memory_id         TEXT NOT NULL UNIQUE REFERENCES memories(memory_id) ON DELETE CASCADE,
+    first_seen_at     TEXT NOT NULL,
+    last_seen_at      TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, project_id, repository_id, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_event_projection_memory
+    ON repo_memory_event_projections(memory_id);
+
+CREATE TABLE IF NOT EXISTS repo_memory_event_erasures (
+    tenant_id         TEXT NOT NULL,
+    project_id        TEXT NOT NULL,
+    repository_id     TEXT NOT NULL,
+    event_id          TEXT NOT NULL,
+    event_fingerprint TEXT NOT NULL,
+    authority         TEXT NOT NULL,
+    event_created_at  TEXT NOT NULL,
+    erased_at         TEXT NOT NULL,
+    reason            TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, project_id, repository_id, event_id)
+);
+
+CREATE TABLE IF NOT EXISTS repo_memory_sync_locks (
+    tenant_id      TEXT NOT NULL,
+    project_id     TEXT NOT NULL,
+    repository_id  TEXT NOT NULL,
+    locked_at      TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, project_id, repository_id)
+);
+
+CREATE TABLE IF NOT EXISTS repo_memory_sync_state (
+    tenant_id         TEXT NOT NULL,
+    project_id        TEXT NOT NULL,
+    repository_id     TEXT NOT NULL,
+    projection_version INTEGER NOT NULL,
+    ledger_path       TEXT NOT NULL,
+    ledger_fingerprint TEXT NOT NULL,
+    events_fingerprint TEXT NOT NULL,
+    ledger_bytes      INTEGER NOT NULL,
+    event_count       INTEGER NOT NULL,
+    synced_at         TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, project_id, repository_id)
+);
+
 CREATE TABLE IF NOT EXISTS embedding_models (
     model_id        TEXT PRIMARY KEY,
     provider        TEXT NOT NULL,
