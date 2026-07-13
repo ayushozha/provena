@@ -81,11 +81,18 @@ const SEMANTIC_CHUNK_KINDS = new Set([
   "method",
   "interface",
   "type_alias",
+  "artifact",
 ]);
 
 export function chunkSymbolKey(relativePath: string, chunk: CodeChunk): string {
-  const symbol = chunk.name ?? chunk.kind;
-  return `${relativePath}::${symbol}`;
+  const symbol = chunk.parentSymbol
+    ? `${chunk.parentSymbol}.${chunk.name ?? chunk.kind}`
+    : chunk.name ?? chunk.kind;
+  return `${relativePath}::${symbol}@L${chunk.startLine}-${chunk.endLine}`;
+}
+
+function legacyChunkSymbolKey(relativePath: string, chunk: CodeChunk): string {
+  return `${relativePath}::${chunk.name ?? chunk.kind}`;
 }
 
 export function indexStatePath(projectRoot: string): string {
@@ -137,15 +144,32 @@ export function memoryFingerprint(
   kind: string,
   title: string | null | undefined,
   content: string,
+  generatedIdentity?: string,
 ): string {
   const scopeJson = JSON.stringify(scopeForFingerprint(scope));
-  const value = [
-    scopeJson,
-    kind,
-    (title ?? "").trim().toLowerCase(),
-    content.trim().toLowerCase(),
-  ].join("|");
+  const value = generatedIdentity
+    ? [scopeJson, "provena-generated-v1", generatedIdentity].join("|")
+    : [
+        scopeJson,
+        kind,
+        (title ?? "").trim().toLowerCase(),
+        content.trim().toLowerCase(),
+      ].join("|");
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function generatedMemoryIdentity(input: {
+  kind: string;
+  title: string;
+  content: string;
+  relativePath: string;
+  sourceSha256: string;
+  startLine: number;
+  endLine: number;
+}): string {
+  return createHash("sha256")
+    .update(JSON.stringify(input), "utf8")
+    .digest("hex");
 }
 
 function scopeForFingerprint(scope: ScopeEnvelope): ScopeEnvelope {
@@ -222,6 +246,16 @@ export function buildFileArtifactMemory(
 ): MemoryCreate {
   const relativePath = fileMeta.path || posixRelative(repoRoot, fileMeta.absolutePath);
   const content = buildFileArtifactContent(relativePath, chunks);
+  const endLine = chunks.reduce((max, chunk) => Math.max(max, chunk.endLine), 1);
+  const generatedIdentity = generatedMemoryIdentity({
+    kind: "artifact",
+    title: relativePath,
+    content,
+    relativePath,
+    sourceSha256: fileMeta.sha256 ?? "",
+    startLine: 1,
+    endLine,
+  });
 
   return {
     kind: "artifact",
@@ -235,13 +269,14 @@ export function buildFileArtifactMemory(
         relativePath,
         fileMeta.absolutePath,
         1,
-        chunks.reduce((max, chunk) => Math.max(max, chunk.endLine), 1),
+        endLine,
         content,
       ),
     ],
     metadata: {
       indexed_path: relativePath,
       sha256: fileMeta.sha256,
+      provena_generated_fingerprint: generatedIdentity,
     },
   };
 }
@@ -254,11 +289,26 @@ export function buildChunkFactMemory(
 ): MemoryCreate {
   const relativePath = chunk.filePath || fileMeta.path || posixRelative(repoRoot, fileMeta.absolutePath);
   const symbol = chunk.name ?? chunk.kind;
-  const title = `${relativePath}::${symbol}`;
+  const qualifiedSymbol = chunk.parentSymbol
+    ? `${chunk.parentSymbol}.${symbol}`
+    : symbol;
+  const title = `${relativePath}::${qualifiedSymbol}`;
+  const generatedIdentity = generatedMemoryIdentity({
+    kind: "fact",
+    title,
+    content: chunk.content,
+    relativePath,
+    sourceSha256: fileMeta.sha256 ?? "",
+    startLine: chunk.startLine,
+    endLine: chunk.endLine,
+  });
 
   const entityKeys = [`file:${relativePath}`];
   if (chunk.name) {
     entityKeys.unshift(chunk.name);
+    if (chunk.parentSymbol) {
+      entityKeys.unshift(`${chunk.parentSymbol}.${chunk.name}`);
+    }
   }
 
   return {
@@ -282,6 +332,7 @@ export function buildChunkFactMemory(
       chunk_kind: chunk.kind,
       parent_symbol: chunk.parentSymbol,
       exported: chunk.exported ?? false,
+      provena_generated_fingerprint: generatedIdentity,
     },
   };
 }
@@ -296,6 +347,9 @@ async function writeMemory(
     payload.kind,
     payload.title,
     payload.content,
+    typeof payload.metadata?.provena_generated_fingerprint === "string"
+      ? payload.metadata.provena_generated_fingerprint
+      : undefined,
   );
 
   const existingId = fingerprints[fingerprint];
@@ -374,6 +428,11 @@ export async function emitMemories(
     const factWrite = await writeMemory(client, fact, entry.fingerprints);
     memoryIds.push(factWrite.memoryId);
     indexState.chunks[chunkSymbolKey(relativePath, chunk)] = factWrite.memoryId;
+    // Keep the original lookup key as a compatibility alias. The location-aware
+    // key above is canonical and prevents same-name symbols from overwriting one
+    // another; relations that only know a symbol name can still use the alias.
+    indexState.chunks[legacyChunkSymbolKey(relativePath, chunk)] ??=
+      factWrite.memoryId;
     if (factWrite.created) {
       created += 1;
     } else {

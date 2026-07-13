@@ -72,11 +72,34 @@ class TestClassification(unittest.TestCase):
         self.assertEqual(result, "fact")
 
 
+class TestFingerprint(unittest.TestCase):
+    def setUp(self) -> None:
+        self.wp = WritePipeline(EmbeddingManager(), ModelRouter())
+
+    def test_valid_generated_fingerprint_uses_source_identity(self) -> None:
+        scope = {"tenant_id": "tenant-a", "project_id": "repo-a"}
+        metadata = {"provena_generated_fingerprint": "a" * 64}
+
+        self.assertEqual(
+            self.wp._fingerprint("original source", scope, metadata),
+            self.wp._fingerprint("renamed source", scope, metadata),
+        )
+
+    def test_invalid_generated_fingerprint_falls_back_to_content(self) -> None:
+        scope = {"tenant_id": "tenant-a", "project_id": "repo-a"}
+        metadata = {"provena_generated_fingerprint": "not-a-sha256"}
+
+        self.assertNotEqual(
+            self.wp._fingerprint("original source", scope, metadata),
+            self.wp._fingerprint("renamed source", scope, metadata),
+        )
+
+
 class TestEmbeddings(unittest.TestCase):
     """Test EmbeddingManager."""
 
     def setUp(self) -> None:
-        self.em = EmbeddingManager(provider="local", model_id="local-minilm", dimensions=384)
+        self.em = EmbeddingManager(provider="local", dimensions=384)
 
     def test_embedding_deterministic(self) -> None:
         v1 = self.em.generate("hello world")
@@ -107,7 +130,7 @@ class TestOpenAIEmbeddingProvider(unittest.TestCase):
     def _manager(self, api_key: str = "test-key") -> EmbeddingManager:
         return EmbeddingManager(
             provider="openai",
-            model_id="nomic-embed-text",
+            model_id=f"test-{self.__class__.__name__}",
             dimensions=3,
             base_url="https://endpoint.example/v1",
             api_key=api_key,
@@ -137,7 +160,10 @@ class TestOpenAIEmbeddingProvider(unittest.TestCase):
 
         self.assertEqual(vec, [0.1, 0.2, 0.3])
         self.assertEqual(captured["url"], "https://endpoint.example/v1/embeddings")
-        self.assertEqual(captured["json"], {"model": "nomic-embed-text", "input": "hello"})
+        self.assertEqual(
+            captured["json"],
+            {"model": f"test-{self.__class__.__name__}", "input": "hello"},
+        )
         self.assertEqual(captured["headers"], {"Authorization": "Bearer test-key"})
 
     def test_no_auth_header_without_key(self) -> None:

@@ -131,3 +131,103 @@ export {
   type UpsertEntitiesOptions,
   type UpsertEntitiesResult,
 } from "./indexer/entities.js";
+
+export {
+  REPO_BRAIN_PATH,
+  MEMORY_EVENT_SCHEMA_PATH,
+  MEMORY_EVENT_JSON_SCHEMA,
+  REPO_GRAPH_PATH,
+  REPO_MANIFEST_PATH,
+  REPO_MAP_PATH,
+  MEMORY_LEDGER_PATH,
+  activeMemoryEvents,
+  appendMemoryEvent,
+  readMemoryLedgerSnapshot,
+  readMemoryEvents,
+  memoryEventToRecord,
+  refreshRepoBrain,
+  scanRepo,
+  type AppendMemoryOptions,
+  type MemoryLedgerSnapshot,
+  type MemoryAuthority as RepoMemoryAuthority,
+  type MemoryEvent as RepoMemoryEvent,
+  type MemoryEventRecord as RepoMemoryEventRecord,
+  type MemoryKind as RepoMemoryKind,
+  type MemoryProvenance as RepoMemoryProvenance,
+  type MemorySensitivity as RepoMemorySensitivity,
+  type MemorySource as RepoMemorySource,
+  type MemoryStatus as RepoMemoryStatus,
+  type MemorySubjectType as RepoMemorySubjectType,
+  type NewMemoryEvent,
+  type RefreshRepoBrainOptions,
+  type RefreshRepoBrainResult,
+  type RepoBrainManifest,
+  type RepoCommand,
+  type RepoDirectory,
+  type RepoEnvironmentVariable,
+  type RepoFile,
+  type RepoFileKind,
+  type RepoMap,
+  type RepoPackage,
+  type RepoSymbol,
+  type ScanRepoOptions,
+} from "./brain/index.js";
+
+export {
+  buildRepoGraph,
+  connectedComponents,
+  degreeCentrality,
+  neighborhood,
+  pageRank,
+  shortestPath,
+  type DegreeScore,
+  type GraphDirection,
+  type Neighborhood,
+  type PageRankOptions,
+  type RepoGraph,
+  type RepoGraphEdge,
+  type RepoGraphEdgeType,
+  type RepoGraphNode,
+  type RepoGraphNodeType,
+} from "./graph/index.js";
+
+export {
+  buildContextPacket,
+  renderContextPacketMarkdown,
+  type ContextCitation,
+  type ContextItem,
+  type ContextPacket,
+  type ContextQuery,
+} from "./context/index.js";
+
+export {
+  installAgentInstructions,
+  renderAgentInstructions,
+  type AgentInstallResult,
+} from "./integrations/agents.js";
+export {
+  installGitHooks,
+  type GitHookInstallResult,
+} from "./integrations/git-hooks.js";
+export {
+  installMcpConfigs,
+  installedMcpClients,
+  type McpConfigResult,
+} from "./integrations/mcp-config.js";
+export {
+  installPortableRuntime,
+  type RuntimeInstallResult,
+} from "./integrations/runtime.js";
+export {
+  neo4jConfigFromEnv,
+  neo4jRepositoryId,
+  syncGraphToNeo4j,
+  type Neo4jConfig,
+  type Neo4jSyncResult,
+} from "./storage/index.js";
+export { assertNoSecretMaterial } from "./security/memory.js";
+export {
+  verifyRepoMemory,
+  type HarnessCheck,
+  type HarnessReport,
+} from "./harness/index.js";

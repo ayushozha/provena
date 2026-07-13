@@ -2,13 +2,24 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runAgentsCommand } from "./commands/agents.js";
+import { runCheckpointCommand } from "./commands/checkpoint.js";
 import { runConfigShow } from "./commands/config-show.js";
+import { runContextCommand } from "./commands/context.js";
+import { runDaemonCommand } from "./commands/daemon.js";
 import { runDiscover } from "./commands/discover.js";
 import { runDoctor } from "./commands/doctor.js";
+import { runGraphCommand } from "./commands/graph.js";
+import { runHarnessCommand } from "./commands/harness.js";
 import { runIndexCommand } from "./commands/index.js";
 import { runInit } from "./commands/init.js";
+import { runMcpCommand } from "./commands/mcp.js";
+import { runRefreshCommand } from "./commands/refresh.js";
+import { runRememberCommand } from "./commands/remember.js";
 import { runSearchCommand } from "./commands/search.js";
 import { runServe } from "./commands/serve.js";
+import { runSessionCommand } from "./commands/session.js";
+import { runStatusCommand } from "./commands/status.js";
 import { runWatchCommand } from "./commands/watch.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -19,188 +30,162 @@ function readVersion(): string {
   return pkg.version;
 }
 
-const STUB_COMMANDS = ["status", "connect", "mcp"] as const;
-
-type StubCommand = (typeof STUB_COMMANDS)[number];
-
-interface CommandInfo {
-  name: string;
-  description: string;
-}
-
-const COMMANDS: CommandInfo[] = [
-  { name: "init", description: "Initialize .provena/ config in a git repo" },
-  { name: "config", description: "Show or manage local config" },
-  { name: "discover", description: "List indexable files (debug)" },
-  { name: "index", description: "Index TS/JS repo into Provena memories" },
-  { name: "watch", description: "Watch repo and run incremental index on save" },
-  { name: "search", description: "Search indexed memories in the local store" },
-  { name: "serve", description: "start local SQLite store (uvicorn)" },
-  { name: "doctor", description: "check config and store health" },
-  ...STUB_COMMANDS.map((name) => ({
-    name,
-    description: "not implemented yet",
-  })),
-];
+const COMMANDS = [
+  ["init", "One-click install: brain, graph, runtime, hooks, agents, and MCP"],
+  ["refresh", "Regenerate the repo brain, map, graph, and memory views"],
+  ["context", "Build a compact cited task-context packet"],
+  ["remember", "Append an explicit durable memory to the repo ledger"],
+  ["checkpoint", "Record a handoff and refresh the brain"],
+  ["status", "Show freshness, memory, daemon, and integration health"],
+  ["session", "Start an agent session against the current repo brain"],
+  ["graph", "Query graph algorithms or synchronize Neo4j"],
+  ["harness", "Verify memory determinism, graph integrity, and context quality"],
+  ["agents", "Install managed instructions for coding agents"],
+  ["mcp", "Install or serve the project-scoped MCP integration"],
+  ["daemon", "Manage fixed-cadence background refresh"],
+  ["index", "Alias for local refresh; use --store for legacy store indexing"],
+  ["search", "Alias for local context search; use --store for legacy search"],
+  ["watch", "Watch and incrementally index the optional local store"],
+  ["serve", "Start the optional Python SQLite/Postgres memory store"],
+  ["doctor", "Check optional store config and health"],
+  ["discover", "List files discoverable by the legacy semantic indexer"],
+  ["config", "Show local configuration"],
+] as const;
 
 function printHelp(): void {
-  const lines = [
-    "provena — governed memory plane CLI",
-    "",
-    "Usage:",
-    "  provena <command> [options]",
-    "",
-    "Commands:",
-    ...COMMANDS.map((c) => `  ${c.name.padEnd(10)} ${c.description}`),
-    "",
-    "Index options:",
-    "  --dry-run    List TS/JS files without writing",
-    "  --path       Limit to a repo subtree (e.g. src/auth)",
-    "  --full       Re-index every file (ignore content-hash skip)",
-    "",
-    "Watch options:",
-    "  --interval   Polling fallback (e.g. 30s) when native watch is unavailable",
-    "",
-    "Search options:",
-    "  --limit N    Maximum hits (default 5)",
-    "  --json       Machine-readable SearchResponse",
-    "  --explain    Include store explain payload when available",
-    "",
-    "Serve options:",
-    "  --detach     Run store in background; write .provena/store.pid",
-    "  --stop       Stop detached store process",
-    "",
-    "Global options:",
-    "  --version    Show package version",
-    "  --help, -h   Show this help",
-    "",
-  ];
-  console.log(lines.join("\n"));
-}
-
-function runStub(command: StubCommand): void {
-  console.error(`provena ${command}: not implemented yet (see roadmap/plan/)`);
-  process.exit(1);
+  console.log(
+    [
+      "provena — a living repository memory for software agents",
+      "",
+      "Usage:",
+      "  provena <command> [options]",
+      "",
+      "Commands:",
+      ...COMMANDS.map(([name, description]) => `  ${name.padEnd(11)} ${description}`),
+      "",
+      "Global options:",
+      "  --version    Show package version",
+      "  --help, -h   Show this help",
+      "",
+    ].join("\n"),
+  );
 }
 
 function hasFlag(args: string[], ...flags: string[]): boolean {
   return flags.some((flag) => args.includes(flag));
 }
 
-function runConfigCommand(args: string[]): number {
-  const sub = args[1];
-  if (sub === "show" || sub === undefined) {
-    if (hasFlag(args, "--help", "-h")) {
-      console.log("Usage: provena config show");
-      return 0;
-    }
-    return runConfigShow();
-  }
+function withoutFlag(args: string[], flag: string): string[] {
+  return args.filter((value) => value !== flag);
+}
 
-  console.error(`Unknown config subcommand: ${sub}`);
-  console.error("Usage: provena config show");
+async function runInitCommand(args: string[]): Promise<number> {
+  if (hasFlag(args, "--help", "-h")) {
+    console.log("Usage: provena init [options]");
+    console.log("");
+    console.log("  --force          Regenerate config and all managed surfaces");
+    console.log("  --no-agents      Do not install AGENTS/Claude/Cursor/Copilot instructions");
+    console.log("  --no-hooks       Do not install Git lifecycle refresh hooks");
+    console.log("  --no-mcp         Do not install project MCP configs");
+    console.log("  --no-runtime     Do not persist runtime (requires --no-hooks --no-mcp --no-daemon)");
+    console.log("  --no-daemon      Do not start the 15-minute refresh daemon");
+    return 0;
+  }
+  return runInit({
+    force: hasFlag(args, "--force", "-f"),
+    agents: !hasFlag(args, "--no-agents"),
+    hooks: !hasFlag(args, "--no-hooks"),
+    mcp: !hasFlag(args, "--no-mcp"),
+    runtime: !hasFlag(args, "--no-runtime"),
+    daemon: !hasFlag(args, "--no-daemon"),
+  });
+}
+
+function runConfigCommand(args: string[]): number {
+  const subcommand = args[0];
+  if (subcommand === undefined || subcommand === "show") return runConfigShow();
+  console.error(`Unknown config subcommand: ${subcommand}`);
   return 1;
 }
 
-function runInitCommand(args: string[]): number {
-  if (hasFlag(args, "--help", "-h")) {
-    console.log("Usage: provena init [--force]");
-    console.log("");
-    console.log("Options:");
-    console.log("  --force, -f   Overwrite existing config");
+async function dispatch(command: string, args: string[]): Promise<number> {
+  switch (command) {
+    case "init":
+      return runInitCommand(args);
+    case "refresh":
+    case "brain":
+      return runRefreshCommand(args);
+    case "context":
+      return runContextCommand(args);
+    case "remember":
+      return runRememberCommand(args);
+    case "checkpoint":
+      return runCheckpointCommand(args);
+    case "status":
+      return runStatusCommand(args);
+    case "session":
+      return runSessionCommand(args);
+    case "graph":
+      return runGraphCommand(args);
+    case "harness":
+      return runHarnessCommand(args);
+    case "agents":
+      return runAgentsCommand(args);
+    case "mcp":
+      return runMcpCommand(args);
+    case "daemon":
+      return runDaemonCommand(args);
+    case "index":
+      return hasFlag(args, "--store")
+        ? runIndexCommand(withoutFlag(args, "--store"))
+        : runRefreshCommand(args);
+    case "search":
+      return hasFlag(args, "--store")
+        ? runSearchCommand(withoutFlag(args, "--store"))
+        : runContextCommand(args);
+    case "watch":
+      return runWatchCommand(args);
+    case "serve":
+      await runServe(args);
+      return 0;
+    case "doctor":
+      await runDoctor(args);
+      return 0;
+    case "discover":
+      await runDiscover(args);
+      return 0;
+    case "config":
+      return runConfigCommand(args);
+    case "connect":
+      console.error("provena connect moved to the optional enterprise control plane");
+      return 1;
+    default:
+      console.error(`Unknown command: ${command}`);
+      printHelp();
+      return 1;
+  }
+}
+
+async function main(argv: string[]): Promise<number> {
+  const args = argv.slice(2);
+  if (args.length === 0 || hasFlag(args.slice(0, 1), "--help", "-h")) {
+    printHelp();
     return 0;
   }
-
-  const force = hasFlag(args, "--force", "-f");
-  return runInit({ force });
-}
-
-function main(argv: string[]): void {
-  const args = argv.slice(2);
-
-  if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
-    printHelp();
-    process.exit(0);
-  }
-
-  if (args.includes("--version") || args[0] === "-v") {
+  if (hasFlag(args.slice(0, 1), "--version", "-v")) {
     console.log(readVersion());
-    process.exit(0);
+    return 0;
   }
-
-  const command = args[0];
-
-  if (command === "init") {
-    process.exit(runInitCommand(args));
-  }
-
-  if (command === "config") {
-    process.exit(runConfigCommand(args));
-  }
-
-  if (command === "discover") {
-    runDiscover(args.slice(1))
-      .then(() => process.exit(0))
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`provena discover: ${message}`);
-        process.exit(1);
-      });
-    return;
-  }
-
-  if (command === "index") {
-    runIndexCommand(args.slice(1))
-      .then((code) => process.exit(code))
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`provena index: ${message}`);
-        process.exit(1);
-      });
-    return;
-  }
-
-  if (command === "watch") {
-    runWatchCommand(args.slice(1))
-      .then((code) => process.exit(code))
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`provena watch: ${message}`);
-        process.exit(1);
-      });
-    return;
-  }
-
-  if (command === "search") {
-    runSearchCommand(args.slice(1))
-      .then((code) => process.exit(code))
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`provena search: ${message}`);
-        process.exit(1);
-      });
-    return;
-  }
-
-  if (command === "serve" || command === "doctor") {
-    const run = command === "serve" ? runServe : runDoctor;
-    run(args.slice(1))
-      .then(() => process.exit(0))
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`provena ${command}: ${message}`);
-        process.exit(1);
-      });
-    return;
-  }
-
-  if ((STUB_COMMANDS as readonly string[]).includes(command)) {
-    runStub(command as StubCommand);
-  }
-
-  console.error(`Unknown command: ${command}`);
-  printHelp();
-  process.exit(1);
+  return dispatch(args[0]!, args.slice(1));
 }
 
-main(process.argv);
+main(process.argv)
+  .then((code) => process.exit(code))
+  .catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`provena: ${message}`);
+    if (process.env.PROVENA_DEBUG === "1" && error instanceof Error && error.stack) {
+      console.error(error.stack);
+    }
+    process.exit(1);
+  });

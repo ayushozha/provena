@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -6,6 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { assertSafeRepoPath } from "./security/paths.js";
 
 export const PROVENA_DIR = ".provena";
 export const CONFIG_FILENAME = "config.json";
@@ -97,6 +99,7 @@ export interface ProvenaIndex {
 
 export interface ProvenaConfig {
   version: 1;
+  repository_id?: string;
   backend: "sqlite";
   database: ProvenaDatabase;
   store_url: string;
@@ -187,6 +190,7 @@ export function createDefaultConfig(options: {
 }): ProvenaConfig {
   return {
     version: 1,
+    repository_id: randomUUID(),
     backend: "sqlite",
     database: { path: DEFAULT_DB_PATH },
     store_url: DEFAULT_STORE_URL,
@@ -221,6 +225,16 @@ export function validateConfig(value: unknown): ProvenaConfig {
 
   if (obj.version !== 1) {
     throw new Error("config.version must be 1");
+  }
+  let repositoryId: string | undefined;
+  if (obj.repository_id !== undefined) {
+    if (
+      !isNonEmptyString(obj.repository_id) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/.test(obj.repository_id)
+    ) {
+      throw new Error("config.repository_id must be a stable identifier");
+    }
+    repositoryId = obj.repository_id;
   }
   if (obj.backend !== "sqlite") {
     throw new Error('config.backend must be "sqlite"');
@@ -274,6 +288,7 @@ export function validateConfig(value: unknown): ProvenaConfig {
 
   return {
     version: 1,
+    ...(repositoryId ? { repository_id: repositoryId } : {}),
     backend: "sqlite",
     database: { path: dbPath },
     store_url: obj.store_url,
@@ -290,17 +305,23 @@ export function validateConfig(value: unknown): ProvenaConfig {
 }
 
 export function configExists(projectRoot: string): boolean {
-  return existsSync(configPath(projectRoot));
+  const path = configPath(projectRoot);
+  assertSafeRepoPath(projectRoot, path);
+  return existsSync(path);
 }
 
 export function readConfig(projectRoot: string): ProvenaConfig {
-  const raw = readFileSync(configPath(projectRoot), "utf8");
+  const path = configPath(projectRoot);
+  assertSafeRepoPath(projectRoot, path);
+  const raw = readFileSync(path, "utf8");
   return validateConfig(JSON.parse(raw));
 }
 
 export function writeConfig(projectRoot: string, config: ProvenaConfig): void {
   const validated = validateConfig(config);
   const dir = provenaDir(projectRoot);
+  assertSafeRepoPath(projectRoot, dir);
+  assertSafeRepoPath(projectRoot, configPath(projectRoot));
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     configPath(projectRoot),
@@ -309,24 +330,76 @@ export function writeConfig(projectRoot: string, config: ProvenaConfig): void {
   );
 }
 
-const GITIGNORE_ENTRY = ".provena/";
+const GITIGNORE_START = "# >>> provena local state >>>";
+const GITIGNORE_END = "# <<< provena local state <<<";
+const GITIGNORE_ENTRIES = [
+  "!.provena/",
+  ".provena/*",
+  "!.provena/config.json",
+  "!.provena/repo.brain.md",
+  "!.provena/agent-instructions.md",
+  "!.provena/repo.map.json",
+  "!.provena/graph.json",
+  "!.provena/manifest.json",
+  "!.provena/memory/",
+  ".provena/memory/*",
+  "!.provena/memory/events.jsonl",
+  "!.provena/schema/",
+  ".provena/schema/*",
+  "!.provena/schema/memory-event.schema.json",
+  "!.provena/views/",
+  ".provena/views/*",
+  "!.provena/views/*.md",
+] as const;
+
+function managedGitignoreBlock(): string {
+  return [GITIGNORE_START, ...GITIGNORE_ENTRIES, GITIGNORE_END].join("\n");
+}
 
 export function ensureGitignore(projectRoot: string): boolean {
   const gitignorePath = join(projectRoot, ".gitignore");
+  assertSafeRepoPath(projectRoot, gitignorePath);
   const existing = existsSync(gitignorePath)
     ? readFileSync(gitignorePath, "utf8")
     : "";
-
   const lines = existing.split(/\r?\n/);
-  const hasEntry = lines.some(
-    (line) => line.trim() === GITIGNORE_ENTRY || line.trim() === ".provena",
-  );
-  if (hasEntry) {
-    return false;
+  const start = lines.findIndex((line) => line.trim() === GITIGNORE_START);
+  const end = lines.findIndex((line) => line.trim() === GITIGNORE_END);
+  if ((start >= 0) !== (end >= 0) || (start >= 0 && end < start)) {
+    throw new Error(`malformed Provena managed block in ${gitignorePath}`);
   }
 
-  const suffix = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
-  const addition = `${suffix}${GITIGNORE_ENTRY}\n`;
-  writeFileSync(gitignorePath, existing + addition, "utf8");
+  // Keep legacy or user-owned whole-directory ignores. The later managed
+  // allowlist re-includes only Provena's durable contract, so migration cannot
+  // accidentally expose arbitrary historical files under .provena/.
+  const managedStart = lines.findIndex(
+    (line) => line.trim() === GITIGNORE_START,
+  );
+  const managedEnd = lines.findIndex(
+    (line) => line.trim() === GITIGNORE_END,
+  );
+  const block = managedGitignoreBlock().split("\n");
+  let nextLines: string[];
+  if (managedStart >= 0) {
+    nextLines = [
+      ...lines.slice(0, managedStart),
+      ...block,
+      ...lines.slice(managedEnd + 1),
+    ];
+  } else {
+    while (lines.at(-1) === "") lines.pop();
+    nextLines = [
+      ...lines,
+      ...(lines.length > 0 ? [""] : []),
+      ...block,
+      "",
+    ];
+  }
+
+  const next = nextLines.join("\n");
+  if (next === existing) {
+    return false;
+  }
+  writeFileSync(gitignorePath, next, "utf8");
   return true;
 }

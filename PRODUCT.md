@@ -11,6 +11,33 @@ That framing matters because it positions Provena as infrastructure that can be
 embedded into existing applications, copilots, MCP clients, and internal
 platforms without requiring customers to replace their system of record.
 
+The developer wedge is now concrete: **Provena is also the living repo brain
+that initializes an existing codebase in one command once the package is
+installed.** The local brain earns
+daily usage through faster agent orientation, cited context, durable decisions,
+and handoffs. Teams can later connect those same event and provenance contracts
+to the governed shared memory plane. This is one product with a local-first
+entry point, not two unrelated memory systems.
+
+The CLI is currently distributed as a source-built npm tarball; the
+`@provena/cli` registry release is pending. “One command” describes
+`provena init`, not registry availability or a hosted enterprise service.
+
+## Current product boundary
+
+- The portable brain, typed ledger, current-code graph, context packets, MCP,
+  managed agent instructions, Git hooks, daemon, and integrity harness exist.
+- Refresh still performs a bounded eligible-file scan; incremental filesystem
+  CDC is roadmap.
+- Neo4j receives the latest code topology, not temporal memory history or a
+  cross-repository enterprise graph.
+- Confidential/restricted events are rejected from the Git-tracked ledger and
+  belong in the optional governed store.
+- Agent/MCP/hook integrations are best-effort and preserve conflicting
+  user-owned configuration instead of claiming universal installation.
+- First-party SaaS crawlers, a hosted admin plane, learned local ranking,
+  autonomous subagent DAGs, and commercial enterprise plans are not shipped.
+
 ## What Provena already does well
 
 - Persists typed memory with provenance, citations, and scoped recall.

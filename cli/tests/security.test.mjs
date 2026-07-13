@@ -9,6 +9,7 @@ import {
   validateConfig,
 } from "../dist/config.js";
 import { enumerateFiles, isDeniedSecretPath } from "../dist/indexer/discover.js";
+import { assertNoSecretMaterial } from "../dist/security/memory.js";
 
 function testSecretDenylistPatterns() {
   assert.equal(isDeniedSecretPath(".env"), true);
@@ -21,8 +22,29 @@ function testSecretDenylistPatterns() {
   assert.equal(isDeniedSecretPath("src/foo.ts"), false);
 }
 
+function testMemoryCredentialGuard() {
+  const credentials = [
+    ["sk", "proj", "abcdefghijklmnopqrstuv"].join("-"),
+    ["sk", "ant", "api03", "abcdefghijklmnopqrstuv"].join("-"),
+    ["ghp", "abcdefghijklmnopqrstuvwxyz123456"].join("_"),
+    ["github", "pat", "abcdefghijklmnopqrstuvwxyz123456"].join("_"),
+    ["xoxb", "1234567890", "abcdefghijklmnop"].join("-"),
+    ["ASIA", "ABCDEFGHIJKLMNOP"].join(""),
+    ["glpat", "abcdefghijklmnopqrstuv"].join("-"),
+    ["sk", "live", "abcdefghijklmnopqrstuv"].join("_"),
+    ["AI", "za", "abcdefghijklmnopqrstuvwxyz1234567890"].join(""),
+    ["eyJabcdefghijk", "abcdefghijklmnop", "abcdefghijklmnop"].join("."),
+    `${"postgresql"}://${"admin"}:${"correct-horse-battery"}@db.example.test/app`,
+  ];
+  for (const credential of credentials) {
+    assert.throws(() => assertNoSecretMaterial(credential), /credential|private key/);
+  }
+  assert.doesNotThrow(() => assertNoSecretMaterial("Use the OPENAI_API_KEY environment variable."));
+}
+
 async function testSecretDenylistRegardlessOfGitignore() {
   const root = mkdtempSync(join(tmpdir(), "provena-security-denylist-"));
+  let testError;
   try {
     mkdirSync(join(root, "src"), { recursive: true });
     writeFileSync(join(root, "src", "ok.ts"), "export const ok = 1;\n", "utf8");
@@ -38,9 +60,23 @@ async function testSecretDenylistRegardlessOfGitignore() {
     assert.ok(!paths.includes("secret.pem"));
     assert.ok(!paths.includes(".env.production"));
     assert.ok(!paths.includes(".npmrc"));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+  } catch (error) {
+    testError = error;
   }
+  try {
+    rmSync(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50,
+    });
+  } catch (cleanupError) {
+    if (testError) {
+      throw new AggregateError([testError, cleanupError], "security test and cleanup failed");
+    }
+    throw cleanupError;
+  }
+  if (testError) throw testError;
 }
 
 function testLoopbackStoreUrlValidation() {
@@ -107,6 +143,7 @@ function testDatabasePathValidation() {
 }
 
 testSecretDenylistPatterns();
+testMemoryCredentialGuard();
 await testSecretDenylistRegardlessOfGitignore();
 testLoopbackStoreUrlValidation();
 testDatabasePathValidation();

@@ -103,7 +103,10 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/memories", response_model=MemoryWriteResult)
     async def create_memory(payload: MemoryCreate, request: Request) -> MemoryWriteResult:
-        return request.app.state.store.create_memory(payload, access=extract_access(request))
+        try:
+            return request.app.state.store.create_memory(payload, access=extract_access(request))
+        except ValueError as exc:
+            raise _memory_value_error(exc) from exc
 
     @app.get("/v1/memories/{memory_id}", response_model=MemoryRecord)
     async def get_memory(memory_id: str, request: Request) -> MemoryRecord:
@@ -149,7 +152,7 @@ def create_app() -> FastAPI:
         detail = str(exc)
         if detail == "memory not found":
             status = 404
-        elif "duplicate" in detail.lower():
+        elif "duplicate" in detail.lower() or "tombstoned" in detail.lower():
             status = 409
         else:
             status = 403

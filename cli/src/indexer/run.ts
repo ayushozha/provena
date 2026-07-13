@@ -13,8 +13,11 @@ import { emitMemories, loadIndexState } from "./emit.js";
 import { upsertEntitiesFromChunks } from "./entities.js";
 import {
   computeIndexDiff,
+  deleteFileMemories,
   filesToIndex,
   incrementalCountsFromDiff,
+  prepareFileReplacementState,
+  replaceFileInIndexState,
   removeIndexedFile,
   saveIndexStateAtomic,
 } from "./incremental.js";
@@ -234,8 +237,14 @@ export async function runIndex(
 
   for (const removedPath of diff.removed) {
     try {
-      stats.memoriesDeleted += await removeIndexedFile(client, indexState, removedPath);
+      stats.memoriesDeleted += await removeIndexedFile(
+        client,
+        indexState,
+        removedPath,
+        { hardDelete: true },
+      );
     } catch (error) {
+      stats.filesFailed += 1;
       logIndexError(projectRoot, removedPath, error);
       console.error(
         `\nprovena index: failed removing ${removedPath}: ${error instanceof Error ? error.message : error}`,
@@ -244,19 +253,6 @@ export async function runIndex(
   }
 
   const worklist = fullReindex ? files : filesToIndex(diff);
-
-  if (!fullReindex) {
-    for (const file of diff.changed) {
-      try {
-        stats.memoriesDeleted += await removeIndexedFile(client, indexState, file.path);
-      } catch (error) {
-        logIndexError(projectRoot, file.path, error);
-        console.error(
-          `\nprovena index: failed clearing ${file.path}: ${error instanceof Error ? error.message : error}`,
-        );
-      }
-    }
-  }
 
   let filesDone = 0;
   const pipelineOpts = {
@@ -269,20 +265,13 @@ export async function runIndex(
     persistIndexState: false,
   };
 
-  const indexedFiles: Array<{
+  const indexedFiles = new Map<string, {
     chunks: Awaited<ReturnType<typeof chunkTypeScriptFile>>;
     fileMeta: { path: string; absolutePath: string; sha256: string };
-  }> = [];
+  }>();
 
   await runPool(worklist, concurrency, async (file) => {
     try {
-      if (fullReindex) {
-        const previous = indexState.files[file.path];
-        if (previous?.sha256 && previous.sha256 !== file.sha256) {
-          stats.memoriesDeleted += await removeIndexedFile(client, indexState, file.path);
-        }
-      }
-
       const content = readFileSync(file.absolutePath, "utf8");
       const chunks = await chunkTypeScriptFile(file.path, content);
       const fileMeta = {
@@ -290,16 +279,27 @@ export async function runIndex(
         absolutePath: file.absolutePath,
         sha256: file.sha256,
       };
+      const replacementState = structuredClone(indexState);
+      const previousIds = prepareFileReplacementState(
+        replacementState,
+        file.path,
+      );
+      const filePipelineOpts = {
+        ...pipelineOpts,
+        indexState: replacementState,
+      };
 
-      const emitResult = await emitMemories(chunks, fileMeta, config.scope, pipelineOpts);
-      stats.memoriesCreated += emitResult.created;
-      stats.memoriesSkipped += emitResult.skipped;
+      const emitResult = await emitMemories(
+        chunks,
+        fileMeta,
+        config.scope,
+        filePipelineOpts,
+      );
 
       const relationResult = await emitRelations(chunks, fileMeta, config.scope, {
-        ...pipelineOpts,
+        ...filePipelineOpts,
         relationScope: "intra-file",
       });
-      stats.relationsCreated += relationResult.created;
 
       const entityResult = await upsertEntitiesFromChunks(
         chunks,
@@ -307,10 +307,33 @@ export async function runIndex(
         config.scope,
         { storeUrl: config.store_url, projectRoot, repoRoot, client },
       );
+
+      // Any future trigger registration must succeed before the local state
+      // accepts this source hash, otherwise the next incremental run could
+      // incorrectly skip unfinished work.
+      await registerTriggerPhrases();
+
+      const committedState = structuredClone(indexState);
+      const obsoleteIds = replaceFileInIndexState(
+        committedState,
+        replacementState,
+        file.path,
+        previousIds,
+      );
+      stats.memoriesDeleted += await deleteFileMemories(
+        client,
+        obsoleteIds,
+        { hardDelete: true },
+      );
+      indexState.files = committedState.files;
+      indexState.chunks = committedState.chunks;
+      indexState.relations = committedState.relations;
+      stats.memoriesCreated += emitResult.created;
+      stats.memoriesSkipped += emitResult.skipped;
+      stats.relationsCreated += relationResult.created;
       stats.entitiesUpserted += entityResult.upserted;
 
-      indexedFiles.push({ chunks, fileMeta });
-      await registerTriggerPhrases();
+      indexedFiles.set(file.path, { chunks, fileMeta });
 
       stats.filesIndexed += 1;
     } catch (error) {
@@ -329,17 +352,37 @@ export async function runIndex(
     process.stdout.write("\n");
   }
 
-  for (const { chunks, fileMeta } of indexedFiles) {
+  // Re-evaluate cross-file edges for every surviving source whenever topology
+  // changed. A changed target receives new generated-memory IDs, so unchanged
+  // importers and tests must be rewired as well as the changed file itself.
+  const crossFileWork = worklist.length > 0 || diff.removed.length > 0 ? files : [];
+  for (const file of crossFileWork) {
     try {
+      const indexed = indexedFiles.get(file.path);
+      const chunks = indexed?.chunks ?? await chunkTypeScriptFile(
+        file.path,
+        readFileSync(file.absolutePath, "utf8"),
+      );
+      const fileMeta = indexed?.fileMeta ?? {
+        path: file.path,
+        absolutePath: file.absolutePath,
+        sha256: file.sha256,
+      };
       const crossFileResult = await emitRelations(chunks, fileMeta, config.scope, {
         ...pipelineOpts,
         relationScope: "cross-file",
       });
       stats.relationsCreated += crossFileResult.created;
     } catch (error) {
-      logIndexError(projectRoot, fileMeta.path, error);
+      stats.filesFailed += 1;
+      // Force a retry even when this source file itself was unchanged. The
+      // store may have accepted only a prefix of its edges.
+      if (indexState.files[file.path]) {
+        indexState.files[file.path]!.sha256 = "";
+      }
+      logIndexError(projectRoot, file.path, error);
       console.error(
-        `\nprovena index: cross-file relations failed ${fileMeta.path}: ${error instanceof Error ? error.message : error}`,
+        `\nprovena index: cross-file relations failed ${file.path}: ${error instanceof Error ? error.message : error}`,
       );
     }
   }

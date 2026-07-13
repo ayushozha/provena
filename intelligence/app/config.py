@@ -3,7 +3,7 @@
 import logging
 from urllib.parse import urlparse
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings
 
 logger = logging.getLogger(__name__)
@@ -25,8 +25,8 @@ class IntelligenceSettings(BaseSettings):
     #   PROVENA_INTEL_EMBEDDING_MODEL=<provider/model>
     #   PROVENA_INTEL_EMBEDDING_API_KEY=sk-or-...
     #   PROVENA_INTEL_EMBEDDING_DIMENSIONS=<model dims>
-    embedding_provider: str = "openai"
-    embedding_model: str = "nomic-embed-text"
+    embedding_provider: str = "local"
+    embedding_model: str = ""
     embedding_dimensions: int = 768
     embedding_base_url: str = "http://localhost:11434/v1"
     embedding_api_key: SecretStr | None = Field(default=None, repr=False)
@@ -57,6 +57,14 @@ class IntelligenceSettings(BaseSettings):
 
     store_db_path: str = "./data/provena.db"
     listen_port: int = 8081
+
+    @model_validator(mode="after")
+    def require_remote_embedding_model(self) -> "IntelligenceSettings":
+        if self.embedding_provider != "local" and not self.embedding_model.strip():
+            raise ValueError(
+                "PROVENA_INTEL_EMBEDDING_MODEL is required for non-local embedding providers"
+            )
+        return self
 
 
 settings = IntelligenceSettings()

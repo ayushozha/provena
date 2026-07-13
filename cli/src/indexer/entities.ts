@@ -86,7 +86,10 @@ export function buildEntityRecords(
     if (!chunk.name || !SYMBOL_CHUNK_KINDS.has(chunk.kind)) {
       continue;
     }
-    const canonical = `${relativePath}::${chunk.name}`;
+    const symbol = chunk.parentSymbol
+      ? `${chunk.parentSymbol}.${chunk.name}`
+      : chunk.name;
+    const canonical = `${relativePath}::${symbol}`;
     const aliases = [chunk.name];
     if (chunk.exported) {
       aliases.push(`export:${chunk.name}`);

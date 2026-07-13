@@ -1,8 +1,17 @@
 # Provena Architecture
 
 Provena is a polyglot, provenance-first memory service for LLM applications.
-It splits into three language layers — each chosen for where it excels — connected
-by HTTP/gRPC interfaces.
+It splits into three language layers — each chosen for where it excels —
+connected by HTTP interfaces today; protobuf/gRPC migration remains roadmap.
+
+The installable repository-memory path is intentionally smaller: the Node CLI
+creates a Git-tracked brain, event ledger, deterministic graph, context packets,
+agent/MCP integrations, and an optional Neo4j projection without requiring any
+of the services below. See
+[Repo Memory Architecture](./docs/REPO_MEMORY_ARCHITECTURE.md). The polyglot
+topology becomes an optional shared/enterprise projection rather than a
+prerequisite for `provena init`. The portable path uses stdio MCP and opens no
+HTTP port.
 
 ## Language boundary pattern
 
@@ -160,15 +169,14 @@ sequenceDiagram
 
 Current shipped deployment shapes:
 
-- Standalone runs the Python store app directly, and external clients typically
-  call it on `:8092`.
+- Standalone runs the Python store app directly, and clients call it on `:8000`
+  by default.
 - Polyglot exposes the Go gateway on `:8080` and keeps `store`,
   `orchestration`, `intelligence`, `queue`, `lifecycle`, and `mcp` behind it.
 - Connected mode currently lands through those gateway and store APIs rather
   than a separate connector daemon.
 
-Connected mode currently lands through the gateway and store surfaces rather
-than a separate binary. The integration-plane APIs own connector registry,
+The integration-plane APIs own connector registry,
 source inventory, principal mapping, source permission grants, sync jobs, and
 tenant-level coverage summaries. Ingestion today is push-based: an external
 caller writes sources, principal mappings, permission grants, and sync-job
@@ -189,9 +197,10 @@ workers, so it is a no-op against the ledger today.
 | Store | Technology | Purpose |
 |---|---|---|
 | Op store | SQLite / PostgreSQL | Core memory records |
-| Vector / FTS | FTS5 / pgvector + tsvector | Semantic + keyword search |
+| Vector / FTS | SQLite FTS5 + sqlite-vec when available; PostgreSQL `tsvector` | Keyword search plus KNN or linear cosine fallback; PostgreSQL pgvector KNN is roadmap |
 | Trigger index | In-memory (Rust DashMap) | Sub-ms phrase → memory lookup |
 | Entity graph | Relations table | Typed links between memories |
+| Repo graph | Deterministic JSON / optional Neo4j | Current files, symbols, packages, commands, environment variables, imports/uses, and graph analytics; temporal history is roadmap |
 | Project snapshots | Snapshot table | Living project overview |
 | Audit log | Append-only table | Immutable lifecycle events |
 | Tenant isolation | Row-level filtering | Schema/row-level isolation |
@@ -243,7 +252,9 @@ store boundary in standalone or polyglot deployments.
 - **Rust for hot path**: trigger index lookup and context budget are on every request's critical path. Rust eliminates GC pauses and provides predictable sub-ms latency.
 - **Go for infrastructure**: API gateway, queue consumer, and lifecycle services are I/O-bound with high concurrency. Go's goroutine model handles this efficiently.
 - **Python for intelligence**: LLM calls, embedding generation, and ML inference lean on the Python ecosystem (sentence-transformers, Anthropic SDK, OpenAI SDK).
-- **Local-first storage**: SQLite for development, PostgreSQL + pgvector for production.
+- **Local-first storage**: SQLite for development and PostgreSQL for production;
+  both currently retain a linear cosine fallback, while pgvector KNN remains
+  roadmap.
 - **Explainable recall**: search results always include scoring reasons and citations.
 - **Backpressure by default**: writes go through a bounded queue to protect downstream services.
 - **Per-memory ACL**: RBAC at the memory level, not just tenant level.

@@ -20,6 +20,16 @@ export interface IncrementalCounts {
   filesUnchanged: number;
 }
 
+export interface DeleteFileMemoriesOptions {
+  /** Indexed code facts are derived data, so hard deletion also removes stale edges. */
+  hardDelete?: boolean;
+}
+
+function relationTouchesIds(fingerprint: string, memoryIds: Set<string>): boolean {
+  const [fromMemoryId, , toMemoryId] = fingerprint.split("|");
+  return memoryIds.has(fromMemoryId ?? "") || memoryIds.has(toMemoryId ?? "");
+}
+
 function pathMatchesPrefix(relativePath: string, pathPrefix?: string): boolean {
   if (!pathPrefix) {
     return true;
@@ -95,8 +105,9 @@ export function purgeFileFromIndexState(state: IndexState, relativePath: string)
     }
   }
 
+  const memoryIdSet = new Set(memoryIds);
   for (const key of Object.keys(state.relations)) {
-    if (memoryIds.some((id) => key.includes(id))) {
+    if (relationTouchesIds(key, memoryIdSet)) {
       delete state.relations[key];
     }
   }
@@ -105,33 +116,116 @@ export function purgeFileFromIndexState(state: IndexState, relativePath: string)
   return memoryIds;
 }
 
+/**
+ * Clear file-owned lookup and relation state in an isolated transaction copy.
+ * The entry and fingerprints remain available so unchanged chunks deduplicate
+ * against the still-live store memories while a replacement is being written.
+ */
+export function prepareFileReplacementState(
+  state: IndexState,
+  relativePath: string,
+): string[] {
+  const entry = state.files[relativePath];
+  const previousIds = entry ? memoryIdsForFile(entry) : [];
+  const chunkPrefix = `${relativePath}::`;
+
+  for (const key of Object.keys(state.chunks)) {
+    if (key.startsWith(chunkPrefix)) {
+      delete state.chunks[key];
+    }
+  }
+
+  const previousIdSet = new Set(previousIds);
+  for (const key of Object.keys(state.relations)) {
+    if (relationTouchesIds(key, previousIdSet)) {
+      delete state.relations[key];
+    }
+  }
+  return previousIds;
+}
+
+/** Commit one successfully indexed file from an isolated state copy. */
+export function replaceFileInIndexState(
+  state: IndexState,
+  replacement: IndexState,
+  relativePath: string,
+  previousIds: string[],
+): string[] {
+  const nextEntry = replacement.files[relativePath];
+  if (!nextEntry) {
+    throw new Error(`replacement state missing ${relativePath}`);
+  }
+
+  const currentIds = new Set(nextEntry.memoryIds);
+  const previousIdSet = new Set(previousIds);
+  const chunkPrefix = `${relativePath}::`;
+
+  for (const key of Object.keys(state.chunks)) {
+    if (key.startsWith(chunkPrefix)) {
+      delete state.chunks[key];
+    }
+  }
+  for (const [key, memoryId] of Object.entries(replacement.chunks)) {
+    if (key.startsWith(chunkPrefix)) {
+      state.chunks[key] = memoryId;
+    }
+  }
+
+  for (const key of Object.keys(state.relations)) {
+    if (relationTouchesIds(key, previousIdSet)) {
+      delete state.relations[key];
+    }
+  }
+  for (const key of Object.keys(replacement.relations)) {
+    if (relationTouchesIds(key, currentIds)) {
+      state.relations[key] = true;
+    }
+  }
+
+  nextEntry.fingerprints = Object.fromEntries(
+    Object.entries(nextEntry.fingerprints).filter(([, memoryId]) =>
+      currentIds.has(memoryId),
+    ),
+  );
+  state.files[relativePath] = structuredClone(nextEntry);
+  return previousIds.filter((memoryId) => !currentIds.has(memoryId));
+}
+
 export async function deleteFileMemories(
   client: ProvenaClient,
   memoryIds: string[],
+  options: DeleteFileMemoriesOptions = {},
 ): Promise<number> {
   let deleted = 0;
   for (const memoryId of memoryIds) {
-    try {
-      if (await client.deleteMemory(memoryId)) {
-        deleted += 1;
-      }
-    } catch {
-      // Best-effort cleanup; stale IDs are dropped from local state regardless.
+    if (await client.deleteMemory(memoryId, options.hardDelete ?? false)) {
+      deleted += 1;
     }
   }
   return deleted;
+}
+
+function commitIndexState(target: IndexState, next: IndexState): void {
+  target.version = next.version;
+  target.files = next.files;
+  target.chunks = next.chunks;
+  target.relations = next.relations;
 }
 
 export async function removeIndexedFile(
   client: ProvenaClient,
   state: IndexState,
   relativePath: string,
+  options: DeleteFileMemoriesOptions = {},
 ): Promise<number> {
-  const memoryIds = purgeFileFromIndexState(state, relativePath);
+  const next = structuredClone(state);
+  const memoryIds = purgeFileFromIndexState(next, relativePath);
   if (memoryIds.length === 0) {
     return 0;
   }
-  return deleteFileMemories(client, memoryIds);
+  const deleted = await deleteFileMemories(client, memoryIds, options);
+  commitIndexState(state, next);
+  return deleted;
 }
 
 export function incrementalCountsFromDiff(diff: IndexDiff): IncrementalCounts {

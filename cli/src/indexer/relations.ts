@@ -21,6 +21,7 @@ const SEMANTIC_CHUNK_KINDS = new Set([
   "method",
   "interface",
   "type_alias",
+  "artifact",
 ]);
 
 export type RelationScope = "all" | "intra-file" | "cross-file";

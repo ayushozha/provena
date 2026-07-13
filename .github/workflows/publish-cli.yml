@@ -9,8 +9,13 @@ permissions:
   contents: read
 
 jobs:
-  test-and-publish:
+  test:
+    name: Test on Node ${{ matrix.node }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["18.14.1", "22.x", "24.x"]
     defaults:
       run:
         working-directory: cli
@@ -19,24 +24,50 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: cli/package-lock.json
-          registry-url: https://registry.npmjs.org
 
-      - name: Install Python (store e2e tests spawn uvicorn)
+      - name: Install Python for governed-store tests
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - run: pip install -e ..
-        working-directory: cli
-
       - run: npm ci
       - run: npm test
-      - run: node tests/pack-install.test.mjs
+      - run: npm audit --omit=dev --audit-level=high
 
-      - name: Publish to npm
-        run: npm publish --access public
+  publish:
+    name: Publish with provenance
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#cli-v}"
+          package_version="$(node -p "require('./package.json').version")"
+          test "$tag_version" = "$package_version"
+
+      - name: Publish to npm with provenance
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -149,7 +149,13 @@ export class ProvenaClient {
   }
 
   async createMemory(payload: MemoryCreate): Promise<MemoryWriteResult> {
-    if (this.intelligenceUrl) {
+    // Generated code memories already have deterministic semantic boundaries.
+    // Sending them through fact extraction can split one indexed chunk into
+    // several records and destroy the source-identity contract.
+    if (
+      this.intelligenceUrl &&
+      typeof payload.metadata?.provena_generated_fingerprint !== "string"
+    ) {
       return this.pipelineWrite(payload);
     }
     return this.postJson<MemoryWriteResult>("/v1/memories", payload);
