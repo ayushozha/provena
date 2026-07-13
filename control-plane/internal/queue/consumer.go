@@ -13,10 +13,10 @@ import (
 
 // WriteItem represents a unit of work to be written to the pipeline.
 type WriteItem struct {
-	ID        string
-	TenantID  string
-	Payload   []byte
-	CreatedAt time.Time
+	ID        string    `json:"id"`
+	TenantID  string    `json:"tenant_id"`
+	Payload   []byte    `json:"payload"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // QueueStats holds runtime statistics about the write queue.
