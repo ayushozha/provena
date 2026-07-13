@@ -121,9 +121,44 @@ func RateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 
 // ProxyHandler forwards requests to an upstream URL, propagating context and timeout.
 type ProxyHandler struct {
-	UpstreamURL string
-	RewritePath string
-	Client      *http.Client
+	UpstreamURL        string
+	RewritePath        string
+	Client             *http.Client
+	UpstreamCredential *UpstreamCredential
+}
+
+// UpstreamCredential is the gateway's private transport credential for
+// authenticated store, intelligence, and lifecycle calls. Caller identity is
+// carried separately in the validated AuthContext.
+type UpstreamCredential struct {
+	token string
+}
+
+// LoadUpstreamCredential loads the private gateway-to-service bearer. Explicit
+// local no-auth mode does not create a trusted assertion channel; production
+// gateway auth fails closed when the credential is absent.
+func LoadUpstreamCredential(getenv func(string) string, required bool) (*UpstreamCredential, error) {
+	if !required {
+		return nil, nil
+	}
+	token := strings.TrimSpace(getenv("PROVENA_GATEWAY_SERVICE_TOKEN"))
+	if token == "" {
+		return nil, fmt.Errorf("PROVENA_GATEWAY_SERVICE_TOKEN is required when gateway auth is enabled")
+	}
+	return &UpstreamCredential{token: token}, nil
+}
+
+// ValidateCredentialSeparation rejects an internal bearer that is also a valid
+// external gateway API key. That prevents configuration from collapsing the
+// caller and service trust boundaries back into one credential.
+func (credential *UpstreamCredential) ValidateCredentialSeparation(keyStore *auth.KeyStore) error {
+	if credential == nil {
+		return nil
+	}
+	if _, reused := keyStore.Validate(credential.token); reused {
+		return fmt.Errorf("PROVENA_GATEWAY_SERVICE_TOKEN must not match an external gateway API key")
+	}
+	return nil
 }
 
 // NewProxyHandler creates a proxy handler with the given upstream URL and timeout.
@@ -134,14 +169,52 @@ func NewProxyHandler(upstreamURL string, timeout time.Duration) *ProxyHandler {
 	}
 }
 
+// WithUpstreamCredential returns a shallow copy that authenticates to its
+// upstream with the supplied private transport credential.
+func (ph *ProxyHandler) WithUpstreamCredential(credential *UpstreamCredential) *ProxyHandler {
+	return &ProxyHandler{
+		UpstreamURL:        ph.UpstreamURL,
+		RewritePath:        ph.RewritePath,
+		Client:             ph.Client,
+		UpstreamCredential: credential,
+	}
+}
+
 // WithRewritePath returns a shallow copy of the handler that rewrites the
 // forwarded request path to a fixed upstream path.
 func (ph *ProxyHandler) WithRewritePath(path string) *ProxyHandler {
 	return &ProxyHandler{
-		UpstreamURL: ph.UpstreamURL,
-		RewritePath: path,
-		Client:      ph.Client,
+		UpstreamURL:        ph.UpstreamURL,
+		RewritePath:        path,
+		Client:             ph.Client,
+		UpstreamCredential: ph.UpstreamCredential,
 	}
+}
+
+func isCallerCredentialHeader(name string) bool {
+	switch http.CanonicalHeaderKey(name) {
+	case "Authorization", "Proxy-Authorization", "X-Tenant-Id", "X-Provena-Tenant-Id", "X-Provena-Role", "X-Provena-Key-Id", "X-Provena-Principal-Id", "X-Provena-Groups":
+		return true
+	default:
+		return false
+	}
+}
+
+func applyAuthContext(header http.Header, ac *auth.AuthContext) {
+	header.Set("X-Provena-Tenant-Id", ac.TenantID)
+	header.Set("X-Provena-Role", string(ac.Role))
+	header.Set("X-Provena-Key-Id", ac.KeyID)
+	if ac.PrincipalID != "" {
+		header.Set("X-Provena-Principal-Id", ac.PrincipalID)
+	}
+	if len(ac.Groups) > 0 {
+		header.Set("X-Provena-Groups", strings.Join(ac.Groups, ","))
+	}
+}
+
+func (credential *UpstreamCredential) apply(header http.Header, ac *auth.AuthContext) {
+	header.Set("Authorization", "Bearer "+credential.token)
+	applyAuthContext(header, ac)
 }
 
 // ServeHTTP forwards the request to the upstream service.
@@ -162,20 +235,22 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for k, vv := range r.Header {
+		if isCallerCredentialHeader(k) {
+			continue
+		}
 		for _, v := range vv {
 			req.Header.Add(k, v)
 		}
 	}
-	if ac, ok := auth.FromContext(ctx); ok {
-		req.Header.Set("X-Provena-Tenant-Id", ac.TenantID)
-		req.Header.Set("X-Provena-Role", string(ac.Role))
-		req.Header.Set("X-Provena-Key-Id", ac.KeyID)
-		if ac.PrincipalID != "" {
-			req.Header.Set("X-Provena-Principal-Id", ac.PrincipalID)
+	ac, authenticated := auth.FromContext(ctx)
+	if ph.UpstreamCredential != nil {
+		if !authenticated {
+			http.Error(w, `{"error":"authenticated gateway context required"}`, http.StatusInternalServerError)
+			return
 		}
-		if len(ac.Groups) > 0 {
-			req.Header.Set("X-Provena-Groups", strings.Join(ac.Groups, ","))
-		}
+		ph.UpstreamCredential.apply(req.Header, ac)
+	} else if authenticated {
+		applyAuthContext(req.Header, ac)
 	}
 
 	resp, err := ph.Client.Do(req)
@@ -256,6 +331,15 @@ func (ha *HealthAggregator) CheckAll(ctx context.Context) []ServiceHealth {
 
 // HealthHandler returns an HTTP handler that aggregates health checks.
 func HealthHandler(ha *HealthAggregator) http.HandlerFunc {
+	return aggregateHealthHandler(ha, "healthy", "degraded")
+}
+
+// ReadinessHandler returns 503 until every configured upstream is healthy.
+func ReadinessHandler(ha *HealthAggregator) http.HandlerFunc {
+	return aggregateHealthHandler(ha, "ready", "blocked")
+}
+
+func aggregateHealthHandler(ha *HealthAggregator, readyStatus, blockedStatus string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		results := ha.CheckAll(r.Context())
 		allHealthy := true
@@ -269,13 +353,16 @@ func HealthHandler(ha *HealthAggregator) http.HandlerFunc {
 			Status   string          `json:"status"`
 			Services []ServiceHealth `json:"services"`
 		}{
-			Status:   "healthy",
+			Status:   readyStatus,
 			Services: results,
 		}
 		if !allHealthy {
-			resp.Status = "degraded"
+			resp.Status = blockedStatus
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if !allHealthy {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
 		json.NewEncoder(w).Encode(resp)
 	}
 }

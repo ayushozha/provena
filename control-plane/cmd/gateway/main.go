@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
@@ -47,19 +46,28 @@ func main() {
 		logger.Error("failed to load API keys", "error", err)
 		os.Exit(1)
 	}
+	upstreamCredential, err := gateway.LoadUpstreamCredential(os.Getenv, authEnabled)
+	if err != nil {
+		logger.Error("failed to load gateway upstream credential", "error", err)
+		os.Exit(1)
+	}
+	if err := upstreamCredential.ValidateCredentialSeparation(keyStore); err != nil {
+		logger.Error("invalid gateway credential configuration", "error", err)
+		os.Exit(1)
+	}
 
 	rl := gateway.NewRateLimiter(100, 200)
 	ha := gateway.NewHealthAggregator(map[string]string{
 		"orchestration": orchestrationURL + "/healthz",
 		"intelligence":  intelligenceURL + "/healthz",
-		"store":         storeURL + "/healthz",
+		"store":         storeURL + "/readyz",
 		"lifecycle":     lifecycleURL + "/healthz",
 	})
 
 	orchestrationProxy := gateway.NewProxyHandler(orchestrationURL, 30*time.Second)
-	intelligenceProxy := gateway.NewProxyHandler(intelligenceURL, 30*time.Second)
-	storeProxy := gateway.NewProxyHandler(storeURL, 30*time.Second)
-	lifecycleProxy := gateway.NewProxyHandler(lifecycleURL, 30*time.Second)
+	intelligenceProxy := gateway.NewProxyHandler(intelligenceURL, 30*time.Second).WithUpstreamCredential(upstreamCredential)
+	storeProxy := gateway.NewProxyHandler(storeURL, 30*time.Second).WithUpstreamCredential(upstreamCredential)
+	lifecycleProxy := gateway.NewProxyHandler(lifecycleURL, 30*time.Second).WithUpstreamCredential(upstreamCredential)
 
 	mux := http.NewServeMux()
 
@@ -67,6 +75,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))
 	})
+	mux.Handle("GET /readyz", gateway.ReadinessHandler(ha))
 	mux.HandleFunc("GET /metrics", observability.MetricsHandler())
 	mux.Handle("GET /ui/observability", storeProxy)
 	mux.Handle("GET /ui/assets/{file...}", storeProxy)
@@ -114,14 +123,7 @@ func main() {
 	mux.Handle("POST /v1/preflight", orchestrationProxy.WithRewritePath("/preflight"))
 	mux.Handle("GET /v1/lifecycle/healthz", lifecycleProxy.WithRewritePath("/healthz"))
 
-	mux.HandleFunc("GET /v1/cold-start", func(w http.ResponseWriter, r *http.Request) {
-		results := ha.CheckAll(r.Context())
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"status":   "ready",
-			"services": results,
-		})
-	})
+	mux.Handle("GET /v1/cold-start", gateway.ReadinessHandler(ha))
 
 	var handler http.Handler = mux
 	// WritePermission must be wrapped *before* Auth so that Auth runs first

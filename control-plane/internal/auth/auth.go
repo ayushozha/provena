@@ -48,6 +48,8 @@ type APIKey struct {
 	KeyID       string    `json:"key_id"`
 	TenantID    string    `json:"tenant_id"`
 	Role        Role      `json:"role"`
+	PrincipalID string    `json:"principal_id,omitempty"`
+	Groups      []string  `json:"groups,omitempty"`
 	HashedKey   string    `json:"hashed_key"`
 	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -124,10 +126,22 @@ func (ks *KeyStore) Validate(rawToken string) (*AuthContext, bool) {
 			if !key.ExpiresAt.IsZero() && time.Now().After(key.ExpiresAt) {
 				return nil, false
 			}
+			principalID := strings.TrimSpace(key.PrincipalID)
+			if principalID == "" {
+				principalID = key.KeyID
+			}
+			groups := make([]string, 0, len(key.Groups))
+			for _, group := range key.Groups {
+				if group = strings.TrimSpace(group); group != "" {
+					groups = append(groups, group)
+				}
+			}
 			return &AuthContext{
-				KeyID:    key.KeyID,
-				TenantID: key.TenantID,
-				Role:     key.Role,
+				KeyID:       key.KeyID,
+				TenantID:    key.TenantID,
+				Role:        key.Role,
+				PrincipalID: principalID,
+				Groups:      groups,
 			}, true
 		}
 	}
@@ -139,6 +153,10 @@ func (ks *KeyStore) Validate(rawToken string) (*AuthContext, bool) {
 func AuthMiddleware(ks *KeyStore, authEnabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+				next.ServeHTTP(w, r)
+				return
+			}
 			if !authEnabled {
 				ctx := context.WithValue(r.Context(), authContextKey, &AuthContext{
 					KeyID:       "anonymous",
@@ -164,12 +182,6 @@ func AuthMiddleware(ks *KeyStore, authEnabled bool) func(http.Handler) http.Hand
 				return
 			}
 
-			ac.PrincipalID = strings.TrimSpace(r.Header.Get("X-Provena-Principal-Id"))
-			if ac.PrincipalID == "" {
-				ac.PrincipalID = ac.KeyID
-			}
-			ac.Groups = splitCSV(r.Header.Get("X-Provena-Groups"))
-
 			ctx := context.WithValue(r.Context(), authContextKey, ac)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -192,6 +204,7 @@ func splitCSV(value string) []string {
 }
 
 // WritePermissionMiddleware rejects viewer keys on mutating memory routes.
+// POST /v1/memories/search is explicitly read-only despite its HTTP method.
 func WritePermissionMiddleware(next http.Handler) http.Handler {
 	writePrefixes := []string{
 		"/v1/memories",
@@ -201,11 +214,24 @@ func WritePermissionMiddleware(next http.Handler) http.Handler {
 		"/v1/agent/context",
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if strings.HasPrefix(path, "/v1/admin/") {
+			ac, ok := FromContext(r.Context())
+			if !ok || !HasPermission(ac.Role, AdminPerm) {
+				http.Error(w, `{"error":"admin access required"}`, http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
 		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
 			next.ServeHTTP(w, r)
 			return
 		}
-		path := r.URL.Path
+		if r.Method == http.MethodPost && path == "/v1/memories/search" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		needsWrite := false
 		for _, prefix := range writePrefixes {
 			if strings.HasPrefix(path, prefix) {
