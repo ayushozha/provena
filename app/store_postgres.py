@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,14 @@ from app.pg_connection import OperationalError, PostgresConnection
 from app.store import AccessContext, ProvenaStore, SearchCandidate, SearchRequest
 
 POSTGRES_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "storage" / "migrations" / "001_postgres.sql"
+POSTGRES_TENANT_INTEGRITY_MIGRATION_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "storage"
+    / "migrations"
+    / "002_tenant_integrity_postgres.sql"
+)
+POSTGRES_INTEGRITY_LOCK_NAMESPACE = 0x5052564E  # "PRVN"
+POSTGRES_TENANT_INTEGRITY_MIGRATION_LOCK = 2
 
 
 class PostgresStore(ProvenaStore):
@@ -24,14 +33,28 @@ class PostgresStore(ProvenaStore):
         vector_dimensions: int = 768,
     ) -> None:
         self.conn = PostgresConnection.connect(database_url)
-        self.hot_cache = hot_cache or InMemoryHotCache(ttl_seconds=300)
-        self.vector_dimensions = vector_dimensions
-        self.vec_enabled = False
-        self._ensure_schema()
-        self._ensure_compatibility()
+        try:
+            self.hot_cache = hot_cache or InMemoryHotCache(ttl_seconds=300)
+            self.vector_dimensions = vector_dimensions
+            self.vec_enabled = False
+            self._initialize_schema()
+        except Exception:
+            self.conn.close()
+            raise
 
     def close(self) -> None:
         self.conn.close()
+
+    def _begin_immediate_write(self) -> None:
+        # SQLite's BEGIN IMMEDIATE serializes governance mutations. PostgreSQL
+        # needs an equivalent transaction-scoped fence so a committed legal
+        # hold cannot race with a hard delete on another connection. The two
+        # integer keys are a database-local namespace for Provena integrity
+        # writes; the lock is released automatically at commit or rollback.
+        self.conn.execute(
+            "SELECT pg_advisory_xact_lock(?, ?)",
+            (POSTGRES_INTEGRITY_LOCK_NAMESPACE, 1),
+        )
 
     def update_memory(self, memory_id: str, payload, access: AccessContext | None = None):
         try:
@@ -41,6 +64,16 @@ class PostgresStore(ProvenaStore):
 
     def _ensure_schema(self) -> None:
         self.conn.executescript(POSTGRES_SCHEMA_PATH.read_text(encoding="utf-8"))
+
+    def _initialize_schema(self) -> None:
+        # One transaction-scoped lock covers the canonical schema replay,
+        # compatibility columns, and the check-then-add constraint upgrade.
+        # This makes concurrent replica startup a serialized, idempotent path.
+        with self.conn:
+            self._acquire_tenant_integrity_migration_lock()
+            self._ensure_schema()
+            self._ensure_compatibility()
+            self._ensure_tenant_integrity_locked()
 
     def _ensure_compatibility(self) -> None:
         rows = self.conn.execute(
@@ -52,6 +85,7 @@ class PostgresStore(ProvenaStore):
         ).fetchall()
         columns = {row["column_name"] for row in rows}
         migrations = {
+            "create_request_digest": "ALTER TABLE memories ADD COLUMN IF NOT EXISTS create_request_digest TEXT",
             "embedding_model": "ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_model TEXT",
             "embedding_json": "ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_json JSONB",
             "acl_json": "ALTER TABLE memories ADD COLUMN IF NOT EXISTS acl_json TEXT NOT NULL DEFAULT '[]'",
@@ -66,10 +100,81 @@ class PostgresStore(ProvenaStore):
             "expires_at": "ALTER TABLE memories ADD COLUMN IF NOT EXISTS expires_at TEXT",
             "search_vector": "ALTER TABLE memories ADD COLUMN IF NOT EXISTS search_vector tsvector",
         }
+        for column, statement in migrations.items():
+            if column not in columns:
+                self.conn.execute(statement)
+
+    @staticmethod
+    def _postgres_tenant_integrity_migration() -> tuple[
+        list[str],
+        list[tuple[str, str, str]],
+    ]:
+        indexes: list[str] = []
+        constraints: list[tuple[str, str, str]] = []
+        for statement in PostgresStore._migration_statements(
+            POSTGRES_TENANT_INTEGRITY_MIGRATION_PATH
+        ):
+            match = re.search(
+                r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+CONSTRAINT\s+(\w+)",
+                statement,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if match:
+                constraints.append((match.group(1), match.group(2), statement))
+            else:
+                indexes.append(statement)
+        return indexes, constraints
+
+    def _postgres_constraint_validated(self, table: str, name: str) -> bool | None:
+        row = self.conn.execute(
+            """
+            SELECT constraint_record.convalidated
+            FROM pg_constraint AS constraint_record
+            WHERE constraint_record.conrelid = ?::regclass
+              AND constraint_record.conname = ?
+            """,
+            (table, name),
+        ).fetchone()
+        return bool(row["convalidated"]) if row is not None else None
+
+    def _acquire_tenant_integrity_migration_lock(self) -> None:
+        self.conn.execute(
+            "SELECT pg_advisory_xact_lock(?, ?)",
+            (
+                POSTGRES_INTEGRITY_LOCK_NAMESPACE,
+                POSTGRES_TENANT_INTEGRITY_MIGRATION_LOCK,
+            ),
+        )
+
+    def _ensure_tenant_integrity(self) -> None:
         with self.conn:
-            for column, statement in migrations.items():
-                if column not in columns:
-                    self.conn.execute(statement)
+            self._acquire_tenant_integrity_migration_lock()
+            self._ensure_tenant_integrity_locked()
+
+    def _ensure_tenant_integrity_locked(self) -> None:
+        self._tenant_integrity_backend = "postgresql"
+        indexes, constraints = self._postgres_tenant_integrity_migration()
+        for statement in indexes:
+            self.conn.execute(statement)
+        for table, name, statement in constraints:
+            if self._postgres_constraint_validated(table, name) is None:
+                self.conn.execute(statement)
+
+        # NOT VALID constraints already protect every concurrent/new row.
+        # Audit the legacy rows in the same transaction, and only mark the
+        # constraints valid when that audit proves the pre-existing data is
+        # tenant-coupled too.
+        issues = self._audit_tenant_integrity()
+        if not any(issues.values()):
+            for table, name, _statement in constraints:
+                if self._postgres_constraint_validated(table, name) is not True:
+                    self.conn.execute(f"ALTER TABLE {table} VALIDATE CONSTRAINT {name}")
+
+        self._tenant_integrity_issues = issues
+        self._tenant_integrity_constraints_validated = not any(issues.values()) and all(
+            self._postgres_constraint_validated(table, name) is True
+            for table, name, _statement in constraints
+        )
 
     def _init_vector_index(self) -> bool:
         # pgvector KNN is PLAN-16; linear cosine scan fallback is used until then.
@@ -165,7 +270,9 @@ class PostgresStore(ProvenaStore):
         entity_type: str | None = None,
     ) -> str:
         now = self._iso_now()
+        self._begin_immediate_write()
         with self.conn:
+            self._ensure_tenant_owned_id("entity_registry", entity_id, tenant_id)
             self.conn.execute(
                 """
                 INSERT INTO entity_registry (

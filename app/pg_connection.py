@@ -53,6 +53,7 @@ def _adapt_sql(statement: str) -> str:
     adapted = re.sub(r"\bINSERT OR IGNORE INTO\b", "INSERT INTO", adapted, flags=re.IGNORECASE)
     adapted = re.sub(r"\bdatetime\(([^)]+)\)", r"\1", adapted, flags=re.IGNORECASE)
     adapted = re.sub(r",\s*rowid\s+DESC", "", adapted, flags=re.IGNORECASE)
+    adapted = re.sub(r"\s+ORDER BY\s+rowid\s+(?:ASC|DESC)\b", "", adapted, flags=re.IGNORECASE)
     adapted = adapted.replace("?", "%s")
     return adapted
 
@@ -82,6 +83,10 @@ class PostgresCursor:
 
     def fetchall(self) -> list[PostgresRow]:
         return [PostgresRow(row) for row in self._cursor.fetchall()]
+
+    @property
+    def rowcount(self) -> int:
+        return self._cursor.rowcount
 
 
 def _maybe_add_on_conflict(original: str, adapted: str) -> tuple[str, str | None]:
@@ -113,7 +118,7 @@ def _maybe_add_on_conflict(original: str, adapted: str) -> tuple[str, str | None
     target, action = conflict_targets[table]
     if action == "DO NOTHING":
         return adapted, f"ON CONFLICT ({target}) DO NOTHING"
-    return adapted, f"ON CONFLICT ({target}) {action}"
+    return adapted, f"ON CONFLICT ({target}) DO {action}"
 
 
 class PostgresConnection:
