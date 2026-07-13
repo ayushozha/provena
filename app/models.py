@@ -229,6 +229,14 @@ class HealthResponse(BaseModel):
     status: str
 
 
+class TenantIntegrityStatus(BaseModel):
+    status: str
+    ready: bool
+    backend: str
+    constraints_validated: bool
+    issues: dict[str, int] = Field(default_factory=dict)
+
+
 class ConnectorProvider(str, Enum):
     # Membership here only validates the provider field on connector records;
     # it does NOT imply a shipped first-party sync worker for that provider.
