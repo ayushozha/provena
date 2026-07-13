@@ -110,6 +110,31 @@ class WriteResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Living-memory capture
+# ---------------------------------------------------------------------------
+
+class CaptureRequest(BaseModel):
+    text: str
+    signal_type: str = "message"
+    scope: dict[str, Any] = Field(default_factory=dict)
+    source_references: list[SourceReference | str | dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    error_signature: str = ""
+
+
+class CaptureResultItem(BaseModel):
+    created: bool
+    kind: str
+    memory_id: str | None = None
+    superseded_id: str | None = None
+    reason: str = ""
+
+
+class CaptureResponse(BaseModel):
+    results: list[CaptureResultItem] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Read / Search pipeline
 # ---------------------------------------------------------------------------
 

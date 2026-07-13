@@ -1,0 +1,16 @@
+{
+  "tasks": [
+    {
+      "id": "task-1",
+      "prompt": "Add a workflow rule that says use pnpm not npm",
+      "expected_keywords": ["pnpm", "npm", "workflow"],
+      "brain_keywords": ["workflow", "pnpm"]
+    },
+    {
+      "id": "task-2",
+      "prompt": "Avoid repeating the TypeError on undefined foo property",
+      "expected_keywords": ["mistake", "foo", "TypeError"],
+      "brain_keywords": ["mistake", "do not repeat"]
+    }
+  ]
+}

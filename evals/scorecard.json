@@ -1,0 +1,59 @@
+{
+  "timestamp": "2026-07-05T08:31:36.027436+00:00",
+  "scope": {
+    "tenant_id": "eval",
+    "project_id": "cold-start"
+  },
+  "benchmarks": {
+    "code_recall": {
+      "hit_rate@1": 0.5,
+      "hit_rate@5": 0.8,
+      "mrr": 0.6333,
+      "avg_tokens": 4223,
+      "queries_scored": 10,
+      "files_indexed": 10,
+      "mode": "live_pipeline"
+    },
+    "agent_in_the_loop": {
+      "without_brain_avg": 0.0,
+      "with_brain_avg": 1.0,
+      "lift_delta": 1.0,
+      "tasks_scored": 2,
+      "mode": "live_capture_and_search"
+    },
+    "mistake_recall": {
+      "mistake_created": true,
+      "mistake_recalled_in_context": true,
+      "pass": true,
+      "mode": "live_capture"
+    },
+    "stale_fact_suppression": {
+      "active_top_id": "3ea238e7-8eef-4412-b999-697f897ac9ac",
+      "stale_rank": 2,
+      "stale_demoted": true,
+      "pass": true,
+      "mode": "live_store"
+    },
+    "secret_not_stored": {
+      "redacted": true,
+      "stored_excerpt": "Use deploy key [REDACTED] not [REDACTED] for releases",
+      "pass": true,
+      "mode": "live_store_readback"
+    },
+    "cold_start": {
+      "metrics": {
+        "entity_recall": 0.0,
+        "decision_recall": 0.0,
+        "summary_quality": 0.0
+      },
+      "skipped": false,
+      "mode": "live_overview"
+    }
+  },
+  "headline": {
+    "brain_lift_delta": 1.0,
+    "mistake_recall_pass": true,
+    "code_recall_hit_rate@5": 0.8
+  },
+  "elapsed_seconds": 5.168
+}
