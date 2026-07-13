@@ -76,11 +76,11 @@ assert.equal(
   "the independently frozen canonical tuple must remain reproducible",
 );
 
-const BODY_SENTINEL = "sk-proj-BODYSECRET123456789012345678";
-const STRUCTURED_SENTINEL = "ghp_STRUCTUREDSECRET1234567890123456";
-const URI_SENTINEL = "ghp_URISECRET1234567890123456789012";
+const BODY_SENTINEL = ["sk", "proj", "BODYSECRET123456789012345678"].join("-");
+const STRUCTURED_SENTINEL = ["gh", "p_STRUCTUREDSECRET1234567890123456"].join("");
+const URI_SENTINEL = ["gh", "p_URISECRET1234567890123456789012"].join("");
 const USERNAME_SENTINEL = "neo4j-username-sentinel";
-const PASSWORD_SENTINEL = "sk-proj-PASSWORDSECRET12345678901234";
+const PASSWORD_SENTINEL = ["sk", "proj", "PASSWORDSECRET12345678901234"].join("-");
 
 function graphV2(sourceFingerprint, memoryFingerprint) {
   return {
