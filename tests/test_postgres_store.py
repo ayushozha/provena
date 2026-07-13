@@ -134,7 +134,7 @@ def test_write_relation(postgres_store: PostgresStore, unique_tenant: str) -> No
         access=access,
     )
     related = postgres_store._related_memories(first.memory.memory_id, access)
-    assert any(item.memory_id == second.memory.memory_id for item in related)
+    assert any(item.memory.memory_id == second.memory.memory_id for item in related)
 
 
 def test_entity_registry(postgres_store: PostgresStore, unique_tenant: str) -> None:
