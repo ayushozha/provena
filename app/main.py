@@ -1,6 +1,10 @@
 from contextlib import asynccontextmanager
+from hashlib import sha256
+from secrets import compare_digest
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.connector_scheduler import ConnectorSchedulerService
@@ -36,8 +40,9 @@ from app.models import (
     SourcePermissionBatch,
     SourcePermissionGrant,
     SyncJob,
+    TenantIntegrityStatus,
 )
-from app.store import AccessContext
+from app.store import AccessContext, TenantOwnershipError, TenantParentNotFoundError
 from app.store_factory import create_store
 
 
@@ -65,7 +70,109 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    @app.middleware("http")
+    async def require_tenant_integrity_readiness(request: Request, call_next):
+        if request.url.path.startswith("/v1/"):
+            integrity = request.app.state.store.tenant_integrity_status()
+            if not integrity["ready"]:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "detail": "store tenant-integrity migration requires operator attention"
+                    },
+                )
+        return await call_next(request)
+
+    @app.exception_handler(TenantOwnershipError)
+    async def tenant_ownership_conflict(
+        _request: Request,
+        _exc: TenantOwnershipError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "resource identifier is already owned by another tenant"},
+        )
+
+    @app.exception_handler(TenantParentNotFoundError)
+    async def tenant_parent_not_found(
+        _request: Request,
+        exc: TenantParentNotFoundError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"{exc.resource} not found"},
+        )
+
     def extract_access(request: Request) -> AccessContext | None:
+        configured_token = (
+            settings.service_token.get_secret_value().strip()
+            if settings.service_token
+            else ""
+        )
+        gateway_token = (
+            settings.gateway_service_token.get_secret_value().strip()
+            if settings.gateway_service_token
+            else ""
+        )
+        if configured_token or gateway_token or settings.service_identities:
+            scheme, _, credential = request.headers.get("Authorization", "").partition(" ")
+            presented = credential.strip()
+            if scheme.lower() != "bearer" or not presented:
+                raise HTTPException(status_code=401, detail="valid service bearer token required")
+            presented_digest = sha256(presented.encode("utf-8")).hexdigest()
+            matched_identity = None
+            for identity in settings.service_identities:
+                if compare_digest(presented_digest, identity.token_sha256):
+                    matched_identity = identity
+            legacy_match = bool(configured_token) and compare_digest(presented, configured_token)
+            gateway_match = bool(gateway_token) and compare_digest(presented, gateway_token)
+            if matched_identity is None and not legacy_match and not gateway_match:
+                raise HTTPException(status_code=401, detail="valid service bearer token required")
+            if gateway_match:
+                role = request.headers.get("X-Provena-Role", "").strip().lower()
+                tenant_id = request.headers.get("X-Provena-Tenant-Id", "").strip()
+                principal_id = request.headers.get("X-Provena-Principal-Id", "").strip()
+                key_id = request.headers.get("X-Provena-Key-Id", "").strip()
+                if (
+                    role not in {"viewer", "editor", "admin", "superadmin"}
+                    or not principal_id
+                    or not key_id
+                    or (role != "superadmin" and not tenant_id)
+                ):
+                    raise HTTPException(
+                        status_code=401,
+                        detail="valid gateway identity headers required",
+                    )
+                return AccessContext(
+                    tenant_id=tenant_id or None,
+                    role=role,
+                    principal_id=principal_id,
+                    key_id=key_id,
+                    groups=[
+                        group.strip()
+                        for group in request.headers.get("X-Provena-Groups", "").split(",")
+                        if group.strip()
+                    ],
+                )
+            if matched_identity is not None:
+                return AccessContext(
+                    tenant_id=matched_identity.tenant_id,
+                    role=matched_identity.role,
+                    principal_id=matched_identity.principal_id,
+                    key_id=f"service-registry:{matched_identity.token_sha256[:12]}",
+                    groups=["provena-service"],
+                )
+            return AccessContext(
+                tenant_id=settings.service_tenant_id,
+                role=settings.service_role,
+                principal_id=settings.service_principal_id,
+                key_id="service-token",
+                groups=["provena-service"],
+            )
+
+        if not settings.local_auth_bypass_enabled:
+            raise HTTPException(status_code=401, detail="service authentication required")
+
         tenant_id = request.headers.get("X-Provena-Tenant-Id")
         role = request.headers.get("X-Provena-Role")
         principal_id = request.headers.get("X-Provena-Principal-Id")
@@ -85,6 +192,14 @@ def create_app() -> FastAPI:
             groups=groups,
         )
 
+    def require_tenant(access: AccessContext | None, tenant_id: str) -> None:
+        if access is not None and access.role != "superadmin" and access.tenant_id != tenant_id:
+            raise HTTPException(status_code=403, detail="tenant mismatch")
+
+    def require_write(access: AccessContext | None) -> None:
+        if access is not None and access.role not in {"editor", "admin", "superadmin"}:
+            raise HTTPException(status_code=403, detail="write access required")
+
     def require_admin(access: AccessContext | None) -> None:
         if access is None:
             raise HTTPException(status_code=401, detail="authentication required")
@@ -92,6 +207,22 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=401, detail="authentication required")
         if access.role not in {"admin", "superadmin"}:
             raise HTTPException(status_code=403, detail="admin access required")
+
+    def _memory_value_error(exc: ValueError) -> HTTPException:
+        detail = str(exc)
+        if detail == "memory not found":
+            status = 404
+        elif detail == "memory already exists but is not accessible":
+            return HTTPException(status_code=404, detail="memory not found")
+        elif (
+            "duplicate" in detail.lower()
+            or "already exists" in detail.lower()
+            or "tombstoned" in detail.lower()
+        ):
+            status = 409
+        else:
+            status = 403
+        return HTTPException(status_code=status, detail=detail)
 
     @app.get("/healthz", response_model=HealthResponse)
     async def healthz() -> HealthResponse:
@@ -101,10 +232,23 @@ def create_app() -> FastAPI:
             status="ok",
         )
 
+    @app.get(
+        "/readyz",
+        response_model=TenantIntegrityStatus,
+        responses={503: {"model": TenantIntegrityStatus, "description": "Store not ready"}},
+    )
+    async def readyz(request: Request, response: Response) -> TenantIntegrityStatus:
+        integrity = request.app.state.store.tenant_integrity_status()
+        response.status_code = 200 if integrity["ready"] else 503
+        return TenantIntegrityStatus(**integrity)
+
     @app.post("/v1/memories", response_model=MemoryWriteResult)
     async def create_memory(payload: MemoryCreate, request: Request) -> MemoryWriteResult:
+        access = extract_access(request)
+        require_write(access)
+        require_tenant(access, payload.scope.tenant_id)
         try:
-            return request.app.state.store.create_memory(payload, access=extract_access(request))
+            return request.app.state.store.create_memory(payload, access=access)
         except ValueError as exc:
             raise _memory_value_error(exc) from exc
 
@@ -121,15 +265,20 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/memories/search", response_model=SearchResponse)
     async def search_memories(payload: SearchRequest, request: Request) -> SearchResponse:
+        access = extract_access(request)
+        require_tenant(access, payload.scope.tenant_id)
         effective_limit = min(payload.limit, settings.max_limit)
         if effective_limit != payload.limit:
             payload = payload.model_copy(update={"limit": effective_limit})
-        return request.app.state.store.search_memories(payload, access=extract_access(request))
+        return request.app.state.store.search_memories(payload, access=access)
 
     @app.post("/v1/memories/relations", status_code=204)
     async def create_relation(payload: RelationWrite, request: Request) -> None:
+        access = extract_access(request)
+        require_write(access)
+        require_tenant(access, payload.scope.tenant_id)
         try:
-            request.app.state.store.write_relation(payload, access=extract_access(request))
+            request.app.state.store.write_relation(payload, access=access)
         except ValueError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -140,6 +289,7 @@ def create_app() -> FastAPI:
         hard_delete: bool = Query(default=False),
     ) -> DeleteResponse:
         access = extract_access(request)
+        require_write(access)
         existing = request.app.state.store.get_memory(memory_id, access=access)
         if not existing:
             raise HTTPException(status_code=404, detail="memory not found")
@@ -148,20 +298,12 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
 
-    def _memory_value_error(exc: ValueError) -> HTTPException:
-        detail = str(exc)
-        if detail == "memory not found":
-            status = 404
-        elif "duplicate" in detail.lower() or "tombstoned" in detail.lower():
-            status = 409
-        else:
-            status = 403
-        return HTTPException(status_code=status, detail=detail)
-
     @app.put("/v1/memories/{memory_id}", response_model=MemoryWriteResult)
     async def update_memory(memory_id: str, payload: MemoryUpdate, request: Request) -> MemoryWriteResult:
+        access = extract_access(request)
+        require_write(access)
         try:
-            return request.app.state.store.update_memory(memory_id, payload, access=extract_access(request))
+            return request.app.state.store.update_memory(memory_id, payload, access=access)
         except ValueError as exc:
             raise _memory_value_error(exc) from exc
 
@@ -183,8 +325,10 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/memories/{memory_id}/feedback", response_model=MemoryFeedbackRecord)
     async def add_memory_feedback(memory_id: str, payload: MemoryFeedbackCreate, request: Request) -> MemoryFeedbackRecord:
+        access = extract_access(request)
+        require_write(access)
         try:
-            return request.app.state.store.add_memory_feedback(memory_id, payload, access=extract_access(request))
+            return request.app.state.store.add_memory_feedback(memory_id, payload, access=access)
         except ValueError as exc:
             raise _memory_value_error(exc) from exc
 
@@ -203,12 +347,14 @@ def create_app() -> FastAPI:
     async def erase_memories(payload: EraseRequest, request: Request) -> EraseResponse:
         access = extract_access(request)
         require_admin(access)
+        require_tenant(access, payload.tenant_id)
         return request.app.state.store.erase_scope(payload, access=access)
 
     @app.post("/v1/project-snapshots", response_model=ProjectSnapshot)
     async def create_project_snapshot(payload: ProjectSnapshot, request: Request) -> ProjectSnapshot:
         access = extract_access(request)
         require_admin(access)
+        require_tenant(access, payload.tenant_id)
         return request.app.state.store.upsert_project_snapshot(payload)
 
     @app.get("/v1/project-snapshots/latest", response_model=ProjectSnapshot)
@@ -357,6 +503,7 @@ def create_app() -> FastAPI:
     async def save_retention_policy(payload: RetentionPolicy, request: Request) -> RetentionPolicy:
         access = extract_access(request)
         require_admin(access)
+        require_tenant(access, payload.tenant_id)
         return request.app.state.store.save_retention_policy(payload)
 
     @app.get("/v1/admin/retention-policies", response_model=list[RetentionPolicy])
@@ -374,13 +521,24 @@ def create_app() -> FastAPI:
     async def place_legal_hold(payload: LegalHold, request: Request) -> LegalHold:
         access = extract_access(request)
         require_admin(access)
+        require_tenant(access, payload.tenant_id)
         return request.app.state.store.place_legal_hold(payload)
 
     @app.delete("/v1/admin/legal-hold/{hold_id}")
     async def release_legal_hold(request: Request, hold_id: str, tenant_id: str = Query(default="")) -> dict[str, bool]:
         access = extract_access(request)
         require_admin(access)
-        released = app.state.store.release_legal_hold(hold_id, tenant_id=tenant_id or None)
+        if access is not None and access.role != "superadmin":
+            if not tenant_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="tenant_id is required for non-superadmin requests",
+                )
+            require_tenant(access, tenant_id)
+        released = app.state.store.release_legal_hold(
+            hold_id,
+            tenant_id=tenant_id or None,
+        )
         if not released:
             raise HTTPException(status_code=404, detail="legal hold not found")
         return {"released": True}
@@ -403,6 +561,33 @@ def create_app() -> FastAPI:
         elif access is not None and access.role != "superadmin" and access.tenant_id not in {None, payload.tenant_id}:
             raise HTTPException(status_code=403, detail="tenant mismatch")
         return request.app.state.store.enforce_retention(payload.tenant_id)
+
+    def openapi_schema() -> dict[str, object]:
+        if app.openapi_schema is not None:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            summary=app.summary,
+            description=app.description,
+            routes=app.routes,
+        )
+        security_schemes = schema.setdefault("components", {}).setdefault("securitySchemes", {})
+        security_schemes["ProvenaServiceBearer"] = {
+            "type": "http",
+            "scheme": "bearer",
+            "description": "Tenant-bound Provena service token.",
+        }
+        for path, path_item in schema["paths"].items():
+            if not path.startswith("/v1/"):
+                continue
+            for operation in path_item.values():
+                if isinstance(operation, dict) and "responses" in operation:
+                    operation["security"] = [{"ProvenaServiceBearer": []}]
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = openapi_schema
 
     return app
 

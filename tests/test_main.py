@@ -5,6 +5,7 @@ import time
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -126,6 +127,46 @@ class ProvenaApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
 
+    def test_readyz_blocks_data_plane_when_legacy_integrity_audit_is_dirty(self) -> None:
+        ready = self.client.get("/readyz")
+        self.assertEqual(ready.status_code, 200)
+        self.assertTrue(ready.json()["ready"])
+
+        blocked = {
+            "status": "blocked",
+            "ready": False,
+            "backend": "postgresql",
+            "constraints_validated": False,
+            "issues": {"connector_sources": 1},
+        }
+        store = self.client.app.state.store
+        with patch.object(store, "tenant_integrity_status", return_value=blocked):
+            readiness = self.client.get("/readyz")
+            data_plane = self.client.get("/v1/integrations/catalog")
+            liveness = self.client.get("/healthz")
+
+        self.assertEqual(readiness.status_code, 503)
+        self.assertEqual(data_plane.status_code, 503)
+        self.assertNotIn("connector_sources", data_plane.text)
+        self.assertEqual(liveness.status_code, 200)
+
+    def test_openapi_applies_service_bearer_only_to_v1(self) -> None:
+        schema = self.client.get("/openapi.json").json()
+        security_scheme = schema["components"]["securitySchemes"]["ProvenaServiceBearer"]
+        self.assertEqual(security_scheme["type"], "http")
+        self.assertEqual(security_scheme["scheme"], "bearer")
+        self.assertNotIn("security", schema["paths"]["/healthz"]["get"])
+        for path, path_item in schema["paths"].items():
+            if not path.startswith("/v1/"):
+                continue
+            for operation in path_item.values():
+                if isinstance(operation, dict) and "responses" in operation:
+                    self.assertEqual(
+                        operation["security"],
+                        [{"ProvenaServiceBearer": []}],
+                        msg=f"missing service bearer requirement on {path}",
+                    )
+
     def test_create_and_get_memory(self) -> None:
         payload = {
             "kind": "decision",
@@ -177,7 +218,7 @@ class ProvenaApiTests(unittest.TestCase):
             "entity_keys": ["authenticity"],
         }
         broad_response = self.client.post("/v1/memories", json=broad)
-        broad_id = broad_response.json()["memory"]["memory_id"]
+        self.assertEqual(broad_response.status_code, 200)
 
         refined = {
             "kind": "fact",
@@ -191,9 +232,9 @@ class ProvenaApiTests(unittest.TestCase):
             "content": "LinkedIn rewards authentic PM storytelling with evidence and penalties for automation abuse.",
             "tags": ["linkedin", "policy"],
             "entity_keys": ["authenticity"],
-            "supersedes_memory_id": broad_id,
         }
-        self.client.post("/v1/memories", json=refined)
+        refined_response = self.client.post("/v1/memories", json=refined)
+        self.assertEqual(refined_response.status_code, 200)
 
         search_response = self.client.post(
             "/v1/memories/search",
@@ -332,7 +373,10 @@ class ProvenaApiTests(unittest.TestCase):
         active_duplicate = self.client.post(
             "/v1/memories",
             json=payload,
-            headers=self._viewer_headers("tenant-acme", "unauthorized-viewer"),
+            headers={
+                **self._viewer_headers("tenant-acme", "unauthorized-viewer"),
+                "X-Provena-Role": "editor",
+            },
         )
         self.assertEqual(active_duplicate.status_code, 404)
         self.assertNotIn(memory_id, active_duplicate.text)
@@ -619,7 +663,10 @@ class ProvenaApiTests(unittest.TestCase):
                     {"source_type": "channel", "source_id": "src-private-user"}
                 ],
             },
-            headers=self._viewer_headers(principal_id="pm-1"),
+            headers={
+                **self._viewer_headers(principal_id="pm-1"),
+                "X-Provena-Role": "editor",
+            },
         )
         self.assertEqual(blocked_duplicate.status_code, 404)
         self.assertNotIn(blocked_memory, blocked_duplicate.text)
@@ -823,6 +870,60 @@ class ProvenaApiTests(unittest.TestCase):
         )
         self.assertEqual(blocked_get.status_code, 404)
 
+    def test_deterministic_create_retry_honors_connected_source_grants(self) -> None:
+        self._register_connected_fixture(
+            connector_id="conn-deterministic-retry",
+            sources=[
+                {
+                    "source_id": "src-deterministic-retry",
+                    "connector_id": "conn-deterministic-retry",
+                    "tenant_id": "tenant-acme",
+                    "remote_source_id": "C320",
+                    "source_type": "channel",
+                    "display_name": "#deterministic-retry",
+                }
+            ],
+            grants=[
+                {
+                    "grant_id": "grant-deterministic-owner",
+                    "source_id": "src-deterministic-retry",
+                    "connector_id": "conn-deterministic-retry",
+                    "tenant_id": "tenant-acme",
+                    "principal_type": "user",
+                    "principal_id": "pm-2",
+                    "permission_level": "view",
+                    "inherited": False,
+                }
+            ],
+        )
+        payload = {
+            "memory_id": "neverzero-context-source-gated",
+            "kind": "artifact",
+            "scope": {"tenant_id": "tenant-acme", "workspace_id": "ws-growth"},
+            "title": "Deterministic retry source grant",
+            "content": "A retry must not reveal a connected source memory.",
+            "source_references": [
+                {"source_type": "channel", "source_id": "src-deterministic-retry"}
+            ],
+        }
+        created = self.client.post("/v1/memories", json=payload)
+        self.assertEqual(created.status_code, 200)
+
+        blocked_retry = self.client.post(
+            "/v1/memories",
+            json=payload,
+            headers={
+                "X-Provena-Tenant-Id": "tenant-acme",
+                "X-Provena-Role": "editor",
+                "X-Provena-Principal-Id": "pm-1",
+            },
+        )
+        self.assertEqual(blocked_retry.status_code, 404)
+        self.assertEqual(
+            blocked_retry.json()["detail"],
+            "memory not found",
+        )
+
     def test_connected_source_mapping_and_grant_joins_stay_scoped(self) -> None:
         self._register_connected_fixture(
             connector_id="conn-retrieval-mapping",
@@ -907,7 +1008,8 @@ class ProvenaApiTests(unittest.TestCase):
             },
             headers=self._admin_headers(),
         )
-        self.assertEqual(wrong_connector_grant.status_code, 200)
+        self.assertEqual(wrong_connector_grant.status_code, 404)
+        self.assertEqual(wrong_connector_grant.json(), {"detail": "source not found"})
 
         self._register_connected_fixture(
             connector_id="conn-foreign-tenant",
@@ -941,7 +1043,8 @@ class ProvenaApiTests(unittest.TestCase):
             },
             headers=self._admin_headers("tenant-other"),
         )
-        self.assertEqual(foreign_grant.status_code, 200)
+        self.assertEqual(foreign_grant.status_code, 404)
+        self.assertEqual(foreign_grant.json(), {"detail": "source not found"})
 
         mapped_search = self.client.post(
             "/v1/memories/search",
@@ -1117,6 +1220,148 @@ class ProvenaApiTests(unittest.TestCase):
         self.assertEqual(released.status_code, 200)
         self.assertFalse(released.json()["held"])
         self.assertEqual(released.json()["status"], "active")
+
+    def test_tenant_admin_cannot_release_another_tenants_legal_hold(self) -> None:
+        placed = self.client.post(
+            "/v1/admin/legal-hold",
+            json={
+                "hold_id": "hold-tenant-bound",
+                "tenant_id": "tenant-acme",
+                "reason": "tenant boundary proof",
+            },
+            headers=self._admin_headers("tenant-acme"),
+        )
+        self.assertEqual(placed.status_code, 200)
+
+        missing_tenant = self.client.delete(
+            "/v1/admin/legal-hold/hold-tenant-bound",
+            headers=self._admin_headers("tenant-other"),
+        )
+        self.assertEqual(missing_tenant.status_code, 403)
+
+        cross_tenant = self.client.delete(
+            "/v1/admin/legal-hold/hold-tenant-bound?tenant_id=tenant-acme",
+            headers=self._admin_headers("tenant-other"),
+        )
+        self.assertEqual(cross_tenant.status_code, 403)
+
+        released = self.client.delete(
+            "/v1/admin/legal-hold/hold-tenant-bound?tenant_id=tenant-acme",
+            headers=self._admin_headers("tenant-acme"),
+        )
+        self.assertEqual(released.status_code, 200)
+
+    def test_integration_child_writes_hide_foreign_parents_and_do_not_reserve_ids(self) -> None:
+        tenant_a = "tenant-parent-api-a"
+        tenant_b = "tenant-parent-api-b"
+        connector_a = "connector-parent-api-a"
+        connector_b = "connector-parent-api-b"
+        for connector_id, tenant_id in (
+            (connector_a, tenant_a),
+            (connector_b, tenant_b),
+        ):
+            created = self.client.post(
+                "/v1/integrations/connectors",
+                json={
+                    "connector_id": connector_id,
+                    "tenant_id": tenant_id,
+                    "provider": "custom",
+                    "display_name": f"{tenant_id} connector",
+                    "auth_type": "api_key",
+                },
+                headers=self._admin_headers(tenant_id),
+            )
+            self.assertEqual(created.status_code, 200, created.text)
+
+        foreign_source = {
+            "source_id": "attacker-api-source",
+            "connector_id": connector_a,
+            "tenant_id": tenant_b,
+            "remote_source_id": "reserved-api-remote",
+            "source_type": "repository",
+            "display_name": "Foreign API source",
+        }
+        foreign_source_response = self.client.post(
+            f"/v1/integrations/connectors/{connector_a}/sources/batch?tenant_id={tenant_b}",
+            json={"sources": [foreign_source]},
+            headers=self._admin_headers(tenant_b),
+        )
+        self.assertEqual(foreign_source_response.status_code, 404)
+        self.assertEqual(foreign_source_response.json(), {"detail": "connector not found"})
+
+        missing_source_response = self.client.post(
+            f"/v1/integrations/connectors/missing-connector/sources/batch?tenant_id={tenant_b}",
+            json={"sources": [foreign_source]},
+            headers=self._admin_headers(tenant_b),
+        )
+        self.assertEqual(missing_source_response.status_code, foreign_source_response.status_code)
+        self.assertEqual(missing_source_response.json(), foreign_source_response.json())
+
+        owner_source = {
+            **foreign_source,
+            "source_id": "owner-api-source",
+            "tenant_id": tenant_a,
+            "display_name": "Owner API source",
+        }
+        owner_source_response = self.client.post(
+            f"/v1/integrations/connectors/{connector_a}/sources/batch?tenant_id={tenant_a}",
+            json={"sources": [owner_source]},
+            headers=self._admin_headers(tenant_a),
+        )
+        self.assertEqual(owner_source_response.status_code, 200, owner_source_response.text)
+        self.assertEqual(owner_source_response.json()[0]["source_id"], "owner-api-source")
+
+        foreign_mapping_response = self.client.post(
+            f"/v1/integrations/connectors/{connector_a}/principal-mappings/batch?tenant_id={tenant_b}",
+            json={
+                "mappings": [
+                    {
+                        "mapping_id": "foreign-api-mapping",
+                        "connector_id": connector_a,
+                        "tenant_id": tenant_b,
+                        "principal_type": "user",
+                        "local_principal_id": "local-user",
+                        "remote_principal_id": "remote-user",
+                    }
+                ]
+            },
+            headers=self._admin_headers(tenant_b),
+        )
+        self.assertEqual(foreign_mapping_response.status_code, 404)
+        self.assertEqual(foreign_mapping_response.json(), {"detail": "connector not found"})
+
+        foreign_job_response = self.client.post(
+            f"/v1/integrations/connectors/{connector_a}/sync-jobs?tenant_id={tenant_b}",
+            json={
+                "job_id": "foreign-api-job",
+                "connector_id": connector_a,
+                "tenant_id": tenant_b,
+                "job_type": "full",
+            },
+            headers=self._admin_headers(tenant_b),
+        )
+        self.assertEqual(foreign_job_response.status_code, 404)
+        self.assertEqual(foreign_job_response.json(), {"detail": "connector not found"})
+
+        foreign_grant_response = self.client.post(
+            f"/v1/integrations/connectors/{connector_b}/permissions/batch?tenant_id={tenant_b}",
+            json={
+                "grants": [
+                    {
+                        "grant_id": "foreign-api-grant",
+                        "source_id": owner_source["source_id"],
+                        "connector_id": connector_b,
+                        "tenant_id": tenant_b,
+                        "principal_type": "user",
+                        "principal_id": "tenant-b-user",
+                        "permission_level": "view",
+                    }
+                ]
+            },
+            headers=self._admin_headers(tenant_b),
+        )
+        self.assertEqual(foreign_grant_response.status_code, 404)
+        self.assertEqual(foreign_grant_response.json(), {"detail": "source not found"})
 
     def test_integration_plane_round_trip_and_coverage(self) -> None:
         headers = self._admin_headers()
