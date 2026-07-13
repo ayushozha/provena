@@ -3,7 +3,7 @@
 [![npm release](https://img.shields.io/badge/npm-first%20release%20pending-lightgrey)](./docs/PUBLISH_CLI.md)
 [![CLI CI](https://github.com/ayushozha/provena/actions/workflows/ci-cli.yml/badge.svg)](https://github.com/ayushozha/provena/actions/workflows/ci-cli.yml)
 [![Node.js 18.14+](https://img.shields.io/badge/node-%3E%3D18.14.1-43853d)](./cli/package.json)
-[![MCP](https://img.shields.io/badge/MCP-stdio-6f42c1)](./docs/REPO_MEMORY_ARCHITECTURE.md#mcp-surface)
+[![MCP](https://img.shields.io/badge/MCP-stdio%20%2B%20local%20HTTP-6f42c1)](./docs/REPO_MEMORY_ARCHITECTURE.md#mcp-surface)
 
 **A living, provenance-first repository memory for coding agents.**
 
@@ -12,8 +12,9 @@ Codex, Claude Code, Cursor, Copilot, and other MCP clients can read without
 each agent rereading the whole repository. The current refresh implementation
 still performs a bounded source scan. It maps files, symbols, packages, commands,
 imports, durable decisions, workflows, mistakes, preferences, and handoffs;
-then keeps those views current through session boot, Git lifecycle hooks, and a
-fixed-cadence local daemon.
+then compiles bounded proposal-only maintenance work and keeps those views
+current through session boot, Git lifecycle hooks, and a fixed-cadence local
+daemon.
 
 `repository-memory` · `context-engineering` · `knowledge-graph` · `MCP` ·
 `agent-harness` · `provenance` · `local-first`
@@ -28,8 +29,13 @@ fixed-cadence local daemon.
 - [MCP surface](#mcp-surface)
 - [Graph and Neo4j](#graph-and-neo4j)
 - [Architecture and storage](#architecture-and-storage)
+- [Repository map](#repository-map)
+- [Verification](#verification)
 - [Configuration and lifecycle](#configuration-and-lifecycle)
+- [Privacy and security](#privacy-and-security)
 - [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Status at a glance
 
@@ -39,10 +45,11 @@ fixed-cadence local daemon.
 | Durable memory | Implemented as a validated append-only JSONL event ledger with derived views |
 | Repo graph | Implemented with stable nodes/edges, PageRank, degree, components, neighborhoods, and shortest paths |
 | Agent context | Implemented with exact path/symbol/command ranking, lexical + graph expansion, citations, and hard budgets |
+| Maintenance proposals | Implemented as a manifest-attested deterministic plan plus cited task packets; review-only, with no autonomous execution or apply path |
 | Agent integrations | Managed Codex, Claude Code, Cursor, Copilot, MCP, Git-hook, session, and daemon surfaces; conflicts/unsupported hooks are preserved and reported |
-| Neo4j | Opt-in projection of the current code graph; temporal memory/event graph and incremental CDC are roadmap |
+| Temporal graph / Neo4j | Graph v2 keeps every ledger event, direct lineage, current-source links, and producer-effective intervals; Neo4j projection is opt-in and mock-adapter tested, while live-server proof and incremental CDC remain roadmap |
 | Local/server storage | File ledger is the portable core; the Python store supports SQLite FTS/KNN-or-linear vector search and PostgreSQL FTS with a linear vector fallback |
-| Deep-learning intelligence | Optional Python intelligence service; not required by one-click local boot |
+| Model-assisted intelligence | Optional external-model/embedding Python service; deterministic pseudo-vectors are the zero-key fallback, not semantic deep learning |
 | Enterprise connected mode | Foundations implemented; first-party SaaS crawlers and a hosted control plane remain roadmap |
 
 ## Quick start
@@ -77,7 +84,7 @@ npx @provena/cli init
 `init` performs the complete local installation:
 
 - creates `.provena/repo.brain.md`, the small agent bootloader;
-- creates deterministic repo map, graph, manifest, JSON Schema, and memory views;
+- creates deterministic repo map, graph, maintenance plan, manifest, JSON Schema, and memory views;
 - initializes the append-only `.provena/memory/events.jsonl` ledger;
 - persists an ignored local runtime so future refreshes do not depend on the npm cache;
 - installs managed instructions for Codex, Claude Code, Cursor, and Copilot;
@@ -95,6 +102,9 @@ Then use the brain:
 
 ```powershell
 npx provena context "change authentication without breaking session refresh"
+npx provena maintain plan --limit 10
+$MaintenanceTask = "task-id-from-the-plan"
+npx provena maintain context $MaintenanceTask --max-tokens 1500
 npx provena remember decision "Keep auth checks at the gateway" `
   --authority human `
   --body "The gateway remains the authorization boundary." `
@@ -117,6 +127,7 @@ Tracked, clone-portable memory:
 ├── repo.brain.md                 # compact first-read bootloader
 ├── repo.map.json                 # files, symbols, packages, commands, env names, imports
 ├── graph.json                    # typed repository graph
+├── maintenance.plan.json         # attested, bounded review proposals
 ├── manifest.json                 # source/memory fingerprints + artifact hashes
 ├── agent-instructions.md         # shared agent boot protocol
 ├── schema/
@@ -147,7 +158,7 @@ Git hooks. Existing conflicting MCP entries and unsupported hooks are preserved
 and reported.
 
 In the current checkout, `npm pack --dry-run --json` reports an archive of
-about 10 MB and about 78 MB unpacked (127 bundled production packages). The
+about 10 MB and about 78 MB unpacked (128 bundled production packages). The
 ignored `.provena/runtime/` footprint is therefore materially larger than the
 tracked brain; exact size changes with the dependency lockfile.
 
@@ -165,17 +176,27 @@ flowchart LR
     Timer["15-minute daemon tick"] --> Refresh
     Refresh --> Map["Repo map + stable graph"]
     Ledger["Explicit memory event ledger"] --> Views["Decision / workflow / learning views"]
+    Refresh --> Plan["Attested maintenance plan<br/>deterministic proposals"]
+    Ledger --> Plan
+    Ledger --> Sync["Manual: provena sync store<br/>exact-byte + idempotent"] --> Store["Governed SQLite / PostgreSQL projection"]
     Map --> Brain["Compact repo.brain.md"]
     Views --> Brain
     Map --> Packet["Task-scoped context packet"]
     Ledger --> Packet
+    Plan --> MaintenancePacket["Proposal-only cited task packet"]
+    Map --> MaintenancePacket
+    Ledger --> MaintenancePacket
     Packet --> Agents["Codex / Claude / Cursor / MCP clients"]
+    MaintenancePacket --> Agents
     Map --> Neo4j["Optional Neo4j projection"]
 ```
 
-Each refresh currently scans and hashes eligible repository files; the roadmap
-replaces this with an incremental change journal. Agents consume the compact
-artifacts and task packets rather than repeating that work themselves.
+Each refresh currently scans and hashes eligible repository files and compiles
+the maintenance plan from the committed map plus canonical active ledger heads;
+the roadmap replaces source scanning with an incremental change journal. Agents
+consume the compact artifacts and task packets rather than repeating that work
+themselves. Maintenance is review-only: no refresh, command, or MCP read spawns
+agents, approves proposals, or changes durable memory on their behalf.
 
 Provena does not infer human preferences or architectural rationale from code.
 Those claims require an explicit `remember` event. Observed repository facts
@@ -187,29 +208,42 @@ and can supersede earlier events without rewriting history.
 | Command | Purpose |
 |---|---|
 | `provena init` | Install the complete local memory system |
-| `provena refresh` / `index` | Rebuild deterministic brain, map, graph, schema, and views |
+| `provena refresh` / `index` | Rebuild deterministic brain, map, graph, maintenance plan, schema, and views |
 | `provena context "task"` / `search` | Produce a cited, budgeted context packet |
+| `provena maintain plan [--limit N]` | Refresh once, then list a bounded view of deterministic review proposals |
+| `provena maintain context <task-id>` | Refresh once, then compile one cited proposal packet under the requested token budget |
 | `provena remember` | Append an explicit typed memory |
 | `provena checkpoint` | Record a source-aware handoff |
 | `provena session start` | Refresh, persist local session state, and emit boot context |
 | `provena status` | Report freshness, memories, daemon, and integrations |
 | `provena graph` | Run graph algorithms or `sync neo4j` |
-| `provena mcp install\|serve` | Install MCP configs or serve stdio MCP |
+| `provena mcp install\|serve` | Install stdio configs, serve stdio, or opt into loopback HTTP |
 | `provena agents install` | Repair/update managed agent instructions |
 | `provena daemon start\|stop\|status` | Control fixed-cadence refresh |
+| `provena sync store [--json\|--dry-run]` | Verify and atomically project the canonical ledger into governed storage |
 | `provena harness verify` | Check determinism, hashes, graph integrity, citations, and budgets |
 | `provena index --store` / `search --store` | Use the optional legacy governed-memory service |
 
 ## MCP surface
 
-The local stdio server exposes resources for the brain, map, graph, manifest,
-and public/internal active memories, plus these tools:
+The default local stdio server exposes five resources for the brain, map, graph,
+manifest, and public/internal active memories, plus these seven tools:
 
 - `provena_context`
 - `provena_refresh`
 - `provena_remember`
 - `provena_graph_neighbors`
 - `provena_graph_path`
+- `provena_maintenance_plan` (read-only bounded plan view)
+- `provena_maintenance_context` (read-only cited task packet)
+
+The full attested artifact is `.provena/maintenance.plan.json`; the CLI and MCP
+plan listings return bounded view envelopes that reference the canonical plan
+fingerprint without presenting a sliced task list as the attested artifact.
+The maintenance context
+surfaces use exact eligible memory IDs and paths while preserving sensitivity,
+effective-time, citation, and token-budget rules. Ordinary `provena context`
+also accepts repeatable `--memory-id <event-id>` selectors (up to 32).
 
 The Git-tracked ledger accepts only `public` and `internal` events.
 `confidential` and `restricted` writes are rejected and belong in the optional
@@ -217,15 +251,47 @@ governed store. Likely raw credentials are rejected as a best-effort guard.
 MCP uses the official TypeScript SDK rather than a custom protocol
 implementation.
 
+Clients that cannot launch stdio can opt into the same repository-bound surface:
+
+```powershell
+npx provena mcp serve --http                 # http://127.0.0.1:18093/mcp
+npx provena mcp serve --http --port 19093    # explicit local port
+```
+
+`GET /healthz` is the bounded health check. The server stays in the foreground;
+press Ctrl+C to stop it. It binds only `127.0.0.1`, creates no durable HTTP
+session state, and does not change managed client configs from stdio. This is
+an unauthenticated local-process boundary: any process on the machine can call
+both read and mutation tools while it is running. It is not a remote or
+enterprise endpoint and provides no TLS, authentication, permissive CORS,
+SSE/session mode, daemonization, rate limiting, or remote binding.
+
 ## Graph and Neo4j
 
 The portable graph is a deterministic JSON projection with repository,
-directory, file, symbol, package, command, dependency, and environment nodes,
-plus containment, definition, declaration, import, dependency, and `uses`
-relationships. Built-in algorithms are dependency-free and deterministic.
+directory, file, symbol, package, command, dependency, environment, and
+namespaced memory nodes. In addition to code relationships, graph v2 projects
+direct `supersedes`, `cites`, and `applies_to` edges from every canonical ledger
+event. Memory nodes carry a bounded indexing payload and half-open
+producer-effective intervals; bodies and arbitrary structured data stay in the
+ledger. Built-in algorithms are dependency-free and deterministic.
 
-Neo4j synchronization is opt-in. It projects the current code topology; it is
-not yet a temporal history or cross-repository memory graph:
+Temporal queries intentionally have one time axis. `--memory-as-of` selects the
+active ledger heads effective at an exact UTC millisecond while repository
+files, symbols, imports, and commands remain the current snapshot. A later
+backdated event can revise an earlier effective view. Provena does not yet claim
+transaction-time history, bi-temporal facts, or historical repository maps.
+
+```powershell
+npx provena context "authentication" --memory-as-of 2026-07-13T12:00:00.000Z
+npx provena graph stats --memory-as-of 2026-07-13T12:00:00.000Z --json
+npx provena graph timeline <memory-event-id>
+```
+
+Neo4j synchronization is opt-in. It rebuilds the same current-code plus full
+effective-time memory graph under a projection fingerprint derived from the
+source fingerprint and exact raw-ledger fingerprint. Stale cleanup is scoped to
+that projection identity:
 
 ```powershell
 $env:PROVENA_NEO4J_URI = "neo4j+s://your-instance.databases.neo4j.io"
@@ -236,7 +302,8 @@ npx provena graph sync neo4j
 ```
 
 Credentials are read only from environment variables and are never written to
-the tracked brain or sent as Cypher parameters.
+the tracked brain or sent as Cypher parameters. Adapter behavior is covered by
+a mock driver; this repository does not claim a live Neo4j integration run.
 
 ## Architecture and storage
 
@@ -246,6 +313,8 @@ platform remains available when a team needs shared, multi-tenant memory:
 | Responsibility | Implementation |
 |---|---|
 | Portable truth | Tracked JSONL event ledger + deterministic derived artifacts |
+| Maintenance review | Manifest-attested deterministic proposals + proposal-only cited task packets |
+| Canonical bridge | Exact-byte SHA-256 verification, immutable event mapping, atomic SQL projection, and durable sync checkpoint |
 | Local operational memory | SQLite FTS5 + sqlite-vec KNN when available, otherwise linear cosine |
 | Production operational memory | PostgreSQL/tsvector with linear cosine fallback; pgvector KNN is roadmap |
 | Fast triggers/cache | Rust trigger index and Redis-backed service paths |
@@ -279,28 +348,35 @@ See [Repo Memory Architecture](./docs/REPO_MEMORY_ARCHITECTURE.md),
 
 ## Verification
 
+With the root and intelligence Python packages plus `pytest` installed in
+`.venv`, and the Go and Rust toolchains available on `PATH`:
+
 ```powershell
 cd cli
 npm ci
 npm test
 
 cd ..
-.\.venv\Scripts\python.exe -m pytest tests -q
+.\.venv\Scripts\python.exe scripts\run_e2e.py
 ```
 
 The CLI gate includes unit tests, schema/event tests, graph algorithms, context
 budgeting, MCP in-memory protocol tests, Neo4j projection tests, index rollback
 regressions, and a packed tarball installed into a fresh consumer repository.
+The repository E2E runner adds the Python, Go, Rust, standalone, and polyglot
+contract checks.
 
 ## Configuration and lifecycle
 
 `.provena/config.json` records the repository UUID, tenant/project identity,
-schema version, optional-store URL/database path, and scan include/exclude
-globs. Neo4j
+schema version, optional-store URL/database path, the fixed non-secret
+`store_api_key_env` name (`PROVENA_API_KEY`), and scan include/exclude globs. Neo4j
 credentials and optional service settings stay in environment variables; they
-are never written into tracked artifacts. The portable path opens no network
-port. The CLI-managed optional store defaults to `127.0.0.1:18092`; the polyglot
-service ports are listed in [ARCHITECTURE.md](./ARCHITECTURE.md#service-topology).
+are never written into tracked artifacts. The default portable path is stdio
+and opens no port; explicit `mcp serve --http` opens the foreground loopback
+endpoint on `127.0.0.1:18093`. The CLI-managed optional store remains separate
+and defaults to `127.0.0.1:18092`; polyglot service ports are listed in
+[ARCHITECTURE.md](./ARCHITECTURE.md#service-topology).
 
 After a fresh clone, run `npx provena init` to recreate the ignored runtime,
 daemon state, hooks, and MCP/client configs from the committed brain. Run the
@@ -318,11 +394,21 @@ only after preserving any ledger events you still need. Dedicated automated
   are excluded from repo scanning. Safe environment templates contribute
   variable names only, never values.
 - Agent/MCP/Git config writes preserve existing content and refuse symlink targets.
+- Repo-brain readers verify every managed artifact against both deterministic
+  regeneration and the manifest before MCP serves its captured bytes; tampered
+  bootloaders, schemas, maps, graphs, plans, ledgers, or views fail closed.
+- The opt-in HTTP MCP listener is loopback-only and unauthenticated; any local
+  process can invoke its read and mutation tools until the foreground process stops.
 - Global Git hook paths are never modified.
 - Confidential/restricted writes are rejected from the tracked ledger; the
   optional governed store owns sensitive memory.
+- Authenticated gateway identity and groups come from API-key claims; inbound
+  `X-Provena-*` identity headers are stripped before proxying.
 - Model selection remains environment/config driven; the repo brain requires no model.
 - Memory is evidence, not authority: agents must verify cited source before edits.
+- Maintenance plans contain bounded IDs, paths, fingerprints, counters, and
+  fixed planner fields rather than memory bodies, provenance, source snippets,
+  environment values, or credentials.
 
 ## Roadmap
 
@@ -331,9 +417,11 @@ Near-term work is tracked honestly as roadmap rather than generated capability:
 - richer language-native parsers beyond the current multi-language symbol scan;
 - quality eval datasets with measured recall/NDCG and no synthetic baselines;
 - background change journals instead of bounded full-tree hashing;
-- temporal memory/event graph history and incremental Neo4j updates;
+- transaction-time/bi-temporal history, historical repository maps, and
+  incremental Neo4j CDC;
 - repository bootstrap summaries beyond conservative source-derived facts;
-- first-class subagent DAG coordination and task-outcome evaluation;
+- semantic consolidation/decay, autonomous subagent DAG coordination and
+  execution, automatic proposal approval/application, and task-outcome evaluation;
 - dedicated upgrade/uninstall commands and a signed release channel;
 - enterprise identity/permission sync and first-party connectors;
 - adapter conformance for additional stores such as MongoDB;

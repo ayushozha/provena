@@ -76,13 +76,17 @@ class TestFingerprint(unittest.TestCase):
     def setUp(self) -> None:
         self.wp = WritePipeline(EmbeddingManager(), ModelRouter())
 
-    def test_valid_generated_fingerprint_uses_source_identity(self) -> None:
+    def test_valid_generated_fingerprint_binds_source_identity_and_content(self) -> None:
         scope = {"tenant_id": "tenant-a", "project_id": "repo-a"}
         metadata = {"provena_generated_fingerprint": "a" * 64}
 
-        self.assertEqual(
+        self.assertNotEqual(
             self.wp._fingerprint("original source", scope, metadata),
             self.wp._fingerprint("renamed source", scope, metadata),
+        )
+        self.assertEqual(
+            self.wp._fingerprint("original source", scope, metadata),
+            self.wp._fingerprint("original source", scope, metadata),
         )
 
     def test_invalid_generated_fingerprint_falls_back_to_content(self) -> None:
@@ -546,6 +550,147 @@ class TestWriteFailures(unittest.TestCase):
         self.assertEqual(result.memory["memory_id"], "mem-1")
 
 
+class TestAccessHeaderPropagation(unittest.TestCase):
+    caller_headers = {
+        "X-Provena-Tenant-Id": "tenant-caller",
+        "X-Provena-Role": "editor",
+        "X-Provena-Key-Id": "key-caller",
+        "X-Provena-Principal-Id": "principal-caller",
+        "X-Provena-Groups": "engineering,security",
+    }
+    service_headers = {
+        "X-Provena-Tenant-Id": "tenant-service",
+        "X-Provena-Role": "superadmin",
+        "X-Provena-Key-Id": "key-service",
+        "X-Provena-Principal-Id": "principal-service",
+    }
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        def __init__(self, payload: dict) -> None:
+            self.payload = payload
+
+        def json(self) -> dict:
+            return self.payload
+
+    class Client:
+        def __init__(self, requests: list[tuple[str, str, dict[str, str]]]) -> None:
+            self.requests = requests
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(
+            self,
+            url,
+            json=None,
+            headers=None,
+        ):  # noqa: A002 - mirrors httpx
+            self.requests.append(("POST", url, dict(headers or {})))
+            if url.endswith("/v1/memories/search"):
+                return TestAccessHeaderPropagation.Response({"results": []})
+            return TestAccessHeaderPropagation.Response(
+                {"created": True, "memory": {"memory_id": "memory-access"}}
+            )
+
+        async def get(self, url, headers=None):
+            self.requests.append(("GET", url, dict(headers or {})))
+            return TestAccessHeaderPropagation.Response({"content": "memory body"})
+
+    def test_write_search_and_store_use_caller_headers_without_service_claims(
+        self,
+    ) -> None:
+        requests: list[tuple[str, str, dict[str, str]]] = []
+        pipeline = WritePipeline(
+            EmbeddingManager(),
+            ModelRouter(),
+            service_headers=self.service_headers,
+        )
+        request = WriteRequest(
+            kind="fact",
+            scope={"tenant_id": "tenant-caller"},
+            content="Caller-scoped memory",
+        )
+
+        with patch(
+            "app.write_pipeline.httpx.AsyncClient",
+            return_value=self.Client(requests),
+        ):
+            result = asyncio.run(
+                pipeline.process(request, access_headers=self.caller_headers)
+            )
+
+        self.assertTrue(result.created)
+        self.assertEqual(
+            {url.rsplit("/", 1)[-1] for _, url, _ in requests},
+            {"search", "memories"},
+        )
+        self.assertTrue(requests)
+        self.assertTrue(
+            all(headers == self.caller_headers for _, _, headers in requests)
+        )
+
+    def test_internal_write_and_compaction_fetch_fall_back_to_service_headers(
+        self,
+    ) -> None:
+        requests: list[tuple[str, str, dict[str, str]]] = []
+        pipeline = WritePipeline(
+            EmbeddingManager(),
+            ModelRouter(),
+            service_headers=self.service_headers,
+        )
+        request = WriteRequest(
+            kind="fact",
+            scope={"tenant_id": "tenant-service"},
+            content="Service-scoped memory",
+        )
+
+        with patch(
+            "app.write_pipeline.httpx.AsyncClient",
+            return_value=self.Client(requests),
+        ):
+            asyncio.run(pipeline.process(request))
+            bodies = asyncio.run(pipeline._fetch_memory_bodies(["m1", "m2"]))
+
+        self.assertEqual(bodies, {"m1": "memory body", "m2": "memory body"})
+        self.assertTrue(requests)
+        self.assertTrue(
+            all(headers == self.service_headers for _, _, headers in requests)
+        )
+
+    def test_overview_prefers_caller_headers_and_uses_service_fallback(self) -> None:
+        caller_requests: list[tuple[str, str, dict[str, str]]] = []
+        service_requests: list[tuple[str, str, dict[str, str]]] = []
+        generator = OverviewGenerator(
+            store_url="http://store.test",
+            service_headers=self.service_headers,
+        )
+
+        with patch(
+            "app.overview_generator.httpx.AsyncClient",
+            return_value=self.Client(caller_requests),
+        ):
+            asyncio.run(
+                generator.generate(
+                    {"tenant_id": "tenant-caller"},
+                    access_headers=self.caller_headers,
+                )
+            )
+        with patch(
+            "app.overview_generator.httpx.AsyncClient",
+            return_value=self.Client(service_requests),
+        ):
+            asyncio.run(generator.generate({"tenant_id": "tenant-service"}))
+
+        self.assertEqual(caller_requests[0][2], self.caller_headers)
+        self.assertEqual(service_requests[0][2], self.service_headers)
+
+
 class TestModelRouter(unittest.TestCase):
     """Test ModelRouter.route over a configured multi-provider registry."""
 
@@ -770,7 +915,7 @@ class TestOverviewGeneration(unittest.TestCase):
             {"kind": "preference", "title": "Dark mode preferred", "entity_keys": ["UI"]},
         ]
 
-        async def _mock_fetch(scope):
+        async def _mock_fetch(scope, access_headers=None):
             return mock_memories
 
         generator._fetch_recent_memories = _mock_fetch  # type: ignore[assignment]

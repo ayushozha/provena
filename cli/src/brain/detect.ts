@@ -21,6 +21,7 @@ import {
   stableId,
   toPosixPath,
 } from "./utils.js";
+import { assertNoSecretMaterial } from "../security/memory.js";
 
 export interface ScanRepoOptions {
   includePatterns?: string[];
@@ -36,6 +37,8 @@ const DEFAULT_MAX_FILE_BYTES = 512 * 1024;
 const DEFAULT_MAX_FILES = 100_000;
 const DEFAULT_MAX_TOTAL_BYTES = 512 * 1024 * 1024;
 const DEFAULT_MAX_SYMBOLS_PER_FILE = 250;
+const MAX_PERSISTED_SCAN_WARNINGS = 100;
+const SAFE_NODE_SCRIPT_NAME = /^[A-Za-z0-9][A-Za-z0-9._:@/+~-]*$/;
 const GENERATED_PREFIXES = [".git/", ".provena/"];
 const FALLBACK_IGNORES = [
   ".git/**",
@@ -49,6 +52,20 @@ const FALLBACK_IGNORES = [
   "target/**",
   "__pycache__/**",
 ];
+
+/** Module-level test seam; callers receive only single-line, non-secret text. */
+export function sanitizeScanWarning(message: string): string {
+  const printable = message.replace(
+    /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gi,
+    "?",
+  );
+  try {
+    assertNoSecretMaterial(printable);
+    return printable;
+  } catch {
+    return "repository scan warning details redacted because they may contain a credential";
+  }
+}
 const BINARY_EXTENSIONS = new Set([
   ".7z",
   ".a",
@@ -167,13 +184,14 @@ async function fallbackCandidates(repoRoot: string): Promise<string[]> {
     dot: true,
     followSymbolicLinks: false,
     onlyFiles: true,
-    suppressErrors: true,
+    suppressErrors: false,
     ignore: FALLBACK_IGNORES,
   });
   const matcher = ignore();
   try {
     matcher.add(await readFile(join(repoRoot, ".gitignore"), "utf8"));
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     // Non-git folders do not need a .gitignore.
   }
   return paths
@@ -210,7 +228,7 @@ async function configuredCandidatePaths(
       dot: true,
       followSymbolicLinks: false,
       onlyFiles: true,
-      suppressErrors: true,
+      suppressErrors: false,
       ignore: options.excludePatterns ?? [],
     },
   );
@@ -401,6 +419,10 @@ function commandRecord(
   };
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function nodePackage(
   file: RepoFile,
   text: string,
@@ -416,8 +438,39 @@ function nodePackage(
     optionalDependencies?: unknown;
   };
   try {
-    manifest = JSON.parse(text) as typeof manifest;
+    const parsed: unknown = JSON.parse(text);
+    if (!isPlainRecord(parsed)) return null;
+    manifest = parsed;
   } catch {
+    return null;
+  }
+  if (
+    (manifest.name !== undefined &&
+      (typeof manifest.name !== "string" || !manifest.name.trim())) ||
+    (manifest.packageManager !== undefined && typeof manifest.packageManager !== "string") ||
+    (manifest.scripts !== undefined &&
+      (!isPlainRecord(manifest.scripts) ||
+        Object.entries(manifest.scripts).some(
+          ([name, command]) =>
+            !SAFE_NODE_SCRIPT_NAME.test(name) || typeof command !== "string",
+        )))
+  ) {
+    return null;
+  }
+  const dependencyGroups = [
+    manifest.dependencies,
+    manifest.devDependencies,
+    manifest.peerDependencies,
+    manifest.optionalDependencies,
+  ];
+  if (dependencyGroups.some(
+    (group) =>
+      group !== undefined &&
+      (!isPlainRecord(group) ||
+        Object.entries(group).some(
+          ([name, version]) => !name.trim() || typeof version !== "string",
+        )),
+  )) {
     return null;
   }
   const cwd = toPosixPath(dirname(file.path)) || ".";
@@ -426,20 +479,11 @@ function nodePackage(
       ? /^(npm|pnpm|yarn|bun)(?:@|$)/.exec(manifest.packageManager)?.[1]
       : undefined;
   const manager = declaredManager ?? managerFor(cwd, allPaths);
-  const scripts =
-    manifest.scripts && typeof manifest.scripts === "object"
-      ? (manifest.scripts as Record<string, unknown>)
-      : {};
+  const scripts = (manifest.scripts as Record<string, unknown> | undefined) ?? {};
   const commands = Object.keys(scripts)
     .filter((name) => typeof scripts[name] === "string")
     .sort(compareText)
     .map((name) => commandRecord(cwd, name, `${manager} run ${name}`, file.path));
-  const dependencyGroups = [
-    manifest.dependencies,
-    manifest.devDependencies,
-    manifest.peerDependencies,
-    manifest.optionalDependencies,
-  ];
   const dependencies = new Set<string>();
   for (const group of dependencyGroups) {
     if (group && typeof group === "object") {
@@ -553,12 +597,30 @@ export async function scanRepo(
   options: ScanRepoOptions = {},
 ): Promise<RepoMap> {
   const root = resolve(repoRoot);
-  const warn = options.warn ?? (() => undefined);
+  const scanWarnings: string[] = [];
+  let scanComplete = true;
+  const warn = (message: string): void => {
+    const safeMessage = sanitizeScanWarning(message);
+    scanComplete = false;
+    if (scanWarnings.length < MAX_PERSISTED_SCAN_WARNINGS) {
+      scanWarnings.push(safeMessage);
+    } else if (scanWarnings.length === MAX_PERSISTED_SCAN_WARNINGS) {
+      scanWarnings.push("additional scan warnings omitted");
+    }
+    options.warn?.(safeMessage);
+  };
   const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
   const maxTotalBytes = options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
   const maxSymbolsPerFile = options.maxSymbolsPerFile ?? DEFAULT_MAX_SYMBOLS_PER_FILE;
-  const paths = await configuredCandidatePaths(root, options);
+  let paths: string[] = [];
+  try {
+    paths = await configuredCandidatePaths(root, options);
+  } catch {
+    // Enumeration errors are deliberately generic: filesystem error strings
+    // can contain secret-bearing paths. An incomplete scan must never retract.
+    warn("repository candidate enumeration was incomplete");
+  }
   const files: RepoFile[] = [];
   const symbols: RepoSymbol[] = [];
   const textByPath = new Map<string, string>();
@@ -575,7 +637,9 @@ export async function scanRepo(
     let info;
     try {
       info = await lstat(absolutePath);
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      warn(`skipping ${path}: could not stat the file`);
       continue;
     }
     if (!info.isFile() || info.isSymbolicLink()) continue;
@@ -586,11 +650,21 @@ export async function scanRepo(
     let content: Buffer;
     try {
       content = await readFile(absolutePath);
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      warn(`skipping ${path}: could not read the file`);
       continue;
     }
     if (content.subarray(0, 8192).includes(0)) continue;
-    const text = content.toString("utf8").replace(/\r\n?/g, "\n");
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
+        .decode(content)
+        .replace(/\r\n?/g, "\n");
+    } catch {
+      warn(`skipping ${path}: file is not valid UTF-8`);
+      continue;
+    }
     const canonicalContent = Buffer.from(text, "utf8");
     if (totalBytes + canonicalContent.byteLength > maxTotalBytes) {
       warn(`stopping scan before ${path}: reached ${maxTotalBytes} total byte cap`);
@@ -631,7 +705,12 @@ export async function scanRepo(
     const detected = basename(file.path) === "package.json"
       ? nodePackage(file, text, allPaths)
       : simplePackage(file, text);
-    if (!detected) continue;
+    if (!detected) {
+      if (basename(file.path) === "package.json") {
+        warn(`skipping ${file.path}: malformed package manifest`);
+      }
+      continue;
+    }
     packages.push(detected.pkg);
     for (const command of detected.commands) commandsById.set(command.id, command);
   }
@@ -652,6 +731,7 @@ export async function scanRepo(
   const withoutFingerprint: Omit<RepoMap, "sourceFingerprint"> = {
     schemaVersion: 1,
     repository: { name: repositoryName, description: rootDescription(textByPath) },
+    scan: { complete: scanComplete, warnings: scanWarnings },
     languages,
     directories: directoryRecords(files),
     files,
@@ -660,8 +740,15 @@ export async function scanRepo(
     commands,
     environmentVariables,
   };
-  return {
+  const map: RepoMap = {
     ...withoutFingerprint,
-    sourceFingerprint: sha256(canonicalJson(withoutFingerprint)),
+    sourceFingerprint: "",
   };
+  return { ...map, sourceFingerprint: repoMapSourceFingerprint(map) };
+}
+
+/** Recompute the map's self-attestation without trusting its stored digest. */
+export function repoMapSourceFingerprint(map: RepoMap): string {
+  const { sourceFingerprint: _stored, ...withoutFingerprint } = map;
+  return sha256(canonicalJson(withoutFingerprint));
 }

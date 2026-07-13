@@ -5,11 +5,16 @@ import json
 import re
 import sqlite3
 import struct
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import quote
+
+from pydantic import ValidationError
+import rfc8785
 
 from app.hot_cache import InMemoryHotCache, MemoryHotCache
 from app.models import (
@@ -57,6 +62,10 @@ from app.models import (
     RelatedMemory,
     RelationKind,
     RelationWrite,
+    RepositoryMemoryEvent,
+    RepositoryMemorySyncRequest,
+    RepositoryMemorySyncResponse,
+    RepositoryMemorySyncTimings,
     RTBFRequest,
     RTBFResponse,
     RetentionEnforcementResponse,
@@ -83,6 +92,34 @@ from app.models import (
 
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "storage" / "migrations" / "001_initial.sql"
 READABLE_PERMISSION_LEVELS = frozenset(level.value for level in PermissionLevel)
+COMMENTABLE_PERMISSION_LEVELS = frozenset(
+    level.value for level in (PermissionLevel.COMMENT, PermissionLevel.EDIT, PermissionLevel.OWNER)
+)
+EDITABLE_PERMISSION_LEVELS = frozenset(
+    level.value for level in (PermissionLevel.EDIT, PermissionLevel.OWNER)
+)
+OWNER_PERMISSION_LEVELS = frozenset({PermissionLevel.OWNER.value})
+MEMORY_WRITE_ROLES = frozenset({"editor", "admin", "superadmin"})
+REPOSITORY_LEDGER_PROJECTION_VERSION = 1
+MAX_REPOSITORY_LEDGER_BYTES = 64 * 1024 * 1024
+TENANT_OWNED_ID_TABLES = {
+    "connector": ("connectors", "connector_id"),
+    "connector_source": ("connector_sources", "source_id"),
+    "principal_mapping": ("principal_mappings", "mapping_id"),
+    "source_permission_grant": ("source_permission_grants", "grant_id"),
+    "sync_job": ("sync_jobs", "job_id"),
+    "retention_policy": ("retention_policies", "policy_id"),
+    "legal_hold": ("legal_holds", "hold_id"),
+    "entity": ("entity_registry", "entity_id"),
+}
+
+
+class RepositoryEventConflictError(ValueError):
+    """Raised when an immutable repository event id is reused with new content."""
+
+
+class TenantOwnershipConflictError(ValueError):
+    """Raised when a globally unique resource id crosses a tenant boundary."""
 
 
 @dataclass(slots=True)
@@ -204,6 +241,24 @@ class ProvenaStore:
             return
         self.conn.execute("DELETE FROM memories_vec WHERE memory_id = ?", (memory_id,))
 
+    def _purge_memory_indexes(self, memory_ids: Iterable[str]) -> None:
+        for chunk in self._chunks(memory_ids):
+            placeholders = ", ".join("?" for _ in chunk)
+            self.conn.execute(
+                f"DELETE FROM memories_fts WHERE memory_id IN ({placeholders})",
+                chunk,
+            )
+            for memory_id in chunk:
+                self._vec_delete(memory_id)
+
+    def _delete_memory_rows(self, memory_ids: Iterable[str]) -> None:
+        for chunk in self._chunks(memory_ids):
+            placeholders = ", ".join("?" for _ in chunk)
+            self.conn.execute(
+                f"DELETE FROM memories WHERE memory_id IN ({placeholders})",
+                chunk,
+            )
+
     def create_memory(
         self,
         payload: MemoryCreate,
@@ -222,6 +277,31 @@ class ProvenaStore:
             payload.content,
             payload.metadata,
         )
+        now = self._iso_now()
+        memory_id = payload.memory_id or str(uuid.uuid4())
+        acl = payload.acl or self._default_acl(payload.scope, access)
+        memory_layer = payload.memory_layer or self._infer_memory_layer(payload.scope)
+        source_authorization_record = MemoryRecord(
+            **payload.model_dump(
+                exclude={"acl", "memory_id", "memory_layer", "supersedes_memory_id"}
+            ),
+            memory_id=memory_id,
+            fingerprint=fingerprint,
+            status=MemoryStatus.ACTIVE,
+            memory_layer=memory_layer,
+            created_at=now,
+            updated_at=now,
+            acl=self._default_acl(payload.scope, access),
+        )
+        source_write_allowed = not self._connected_source_rows(
+            source_authorization_record
+        ) or self._can_access_memory(
+            source_authorization_record,
+            access,
+            ACLPermission.WRITE,
+            source_permission_levels=EDITABLE_PERMISSION_LEVELS,
+            allowed_roles=MEMORY_WRITE_ROLES,
+        )
         existing = self.conn.execute(
             "SELECT * FROM memories WHERE fingerprint = ?",
             (fingerprint,),
@@ -230,6 +310,8 @@ class ProvenaStore:
             old_record = self._row_to_record(existing)
             if not self._can_read_memory(old_record, access):
                 raise ValueError("memory not found")
+            if not source_write_allowed:
+                raise ValueError("connected source write access denied")
             if existing["status"] == MemoryStatus.DELETED.value:
                 raise ValueError(
                     "memory fingerprint is tombstoned; deleted memories require an explicit restore workflow"
@@ -241,12 +323,20 @@ class ProvenaStore:
             )
             if record is None:
                 raise ValueError("memory not found")
+            # A retry after an invalidation backend failure must still advance
+            # the generation even when the durable write deduplicates.
+            self._invalidate_tenant_cache(payload.scope.tenant_id)
             return MemoryWriteResult(created=False, memory=record)
 
-        now = self._iso_now()
-        memory_id = payload.memory_id or str(uuid.uuid4())
-        acl = payload.acl or self._default_acl(payload.scope, access)
-        memory_layer = payload.memory_layer or self._infer_memory_layer(payload.scope)
+        if not source_write_allowed:
+            raise ValueError("connected source write access denied")
+        if payload.supersedes_memory_id:
+            self._validate_supersession_target(
+                payload.supersedes_memory_id,
+                memory_id,
+                payload.scope.tenant_id,
+                access,
+            )
 
         with self.conn:
             self.conn.execute(
@@ -313,12 +403,10 @@ class ProvenaStore:
             self._index_memory(memory_id, payload.title, payload.summary, payload.content, payload.tags, payload.entity_keys)
             self._insert_audit("memory_created", memory_id, payload.scope.tenant_id, {"kind": payload.kind.value})
             self._refresh_hold_state([memory_id])
-
-        record = self.get_memory(memory_id, access=access)
-        if record is None:
             row = self.conn.execute("SELECT * FROM memories WHERE memory_id = ?", (memory_id,)).fetchone()
+            if row is None:
+                raise RuntimeError("created memory disappeared before transaction commit")
             record = self._row_to_record(row)
-        with self.conn:
             self._insert_history(
                 memory_id,
                 record.scope.tenant_id,
@@ -332,21 +420,936 @@ class ProvenaStore:
         self._invalidate_tenant_cache(payload.scope.tenant_id)
         return MemoryWriteResult(created=True, memory=record)
 
+    def sync_repository_memory_events(
+        self,
+        repository_id: str,
+        payload: RepositoryMemorySyncRequest,
+        access: AccessContext | None = None,
+    ) -> RepositoryMemorySyncResponse:
+        started = time.perf_counter()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}", repository_id):
+            raise ValueError("repository_id must be a stable identifier")
+        if (
+            access is not None
+            and access.role != "superadmin"
+            and access.tenant_id not in {None, payload.scope.tenant_id}
+        ):
+            raise ValueError("repository scope tenant does not match access tenant")
+
+        raw_ledger = payload.ledger.encode("utf-8")
+        if len(raw_ledger) > MAX_REPOSITORY_LEDGER_BYTES:
+            raise ValueError("repository memory ledger exceeds the 67108864 byte safety cap")
+        if len(raw_ledger) != payload.ledger_bytes:
+            raise ValueError("ledger_bytes does not match the exact UTF-8 ledger bytes")
+        ledger_fingerprint = hashlib.sha256(raw_ledger).hexdigest()
+        if ledger_fingerprint != payload.memory_fingerprint:
+            raise ValueError("memory_fingerprint does not match the exact ledger bytes")
+
+        parsed_events: list[tuple[RepositoryMemoryEvent, dict[str, Any], str]] = []
+        event_ids: set[str] = set()
+        canonical_events = bytearray()
+        for line_number, line in enumerate(payload.ledger.split("\n"), start=1):
+            if line.endswith("\r"):
+                line = line[:-1]
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line, object_pairs_hook=self._repository_json_object)
+            except (json.JSONDecodeError, RecursionError) as exc:
+                raise ValueError(f"repository memory ledger line {line_number} is invalid JSON") from exc
+            except ValueError as exc:
+                raise ValueError(
+                    f"repository memory ledger line {line_number} contains duplicate JSON object keys"
+                ) from exc
+            if not isinstance(record, dict):
+                raise ValueError(f"repository memory ledger line {line_number} must be an object")
+            try:
+                event = RepositoryMemoryEvent.model_validate(record)
+            except ValidationError as exc:
+                first = exc.errors(include_url=False)[0]
+                location = ".".join(str(part) for part in first.get("loc", ())) or "event"
+                raise ValueError(
+                    f"repository memory ledger line {line_number} has invalid {location}: {first['msg']}"
+                ) from exc
+            except RecursionError as exc:
+                raise ValueError(
+                    f"repository memory ledger line {line_number} exceeds the maximum JSON nesting depth"
+                ) from exc
+            if event.id in event_ids:
+                raise ValueError(f"repository memory ledger contains duplicate event id {event.id}")
+            event_ids.add(event.id)
+            try:
+                canonical = self._canonical_repository_json(record)
+            except rfc8785.CanonicalizationError as exc:
+                raise ValueError(
+                    f"repository memory ledger line {line_number} cannot be canonicalized as RFC 8785 JSON"
+                ) from exc
+            if canonical != line:
+                raise ValueError(
+                    f"repository memory ledger line {line_number} must be canonical RFC 8785 JSON"
+                )
+            event_fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            canonical_events.extend(canonical.encode("utf-8"))
+            canonical_events.extend(b"\n")
+            parsed_events.append((event, record, event_fingerprint))
+
+        events_fingerprint = hashlib.sha256(canonical_events).hexdigest()
+        validation_ms = self._elapsed_ms(started)
+        project_id = payload.scope.project_id
+        projection_scope = ScopeEnvelope(
+            tenant_id=payload.scope.tenant_id,
+            project_id=project_id,
+        )
+        event_count = len(parsed_events)
+        now = self._iso_now()
+        created_memories = 0
+        unchanged_memories = 0
+        repaired_memories = 0
+        suppressed_events = 0
+        status_updates = 0
+        created_relations = 0
+        unchanged_relations = 0
+        suppressed_relations = 0
+        write_started = time.perf_counter()
+
+        with self.conn:
+            # This is deliberately the first statement in the transaction. An
+            # upsert on one scoped lock row serializes concurrent first-syncs
+            # in SQLite (database writer lock) and PostgreSQL (row conflict).
+            self.conn.execute(
+                """
+                INSERT INTO repo_memory_sync_locks (
+                    tenant_id, project_id, repository_id, locked_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT (tenant_id, project_id, repository_id) DO UPDATE SET
+                    locked_at = excluded.locked_at
+                """,
+                (payload.scope.tenant_id, project_id, repository_id, now),
+            )
+            state = self.conn.execute(
+                """
+                SELECT projection_version, ledger_path, ledger_fingerprint,
+                       events_fingerprint, ledger_bytes, event_count
+                FROM repo_memory_sync_state
+                WHERE tenant_id = ? AND project_id = ? AND repository_id = ?
+                """,
+                (payload.scope.tenant_id, project_id, repository_id),
+            ).fetchone()
+            checkpoint_matches = bool(
+                state is not None
+                and int(state["projection_version"]) == REPOSITORY_LEDGER_PROJECTION_VERSION
+                and state["ledger_path"] == payload.ledger_path
+                and state["ledger_fingerprint"] == ledger_fingerprint
+                and state["events_fingerprint"] == events_fingerprint
+                and int(state["ledger_bytes"]) == payload.ledger_bytes
+                and int(state["event_count"]) == event_count
+            )
+
+            all_referenced_ids = event_ids.union(
+                target_id
+                for event, _, _ in parsed_events
+                for target_id in event.supersedes
+            )
+            mappings: dict[str, Any] = {}
+            for id_chunk in self._chunks(sorted(all_referenced_ids)):
+                placeholders = ", ".join("?" for _ in id_chunk)
+                rows = self.conn.execute(
+                    f"""
+                    SELECT p.event_id, p.event_fingerprint, p.projection_version,
+                           p.memory_id, m.fingerprint, m.kind, m.status,
+                           m.tenant_id, m.workspace_id, m.project_id, m.user_id,
+                           m.agent_id, m.session_id, m.title, m.content,
+                           m.entity_keys_json, m.tags_json, m.metadata_json,
+                           m.importance, m.confidence, m.valid_from, m.valid_to,
+                           m.updated_at, m.memory_layer, m.acl_json, m.held,
+                           m.pre_hold_status
+                    FROM repo_memory_event_projections AS p
+                    LEFT JOIN memories AS m ON m.memory_id = p.memory_id
+                    WHERE p.tenant_id = ? AND p.project_id = ? AND p.repository_id = ?
+                      AND p.event_id IN ({placeholders})
+                    """,
+                    (
+                        payload.scope.tenant_id,
+                        project_id,
+                        repository_id,
+                        *id_chunk,
+                    ),
+                ).fetchall()
+                mappings.update({row["event_id"]: row for row in rows})
+
+            erasures: dict[str, Any] = {}
+            for id_chunk in self._chunks(sorted(all_referenced_ids)):
+                placeholders = ", ".join("?" for _ in id_chunk)
+                rows = self.conn.execute(
+                    f"""
+                    SELECT event_id, event_fingerprint, authority, event_created_at
+                    FROM repo_memory_event_erasures
+                    WHERE tenant_id = ? AND project_id = ? AND repository_id = ?
+                      AND event_id IN ({placeholders})
+                    """,
+                    (
+                        payload.scope.tenant_id,
+                        project_id,
+                        repository_id,
+                        *id_chunk,
+                    ),
+                ).fetchall()
+                erasures.update({row["event_id"]: row for row in rows})
+
+            restored_mappings: set[str] = set()
+            for event, record, event_fingerprint in parsed_events:
+                if event.id in mappings or event.id in erasures:
+                    continue
+                memory_id = self._repository_memory_id(projection_scope, repository_id, event.id)
+                collision = self.conn.execute(
+                    "SELECT * FROM memories WHERE memory_id = ?",
+                    (memory_id,),
+                ).fetchone()
+                if collision is None:
+                    continue
+                attested = self._attested_repository_projection(
+                    memory_id,
+                    row=collision,
+                    expected_scope=projection_scope,
+                    expected_repository_id=repository_id,
+                    expected_event_record=record,
+                    expected_event_fingerprint=event_fingerprint,
+                )
+                if attested is None:
+                    continue
+                self.conn.execute(
+                    """
+                    INSERT INTO repo_memory_event_projections (
+                        tenant_id, project_id, repository_id, event_id,
+                        event_fingerprint, projection_version, memory_id,
+                        first_seen_at, last_seen_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        payload.scope.tenant_id,
+                        project_id,
+                        repository_id,
+                        event.id,
+                        event_fingerprint,
+                        REPOSITORY_LEDGER_PROJECTION_VERSION,
+                        memory_id,
+                        now,
+                        now,
+                    ),
+                )
+                restored = dict(collision)
+                restored.update(
+                    {
+                        "event_id": event.id,
+                        "event_fingerprint": event_fingerprint,
+                        "projection_version": REPOSITORY_LEDGER_PROJECTION_VERSION,
+                    }
+                )
+                mappings[event.id] = restored
+                restored_mappings.add(event.id)
+                self._insert_audit(
+                    "repository_memory_event_mapping_restored",
+                    memory_id,
+                    payload.scope.tenant_id,
+                    {"repository_id": repository_id, "event_id": event.id},
+                )
+
+            parsed_by_id = {event.id: event for event, _, _ in parsed_events}
+            batch_position = {
+                event.id: position for position, (event, _, _) in enumerate(parsed_events)
+            }
+            authority_rank = {"tool": 1, "agent": 2, "system": 3, "human": 4}
+
+            for position, (event, _, event_fingerprint) in enumerate(parsed_events):
+                mapping = mappings.get(event.id)
+                if mapping is not None and mapping["event_fingerprint"] != event_fingerprint:
+                    raise RepositoryEventConflictError(
+                        f"repository event {event.id} is immutable and was already projected with different content"
+                    )
+                erasure = erasures.get(event.id)
+                if erasure is not None and erasure["event_fingerprint"] != event_fingerprint:
+                    raise RepositoryEventConflictError(
+                        f"erased repository event {event.id} is immutable and cannot be replaced"
+                    )
+                for target_id in event.supersedes:
+                    target_position = batch_position.get(target_id)
+                    if target_position is not None and target_position >= position:
+                        raise ValueError(
+                            f"repository event {event.id} must supersede an earlier ledger event, not {target_id}"
+                        )
+                    target_event = parsed_by_id.get(target_id)
+                    target_mapping = mappings.get(target_id)
+                    target_erasure = erasures.get(target_id)
+                    if target_event is not None:
+                        target_authority = target_event.authority.value
+                        target_created_at = target_event.created_at
+                    elif target_mapping is not None:
+                        if target_mapping["metadata_json"] is None:
+                            raise RepositoryEventConflictError(
+                                f"repository event {target_id} has a projection mapping without a memory"
+                            )
+                        target_metadata = self._json_to_dict(target_mapping["metadata_json"])
+                        try:
+                            stored_target = RepositoryMemoryEvent.model_validate(
+                                target_metadata.get("provena_event")
+                            )
+                        except ValidationError as exc:
+                            raise RepositoryEventConflictError(
+                                f"repository event {target_id} has invalid stored provenance"
+                            ) from exc
+                        target_authority = stored_target.authority.value
+                        target_created_at = stored_target.created_at
+                    elif target_erasure is not None:
+                        target_authority = target_erasure["authority"]
+                        target_created_at = target_erasure["event_created_at"]
+                    else:
+                        raise ValueError(
+                            f"repository event {event.id} supersedes unknown event id {target_id}"
+                        )
+                    if authority_rank[event.authority.value] < authority_rank[target_authority]:
+                        raise ValueError(
+                            f"{event.authority.value} repository event {event.id} cannot supersede "
+                            f"{target_authority} event {target_id}"
+                        )
+                    if self._from_iso(event.created_at) < self._from_iso(target_created_at):
+                        raise ValueError(
+                            f"repository event {event.id} cannot supersede newer event {target_id}"
+                        )
+
+            referenced_at: dict[str, str] = {}
+            referenced_status: dict[str, MemoryStatus] = {}
+            for event, _, _ in parsed_events:
+                for target_id in event.supersedes:
+                    existing_time = referenced_at.get(target_id)
+                    if existing_time is None or event.created_at < existing_time:
+                        referenced_at[target_id] = event.created_at
+                    desired = (
+                        MemoryStatus.RETRACTED
+                        if event.status.value == MemoryStatus.RETRACTED.value
+                        else MemoryStatus.SUPERSEDED
+                    )
+                    if desired == MemoryStatus.RETRACTED or target_id not in referenced_status:
+                        referenced_status[target_id] = desired
+
+            for event, record, event_fingerprint in parsed_events:
+                if event.id in erasures:
+                    suppressed_events += 1
+                    continue
+
+                mapping = mappings.get(event.id)
+                memory_id = self._repository_memory_id(projection_scope, repository_id, event.id)
+                status, pre_hold_status = self._repository_projection_status(
+                    event,
+                    referenced_status.get(event.id),
+                    mapping["status"] if mapping is not None else None,
+                    mapping["pre_hold_status"] if mapping is not None else None,
+                )
+                valid_to = referenced_at.get(event.id)
+                if event.status.value != MemoryStatus.ACTIVE.value:
+                    valid_to = min(
+                        filter(None, [valid_to, event.updated_at]),
+                        default=event.updated_at,
+                    )
+                if (
+                    mapping is not None
+                    and mapping["valid_to"] is not None
+                    and mapping["status"] in {
+                        MemoryStatus.SUPERSEDED.value,
+                        MemoryStatus.RETRACTED.value,
+                        MemoryStatus.HELD.value,
+                    }
+                    and (valid_to is None or self._from_iso(mapping["valid_to"]) < self._from_iso(valid_to))
+                ):
+                    valid_to = mapping["valid_to"]
+                entity_keys = self._repository_event_entity_keys(repository_id, event)
+                tags = sorted(
+                    {
+                        *event.tags,
+                        "provena-ledger",
+                        f"authority:{event.authority.value}",
+                        f"sensitivity:{event.sensitivity.value}",
+                    },
+                    key=self._repository_text_sort_key,
+                )
+                existing_metadata = (
+                    self._json_to_dict(mapping["metadata_json"])
+                    if mapping is not None and mapping["metadata_json"] is not None
+                    else {}
+                )
+                metadata = {
+                    "provena_projection": "repo-ledger",
+                    "provena_projection_version": REPOSITORY_LEDGER_PROJECTION_VERSION,
+                    "provena_repository_id": repository_id,
+                    "provena_event": record,
+                    "provena_event_fingerprint": event_fingerprint,
+                    "provena_ingested_at": existing_metadata.get("provena_ingested_at", now),
+                }
+                fingerprint = self._repository_projection_fingerprint(
+                    projection_scope,
+                    repository_id,
+                    event_fingerprint,
+                )
+                expected_sources = self._repository_event_sources(
+                    repository_id,
+                    payload.ledger_path,
+                    event,
+                    event_fingerprint,
+                )
+                if mapping is not None:
+                    if mapping["metadata_json"] is None:
+                        raise RepositoryEventConflictError(
+                            f"repository event {event.id} has a projection mapping without a memory"
+                        )
+                    if mapping["memory_id"] != memory_id:
+                        raise RepositoryEventConflictError(
+                            f"repository event {event.id} uses a legacy or cross-scope memory id"
+                        )
+                    actual_sources = self._sources_for(memory_id)
+                    actual_triggers = self._trigger_rows_for(memory_id)
+                    source_changed = sorted(
+                        self._canonical_repository_json(item.model_dump(mode="json", exclude_none=True))
+                        for item in actual_sources
+                    ) != sorted(
+                        self._canonical_repository_json(item.model_dump(mode="json", exclude_none=True))
+                        for item in expected_sources
+                    )
+                    triggers_changed = actual_triggers != [
+                        (phrase, payload.scope.tenant_id)
+                        for phrase in sorted(event.triggers, key=self._repository_text_sort_key)
+                    ]
+                    index_changed = not self._memory_index_matches(
+                        memory_id,
+                        event.title,
+                        None,
+                        event.body,
+                        tags,
+                        entity_keys,
+                    )
+                    status_changed = (
+                        mapping["status"] != status.value
+                        or mapping["pre_hold_status"]
+                        != (pre_hold_status.value if pre_hold_status is not None else None)
+                    )
+                    projection_changed = any(
+                        [
+                            int(mapping["projection_version"]) != REPOSITORY_LEDGER_PROJECTION_VERSION,
+                            mapping["fingerprint"] != fingerprint,
+                            mapping["kind"] != event.kind.value,
+                            mapping["tenant_id"] != payload.scope.tenant_id,
+                            mapping["workspace_id"] is not None,
+                            mapping["project_id"] != project_id,
+                            mapping["user_id"] is not None,
+                            mapping["agent_id"] is not None,
+                            mapping["session_id"] is not None,
+                            mapping["title"] != event.title,
+                            mapping["content"] != event.body,
+                            self._json_to_list(mapping["entity_keys_json"]) != entity_keys,
+                            self._json_to_list(mapping["tags_json"]) != tags,
+                            existing_metadata != metadata,
+                            float(mapping["importance"]) != event.importance,
+                            float(mapping["confidence"]) != event.confidence,
+                            mapping["valid_from"] != event.created_at,
+                            mapping["valid_to"] != valid_to,
+                            mapping["memory_layer"] != MemoryLayer.ORGANIZATION.value,
+                            self._json_to_list(mapping["acl_json"]) != [],
+                            status_changed,
+                            source_changed,
+                            triggers_changed,
+                            index_changed,
+                        ]
+                    )
+                    if not projection_changed:
+                        if event.id in restored_mappings:
+                            repaired_memories += 1
+                        else:
+                            unchanged_memories += 1
+                        continue
+                    old_projection = self._row_to_record(
+                        self.conn.execute(
+                            "SELECT * FROM memories WHERE memory_id = ?",
+                            (memory_id,),
+                        ).fetchone()
+                    )
+                    self.conn.execute(
+                        """
+                        UPDATE memories SET
+                            fingerprint = ?, kind = ?, status = ?, tenant_id = ?,
+                            workspace_id = ?, project_id = ?, user_id = ?, agent_id = ?,
+                            session_id = ?, title = ?, content = ?,
+                            entity_keys_json = ?, tags_json = ?, metadata_json = ?,
+                            importance = ?, confidence = ?, valid_from = ?, valid_to = ?,
+                            updated_at = ?, memory_layer = ?, acl_json = ?,
+                            pre_hold_status = ?
+                        WHERE memory_id = ?
+                        """,
+                        (
+                            fingerprint,
+                            event.kind.value,
+                            status.value,
+                            payload.scope.tenant_id,
+                            None,
+                            project_id,
+                            None,
+                            None,
+                            None,
+                            event.title,
+                            event.body,
+                            self._to_json(entity_keys),
+                            self._to_json(tags),
+                            self._to_json(metadata),
+                            event.importance,
+                            event.confidence,
+                            event.created_at,
+                            valid_to,
+                            now,
+                            MemoryLayer.ORGANIZATION.value,
+                            self._to_json([]),
+                            pre_hold_status.value if pre_hold_status is not None else None,
+                            memory_id,
+                        ),
+                    )
+                    if source_changed:
+                        self.conn.execute("DELETE FROM memory_sources WHERE memory_id = ?", (memory_id,))
+                        for source in expected_sources:
+                            self._insert_source(memory_id, source)
+                    if triggers_changed:
+                        self._replace_trigger_phrases(
+                            memory_id,
+                            payload.scope.tenant_id,
+                            event.triggers,
+                        )
+                    self._index_memory(memory_id, event.title, None, event.body, tags, entity_keys)
+                    self.conn.execute(
+                        """
+                        UPDATE repo_memory_event_projections
+                        SET projection_version = ?, last_seen_at = ?
+                        WHERE tenant_id = ? AND project_id = ? AND repository_id = ? AND event_id = ?
+                        """,
+                        (
+                            REPOSITORY_LEDGER_PROJECTION_VERSION,
+                            now,
+                            payload.scope.tenant_id,
+                            project_id,
+                            repository_id,
+                            event.id,
+                        ),
+                    )
+                    new_projection = self._row_to_record(
+                        self.conn.execute(
+                            "SELECT * FROM memories WHERE memory_id = ?",
+                            (memory_id,),
+                        ).fetchone()
+                    )
+                    self._insert_history(
+                        memory_id,
+                        payload.scope.tenant_id,
+                        MemoryHistoryEventType.UPDATE,
+                        old_memory=old_projection.model_dump(mode="json"),
+                        new_memory=new_projection.model_dump(mode="json"),
+                        details={
+                            "repository_id": repository_id,
+                            "event_id": event.id,
+                            "reason": "projection_reconciled",
+                            "projection_version": REPOSITORY_LEDGER_PROJECTION_VERSION,
+                        },
+                        actor_id=access.principal_id if access else None,
+                    )
+                    self._insert_audit(
+                        "repository_memory_event_reconciled",
+                        memory_id,
+                        payload.scope.tenant_id,
+                        {"repository_id": repository_id, "event_id": event.id},
+                    )
+                    repaired_memories += 1
+                    if status_changed:
+                        status_updates += 1
+                    continue
+
+                collision = self.conn.execute(
+                    "SELECT memory_id FROM memories WHERE memory_id = ?",
+                    (memory_id,),
+                ).fetchone()
+                if collision is not None:
+                    raise RepositoryEventConflictError(
+                        f"deterministic memory id collision for repository event {event.id}"
+                    )
+
+                self.conn.execute(
+                    """
+                    INSERT INTO memories (
+                        memory_id, fingerprint, kind, status, tenant_id, workspace_id,
+                        project_id, user_id, agent_id, session_id, title, content, summary,
+                        entity_keys_json, tags_json, metadata_json, importance, confidence,
+                        strength, valid_from, valid_to, expires_at, created_at, updated_at,
+                        memory_layer, embedding_model, embedding_json, acl_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        memory_id,
+                        fingerprint,
+                        event.kind.value,
+                        status.value,
+                        payload.scope.tenant_id,
+                        None,
+                        project_id,
+                        None,
+                        None,
+                        None,
+                        event.title,
+                        event.body,
+                        None,
+                        self._to_json(entity_keys),
+                        self._to_json(tags),
+                        self._to_json(metadata),
+                        event.importance,
+                        event.confidence,
+                        0.7,
+                        event.created_at,
+                        valid_to,
+                        None,
+                        event.created_at,
+                        event.updated_at,
+                        MemoryLayer.ORGANIZATION.value,
+                        None,
+                        self._to_json([]),
+                        self._to_json([]),
+                    ),
+                )
+                self._replace_trigger_phrases(
+                    memory_id,
+                    payload.scope.tenant_id,
+                    event.triggers,
+                )
+                for source in expected_sources:
+                    self._insert_source(memory_id, source)
+                self._index_memory(
+                    memory_id,
+                    event.title,
+                    None,
+                    event.body,
+                    tags,
+                    entity_keys,
+                )
+                self._insert_audit(
+                    "repository_memory_event_projected",
+                    memory_id,
+                    payload.scope.tenant_id,
+                    {
+                        "repository_id": repository_id,
+                        "event_id": event.id,
+                        "event_fingerprint": event_fingerprint,
+                    },
+                )
+                self.conn.execute(
+                    """
+                    INSERT INTO repo_memory_event_projections (
+                        tenant_id, project_id, repository_id, event_id,
+                        event_fingerprint, projection_version, memory_id,
+                        first_seen_at, last_seen_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        payload.scope.tenant_id,
+                        project_id,
+                        repository_id,
+                        event.id,
+                        event_fingerprint,
+                        REPOSITORY_LEDGER_PROJECTION_VERSION,
+                        memory_id,
+                        now,
+                        now,
+                    ),
+                )
+                row = self.conn.execute(
+                    "SELECT * FROM memories WHERE memory_id = ?",
+                    (memory_id,),
+                ).fetchone()
+                projected = self._row_to_record(row)
+                self._insert_history(
+                    memory_id,
+                    payload.scope.tenant_id,
+                    MemoryHistoryEventType.ADD,
+                    old_memory={},
+                    new_memory=projected.model_dump(mode="json"),
+                    details={
+                        "repository_id": repository_id,
+                        "event_id": event.id,
+                        "event_fingerprint": event_fingerprint,
+                    },
+                    actor_id=access.principal_id if access else None,
+                )
+                mappings[event.id] = {
+                    "event_id": event.id,
+                    "event_fingerprint": event_fingerprint,
+                    "memory_id": memory_id,
+                }
+                created_memories += 1
+
+            write_ms = self._elapsed_ms(write_started)
+            relations_started = time.perf_counter()
+            repaired_relations = 0
+            for event, _, _ in parsed_events:
+                if event.id in erasures:
+                    suppressed_relations += len(event.supersedes)
+                    continue
+                from_memory_id = mappings[event.id]["memory_id"]
+                for target_id in event.supersedes:
+                    if target_id in erasures:
+                        suppressed_relations += 1
+                        continue
+                    to_memory_id = mappings[target_id]["memory_id"]
+                    existing_relation = self.conn.execute(
+                        """
+                        SELECT relation_id, tenant_id, workspace_id, project_id,
+                               user_id, agent_id, session_id
+                        FROM memory_relations
+                        WHERE from_memory_id = ? AND to_memory_id = ? AND relation = ?
+                        """,
+                        (from_memory_id, to_memory_id, RelationKind.SUPERSEDES.value),
+                    ).fetchone()
+                    if existing_relation is None:
+                        self._insert_relation(
+                            from_memory_id,
+                            to_memory_id,
+                            RelationKind.SUPERSEDES.value,
+                            projection_scope,
+                        )
+                        created_relations += 1
+                    elif any(
+                        [
+                            existing_relation["tenant_id"] != payload.scope.tenant_id,
+                            existing_relation["workspace_id"] is not None,
+                            existing_relation["project_id"] != project_id,
+                            existing_relation["user_id"] is not None,
+                            existing_relation["agent_id"] is not None,
+                            existing_relation["session_id"] is not None,
+                        ]
+                    ):
+                        self.conn.execute(
+                            """
+                            UPDATE memory_relations
+                            SET tenant_id = ?, workspace_id = NULL, project_id = ?,
+                                user_id = NULL, agent_id = NULL, session_id = NULL
+                            WHERE relation_id = ?
+                            """,
+                            (
+                                payload.scope.tenant_id,
+                                project_id,
+                                existing_relation["relation_id"],
+                            ),
+                        )
+                        repaired_relations += 1
+                    else:
+                        unchanged_relations += 1
+
+                    target = self.conn.execute(
+                        "SELECT status, valid_to, pre_hold_status FROM memories WHERE memory_id = ?",
+                        (to_memory_id,),
+                    ).fetchone()
+                    if target is None:
+                        raise RepositoryEventConflictError(
+                            f"repository event {target_id} has no projected memory"
+                        )
+                    next_valid_to = target["valid_to"]
+                    if next_valid_to is None or self._from_iso(next_valid_to) > self._from_iso(event.created_at):
+                        next_valid_to = event.created_at
+                    next_status = target["status"]
+                    next_pre_hold_status = target["pre_hold_status"]
+                    desired_status = referenced_status[target_id].value
+                    if next_status == MemoryStatus.HELD.value:
+                        current_pre_hold = next_pre_hold_status or MemoryStatus.ACTIVE.value
+                        if desired_status == MemoryStatus.RETRACTED.value:
+                            next_pre_hold_status = desired_status
+                        elif current_pre_hold == MemoryStatus.ACTIVE.value:
+                            next_pre_hold_status = desired_status
+                    elif (
+                        desired_status == MemoryStatus.RETRACTED.value
+                        and next_status != MemoryStatus.RETRACTED.value
+                    ) or (
+                        desired_status == MemoryStatus.SUPERSEDED.value
+                        and next_status == MemoryStatus.ACTIVE.value
+                    ):
+                        next_status = desired_status
+                        status_updates += 1
+                    if (
+                        next_status != target["status"]
+                        or next_valid_to != target["valid_to"]
+                        or next_pre_hold_status != target["pre_hold_status"]
+                    ):
+                        old_projection = self._row_to_record(
+                            self.conn.execute(
+                                "SELECT * FROM memories WHERE memory_id = ?",
+                                (to_memory_id,),
+                            ).fetchone()
+                        )
+                        self.conn.execute(
+                            """
+                            UPDATE memories
+                            SET status = ?, valid_to = ?, pre_hold_status = ?, updated_at = ?
+                            WHERE memory_id = ?
+                            """,
+                            (
+                                next_status,
+                                next_valid_to,
+                                next_pre_hold_status,
+                                max(event.updated_at, event.created_at),
+                                to_memory_id,
+                            ),
+                        )
+                        new_projection = self._row_to_record(
+                            self.conn.execute(
+                                "SELECT * FROM memories WHERE memory_id = ?",
+                                (to_memory_id,),
+                            ).fetchone()
+                        )
+                        self._insert_history(
+                            to_memory_id,
+                            payload.scope.tenant_id,
+                            MemoryHistoryEventType.UPDATE,
+                            old_memory=old_projection.model_dump(mode="json"),
+                            new_memory=new_projection.model_dump(mode="json"),
+                            details={
+                                "repository_id": repository_id,
+                                "superseded_by_event_id": event.id,
+                            },
+                            actor_id=access.principal_id if access else None,
+                        )
+
+            relations_ms = self._elapsed_ms(relations_started)
+            checkpoint_updated = not (
+                checkpoint_matches
+                and created_memories == 0
+                and repaired_memories == 0
+                and status_updates == 0
+                and created_relations == 0
+                and repaired_relations == 0
+            )
+            if checkpoint_updated:
+                self.conn.execute(
+                    """
+                    INSERT INTO repo_memory_sync_state (
+                        tenant_id, project_id, repository_id, projection_version,
+                        ledger_path, ledger_fingerprint, events_fingerprint,
+                        ledger_bytes, event_count, synced_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (tenant_id, project_id, repository_id) DO UPDATE SET
+                        projection_version = excluded.projection_version,
+                        ledger_path = excluded.ledger_path,
+                        ledger_fingerprint = excluded.ledger_fingerprint,
+                        events_fingerprint = excluded.events_fingerprint,
+                        ledger_bytes = excluded.ledger_bytes,
+                        event_count = excluded.event_count,
+                        synced_at = excluded.synced_at
+                    """,
+                    (
+                        payload.scope.tenant_id,
+                        project_id,
+                        repository_id,
+                        REPOSITORY_LEDGER_PROJECTION_VERSION,
+                        payload.ledger_path,
+                        ledger_fingerprint,
+                        events_fingerprint,
+                        payload.ledger_bytes,
+                        event_count,
+                        now,
+                    ),
+                )
+                for event, _, _ in parsed_events:
+                    if event.id not in erasures:
+                        self.conn.execute(
+                            """
+                            UPDATE repo_memory_event_projections SET last_seen_at = ?
+                            WHERE tenant_id = ? AND project_id = ?
+                              AND repository_id = ? AND event_id = ?
+                            """,
+                            (now, payload.scope.tenant_id, project_id, repository_id, event.id),
+                        )
+                replica_id = "repo-ledger:" + hashlib.sha256(
+                    f"{payload.scope.tenant_id}\0{project_id}\0{repository_id}".encode("utf-8")
+                ).hexdigest()[:32]
+                self.conn.execute(
+                    """
+                    INSERT INTO replication_state (
+                        replica_id, source_path, target_path, last_sync_at, last_lsn,
+                        status, rpo_seconds, rto_seconds, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (replica_id) DO UPDATE SET
+                        source_path = excluded.source_path,
+                        target_path = excluded.target_path,
+                        last_sync_at = excluded.last_sync_at,
+                        last_lsn = excluded.last_lsn,
+                        status = excluded.status
+                    """,
+                    (
+                        replica_id,
+                        payload.ledger_path,
+                        f"store://repositories/{quote(repository_id, safe='')}/memory-events",
+                        now,
+                        ledger_fingerprint,
+                        "active",
+                        60,
+                        300,
+                        now,
+                    ),
+                )
+
+        self._invalidate_tenant_cache(payload.scope.tenant_id)
+        total_ms = self._elapsed_ms(started)
+        return RepositoryMemorySyncResponse(
+            repository_id=repository_id,
+            ledger_fingerprint=ledger_fingerprint,
+            events_fingerprint=events_fingerprint,
+            received_events=event_count,
+            created_memories=created_memories,
+            unchanged_memories=unchanged_memories,
+            repaired_memories=repaired_memories,
+            suppressed_events=suppressed_events,
+            status_updates=status_updates,
+            created_relations=created_relations,
+            repaired_relations=repaired_relations,
+            unchanged_relations=unchanged_relations,
+            suppressed_relations=suppressed_relations,
+            checkpoint_updated=checkpoint_updated,
+            no_op=not checkpoint_updated,
+            duration_ms=total_ms,
+            timings_ms=RepositoryMemorySyncTimings(
+                validate=validation_ms,
+                write=write_ms,
+                relations=relations_ms,
+                total=total_ms,
+            ),
+        )
+
     def update_memory(
         self,
         memory_id: str,
         payload: MemoryUpdate,
         access: AccessContext | None = None,
     ) -> MemoryWriteResult:
-        existing = self.get_memory(memory_id, access=access)
+        existing = self._get_authorized_memory(
+            memory_id,
+            access,
+            ACLPermission.WRITE,
+            source_permission_levels=EDITABLE_PERMISSION_LEVELS,
+            allowed_roles=MEMORY_WRITE_ROLES,
+        )
         if existing is None:
             raise ValueError("memory not found")
-        if not self._can_access(existing, access, ACLPermission.WRITE):
-            raise ValueError("write access required")
+        if self._is_repository_event_projection(memory_id):
+            raise RepositoryEventConflictError(
+                "repository ledger projections are immutable; append a superseding or retraction event"
+            )
 
         updates = payload.model_dump(exclude_unset=True)
         if not updates:
             return MemoryWriteResult(created=False, memory=existing)
+        if payload.supersedes_memory_id:
+            self._validate_supersession_target(
+                payload.supersedes_memory_id,
+                memory_id,
+                existing.scope.tenant_id,
+                access,
+            )
 
         next_kind = payload.kind or existing.kind
         next_layer = payload.memory_layer or existing.memory_layer
@@ -367,6 +1370,60 @@ class ProvenaStore:
         next_acl = payload.acl if payload.acl is not None else existing.acl
         next_sources = payload.source_references if payload.source_references is not None else existing.source_references
         next_triggers = payload.trigger_phrases if payload.trigger_phrases is not None else existing.trigger_phrases
+        source_authorization_record = existing.model_copy(
+            update={"source_references": next_sources}
+        )
+        if not self._can_access_memory(
+            source_authorization_record,
+            access,
+            ACLPermission.WRITE,
+            source_permission_levels=EDITABLE_PERMISSION_LEVELS,
+            allowed_roles=MEMORY_WRITE_ROLES,
+        ):
+            raise ValueError("memory not found")
+        existing_connected_sources = {
+            (row["source_id"], row["connector_id"])
+            for row in self._connected_source_rows(existing)
+        }
+        next_connected_sources = {
+            (row["source_id"], row["connector_id"])
+            for row in self._connected_source_rows(source_authorization_record)
+        }
+        removed_connected_sources = (
+            existing_connected_sources - next_connected_sources
+        )
+        removes_connected_source = bool(removed_connected_sources)
+        changes_connected_acl = bool(
+            existing_connected_sources
+            and payload.acl is not None
+            and next_acl != existing.acl
+        )
+        if removes_connected_source or changes_connected_acl:
+            if changes_connected_acl:
+                governed_sources = [
+                    *existing.source_references,
+                    *next_sources,
+                ]
+            else:
+                removed_source_ids = {
+                    source_id for source_id, _connector_id in removed_connected_sources
+                }
+                governed_sources = [
+                    source
+                    for source in existing.source_references
+                    if source.source_id in removed_source_ids
+                ]
+            governance_record = existing.model_copy(
+                update={"source_references": governed_sources}
+            )
+            if not self._can_access_memory(
+                governance_record,
+                access,
+                ACLPermission.SHARE,
+                source_permission_levels=OWNER_PERMISSION_LEVELS,
+                allowed_roles=MEMORY_WRITE_ROLES,
+            ):
+                raise ValueError("memory not found")
         next_fingerprint = self._fingerprint(
             existing.scope,
             next_kind.value,
@@ -456,24 +1513,26 @@ class ProvenaStore:
                     {"updated_fields": sorted(updates.keys())},
                 )
                 self._refresh_hold_state([memory_id])
+                row = self.conn.execute(
+                    "SELECT * FROM memories WHERE memory_id = ?",
+                    (memory_id,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError("updated memory disappeared before transaction commit")
+                updated = self._row_to_record(row)
+                self._insert_history(
+                    memory_id,
+                    existing.scope.tenant_id,
+                    MemoryHistoryEventType.UPDATE,
+                    old_memory=old_snapshot,
+                    new_memory=updated.model_dump(mode="json"),
+                    details={"updated_fields": sorted(updates.keys())},
+                    actor_id=access.principal_id if access else None,
+                )
+                self._vec_upsert(memory_id, updated.embedding)
         except sqlite3.IntegrityError as exc:
             raise ValueError("update would create a duplicate memory fingerprint") from exc
 
-        updated = self.get_memory(memory_id, access=access)
-        if updated is None:
-            row = self.conn.execute("SELECT * FROM memories WHERE memory_id = ?", (memory_id,)).fetchone()
-            updated = self._row_to_record(row)
-        with self.conn:
-            self._insert_history(
-                memory_id,
-                existing.scope.tenant_id,
-                MemoryHistoryEventType.UPDATE,
-                old_memory=old_snapshot,
-                new_memory=updated.model_dump(mode="json"),
-                details={"updated_fields": sorted(updates.keys())},
-                actor_id=access.principal_id if access else None,
-            )
-            self._vec_upsert(memory_id, updated.embedding)
         self._invalidate_tenant_cache(existing.scope.tenant_id)
         return MemoryWriteResult(created=False, memory=updated)
 
@@ -483,6 +1542,24 @@ class ProvenaStore:
         access: AccessContext | None = None,
         enforce_source_grants: bool = False,
     ) -> MemoryRecord | None:
+        return self._get_authorized_memory(
+            memory_id,
+            access,
+            ACLPermission.READ,
+            source_permission_levels=(
+                READABLE_PERMISSION_LEVELS if enforce_source_grants else None
+            ),
+        )
+
+    def _get_authorized_memory(
+        self,
+        memory_id: str,
+        access: AccessContext | None,
+        required_acl: ACLPermission,
+        *,
+        source_permission_levels: frozenset[str] | None = None,
+        allowed_roles: frozenset[str] | None = None,
+    ) -> MemoryRecord | None:
         self._refresh_hold_state([memory_id])
         row = self.conn.execute(
             "SELECT * FROM memories WHERE memory_id = ?",
@@ -491,9 +1568,13 @@ class ProvenaStore:
         if row is None:
             return None
         record = self._row_to_record(row)
-        if not self._can_access(record, access, ACLPermission.READ):
-            return None
-        if enforce_source_grants and not self._has_required_source_grants(record, access):
+        if not self._can_access_memory(
+            record,
+            access,
+            required_acl,
+            source_permission_levels=source_permission_levels,
+            allowed_roles=allowed_roles,
+        ):
             return None
         return record
 
@@ -524,7 +1605,7 @@ class ProvenaStore:
             SELECT history_id, memory_id, event, actor_id, old_memory_json, new_memory_json, details_json, created_at
             FROM memory_history
             WHERE memory_id = ?
-            ORDER BY datetime(created_at) DESC, rowid DESC
+            ORDER BY datetime(created_at) DESC, history_id DESC
             LIMIT ?
             """,
             (memory_id, limit),
@@ -549,18 +1630,22 @@ class ProvenaStore:
         payload: MemoryFeedbackCreate,
         access: AccessContext | None = None,
     ) -> MemoryFeedbackRecord:
-        record = self.get_memory(memory_id, access=access)
+        record = self._get_authorized_memory(
+            memory_id,
+            access,
+            ACLPermission.READ,
+            source_permission_levels=COMMENTABLE_PERMISSION_LEVELS,
+            allowed_roles=MEMORY_WRITE_ROLES,
+        )
         if record is None:
             raise ValueError("memory not found")
-        if not self._can_access(record, access, ACLPermission.READ):
-            raise ValueError("read access required")
         created_at = self._iso_now()
         feedback = MemoryFeedbackRecord(
             feedback_id=payload.feedback_id or str(uuid.uuid4()),
             memory_id=memory_id,
             tenant_id=record.scope.tenant_id,
             feedback_type=payload.feedback_type,
-            principal_id=payload.principal_id or (access.principal_id if access else None),
+            principal_id=access.principal_id if access is not None else payload.principal_id,
             reason=payload.reason,
             metadata=payload.metadata,
             created_at=self._from_iso(created_at) or datetime.now(UTC),
@@ -611,7 +1696,12 @@ class ProvenaStore:
         access: AccessContext | None = None,
         limit: int = 100,
     ) -> list[MemoryFeedbackRecord]:
-        record = self.get_memory(memory_id, access=access)
+        record = self._get_authorized_memory(
+            memory_id,
+            access,
+            ACLPermission.READ,
+            source_permission_levels=READABLE_PERMISSION_LEVELS,
+        )
         if record is None:
             raise ValueError("memory not found")
         rows = self.conn.execute(
@@ -619,7 +1709,7 @@ class ProvenaStore:
             SELECT feedback_id, memory_id, tenant_id, feedback_type, principal_id, reason, metadata_json, created_at
             FROM memory_feedback
             WHERE memory_id = ?
-            ORDER BY datetime(created_at) DESC, rowid DESC
+            ORDER BY datetime(created_at) DESC, feedback_id DESC
             LIMIT ?
             """,
             (memory_id, limit),
@@ -666,7 +1756,10 @@ class ProvenaStore:
         access: AccessContext | None = None,
     ) -> SearchResponse:
         cache_key = self._search_cache_key(payload, access)
-        cached = self.hot_cache.get_search(payload.scope.tenant_id, cache_key)
+        cached, cache_generation = self.hot_cache.lookup_search(
+            payload.scope.tenant_id,
+            cache_key,
+        )
         if cached is not None:
             return SearchResponse(**cached)
 
@@ -706,10 +1799,11 @@ class ProvenaStore:
             reverse=True,
         )
         response = SearchResponse(results=results[: payload.limit])
-        self.hot_cache.set_search(
+        self.hot_cache.set_search_if_current(
             payload.scope.tenant_id,
             cache_key,
             response.model_dump(mode="json"),
+            cache_generation,
         )
         return response
 
@@ -930,6 +2024,10 @@ class ProvenaStore:
             memories_deleted=self._count_scalar(
                 "SELECT COUNT(*) FROM memories WHERE tenant_id = ? AND status = ?",
                 (tenant_id, MemoryStatus.DELETED.value),
+            ),
+            memories_retracted=self._count_scalar(
+                "SELECT COUNT(*) FROM memories WHERE tenant_id = ? AND status = ?",
+                (tenant_id, MemoryStatus.RETRACTED.value),
             ),
             memories_held=self._count_scalar(
                 "SELECT COUNT(*) FROM memories WHERE tenant_id = ? AND held = 1",
@@ -1213,23 +2311,42 @@ class ProvenaStore:
         payload: RelationWrite,
         access: AccessContext | None = None,
     ) -> None:
-        source = self.get_memory(payload.from_memory_id, access=access)
-        target = self.get_memory(payload.to_memory_id, access=access)
+        source = self._get_authorized_memory(
+            payload.from_memory_id,
+            access,
+            ACLPermission.WRITE,
+            source_permission_levels=EDITABLE_PERMISSION_LEVELS,
+            allowed_roles=MEMORY_WRITE_ROLES,
+        )
+        target = self._get_authorized_memory(
+            payload.to_memory_id,
+            access,
+            ACLPermission.WRITE,
+            source_permission_levels=EDITABLE_PERMISSION_LEVELS,
+            allowed_roles=MEMORY_WRITE_ROLES,
+        )
         if source is None or target is None:
             raise ValueError("relation requires accessible source and target memories")
-        if not self._can_access(source, access, ACLPermission.WRITE):
-            raise ValueError("write access required")
+        derived_scope = source.scope
+        if target.scope != derived_scope or payload.scope != derived_scope:
+            raise ValueError("relation requires source, target, and payload to share one scope")
+        if self._is_repository_event_projection(payload.from_memory_id) or self._is_repository_event_projection(
+            payload.to_memory_id
+        ):
+            raise RepositoryEventConflictError(
+                "repository ledger projection relations are immutable; append a source-attested event"
+            )
         with self.conn:
             self._insert_relation(
                 payload.from_memory_id,
                 payload.to_memory_id,
                 payload.relation.value,
-                payload.scope,
+                derived_scope,
             )
             self._insert_audit(
                 "relation_created",
                 payload.from_memory_id,
-                payload.scope.tenant_id,
+                derived_scope.tenant_id,
                 {"to_memory_id": payload.to_memory_id, "relation": payload.relation.value},
             )
 
@@ -1239,17 +2356,25 @@ class ProvenaStore:
         hard_delete: bool = False,
         access: AccessContext | None = None,
     ) -> DeleteResponse:
-        record = self.get_memory(memory_id, access=access)
+        record = self._get_authorized_memory(
+            memory_id,
+            access,
+            ACLPermission.DELETE,
+            source_permission_levels=OWNER_PERMISSION_LEVELS,
+            allowed_roles=MEMORY_WRITE_ROLES,
+        )
         if record is None:
             return DeleteResponse(memory_id=memory_id, deleted=False, hard_delete=hard_delete)
-        if not self._can_access(record, access, ACLPermission.DELETE):
-            raise ValueError("delete access required")
+        if self._is_repository_event_projection(memory_id):
+            raise RepositoryEventConflictError(
+                "repository ledger projections are immutable; append a retraction event"
+            )
         old_snapshot = record.model_dump(mode="json")
 
         with self.conn:
             if hard_delete:
-                self.conn.execute("DELETE FROM memories WHERE memory_id = ?", (memory_id,))
-                self._vec_delete(memory_id)
+                self._purge_memory_indexes([memory_id])
+                self._delete_memory_rows([memory_id])
             else:
                 self.conn.execute(
                     "UPDATE memories SET status = ?, updated_at = ? WHERE memory_id = ?",
@@ -1271,7 +2396,7 @@ class ProvenaStore:
                     details={"hard_delete": hard_delete},
                     actor_id=access.principal_id if access else None,
                 )
-        self._invalidate_tenant_cache(record.scope.tenant_id)
+        self._purge_tenant_cache(record.scope.tenant_id)
         return DeleteResponse(memory_id=memory_id, deleted=True, hard_delete=hard_delete)
 
     def erase_scope(
@@ -1279,6 +2404,12 @@ class ProvenaStore:
         payload: EraseRequest,
         access: AccessContext | None = None,
     ) -> EraseResponse:
+        if (
+            access is not None
+            and access.role != "superadmin"
+            and access.tenant_id not in {None, payload.tenant_id}
+        ):
+            raise ValueError("erase scope tenant does not match access tenant")
         selector, params = self._erase_selector(payload)
         ids = [
             row["memory_id"]
@@ -1295,6 +2426,7 @@ class ProvenaStore:
                 and self._can_access(record, access, ACLPermission.DELETE)
             ]
         if not ids:
+            self._purge_tenant_cache(payload.tenant_id)
             return EraseResponse(deleted_memories=0, deleted_sources=0, deleted_relations=0)
 
         placeholders = ", ".join("?" for _ in ids)
@@ -1308,11 +2440,11 @@ class ProvenaStore:
         ).fetchone()["count"]
 
         with self.conn:
-            self.conn.execute(
-                f"DELETE FROM memories WHERE memory_id IN ({placeholders})",
-                ids,
-            )
+            self._record_repository_event_erasures(ids, "admin_erase")
+            self._purge_memory_indexes(ids)
+            self._delete_memory_rows(ids)
             self._insert_audit("scope_erased", None, payload.tenant_id, {"memory_ids": ids})
+        self._purge_tenant_cache(payload.tenant_id)
         return EraseResponse(
             deleted_memories=len(ids),
             deleted_sources=source_count,
@@ -1374,11 +2506,16 @@ class ProvenaStore:
         )
 
     def save_connector(self, connector: ConnectorConfig) -> ConnectorConfig:
+        self._assert_tenant_owned_id(
+            "connector",
+            connector.connector_id,
+            connector.tenant_id,
+        )
         now = self._iso_now()
         created_at = self._to_iso(connector.created_at) or now
         updated_at = self._to_iso(connector.updated_at) or now
         with self.conn:
-            self.conn.execute(
+            cursor = self.conn.execute(
                 """
                 INSERT INTO connectors (
                     connector_id, tenant_id, provider, display_name, remote_workspace_id,
@@ -1387,7 +2524,6 @@ class ProvenaStore:
                     last_synced_at, last_webhook_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(connector_id) DO UPDATE SET
-                    tenant_id = excluded.tenant_id,
                     provider = excluded.provider,
                     display_name = excluded.display_name,
                     remote_workspace_id = excluded.remote_workspace_id,
@@ -1402,6 +2538,8 @@ class ProvenaStore:
                     updated_at = excluded.updated_at,
                     last_synced_at = excluded.last_synced_at,
                     last_webhook_at = excluded.last_webhook_at
+                WHERE connectors.tenant_id = excluded.tenant_id
+                RETURNING tenant_id
                 """,
                 (
                     connector.connector_id,
@@ -1422,6 +2560,7 @@ class ProvenaStore:
                     self._to_iso(connector.last_webhook_at),
                 ),
             )
+            self._require_tenant_owned_upsert(cursor)
             self._insert_audit(
                 "connector_saved",
                 None,
@@ -1463,16 +2602,42 @@ class ProvenaStore:
         return self._row_to_connector(row) if row is not None else None
 
     def save_connector_sources(self, connector_id: str, tenant_id: str, batch: ConnectorSourceBatch) -> list[ConnectorSourceRecord]:
+        self._assert_tenant_owned_id(
+            "connector",
+            connector_id,
+            tenant_id,
+            require_exists=True,
+        )
+        for source in batch.sources:
+            if source.connector_id != connector_id or source.tenant_id != tenant_id:
+                raise TenantOwnershipConflictError("resource write conflict")
+            self._assert_tenant_owned_id("connector_source", source.source_id, tenant_id)
         now = self._iso_now()
         with self.conn:
             for source in batch.sources:
-                self.conn.execute(
+                cursor = self.conn.execute(
                     """
-                    INSERT OR REPLACE INTO connector_sources (
+                    INSERT INTO connector_sources (
                         source_id, connector_id, tenant_id, remote_source_id, source_type,
                         display_name, path, status, last_synced_at, stale_after, acl_hash,
                         metadata_json, created_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(source_id) DO UPDATE SET
+                        connector_id = excluded.connector_id,
+                        remote_source_id = excluded.remote_source_id,
+                        source_type = excluded.source_type,
+                        display_name = excluded.display_name,
+                        path = excluded.path,
+                        status = excluded.status,
+                        last_synced_at = excluded.last_synced_at,
+                        stale_after = excluded.stale_after,
+                        acl_hash = excluded.acl_hash,
+                        metadata_json = excluded.metadata_json,
+                        created_at = excluded.created_at,
+                        updated_at = excluded.updated_at
+                    WHERE connector_sources.tenant_id = excluded.tenant_id
+                      AND connector_sources.connector_id = excluded.connector_id
+                    RETURNING tenant_id
                     """,
                     (
                         source.source_id,
@@ -1491,12 +2656,14 @@ class ProvenaStore:
                         self._to_iso(source.updated_at) or now,
                     ),
                 )
+                self._require_tenant_owned_upsert(cursor)
             self._insert_audit(
                 "connector_sources_saved",
                 None,
                 tenant_id,
                 {"connector_id": connector_id, "count": len(batch.sources)},
             )
+        self._invalidate_tenant_cache(tenant_id)
         return self.list_connector_sources(connector_id, tenant_id)
 
     def list_connector_sources(self, connector_id: str, tenant_id: str) -> list[ConnectorSourceRecord]:
@@ -1507,16 +2674,43 @@ class ProvenaStore:
         return [self._row_to_connector_source(row) for row in rows]
 
     def save_principal_mappings(self, connector_id: str, tenant_id: str, batch: PrincipalMappingBatch) -> list[PrincipalMapping]:
+        self._assert_tenant_owned_id(
+            "connector",
+            connector_id,
+            tenant_id,
+            require_exists=True,
+        )
+        for mapping in batch.mappings:
+            if mapping.connector_id != connector_id or mapping.tenant_id != tenant_id:
+                raise TenantOwnershipConflictError("resource write conflict")
+            self._assert_tenant_owned_id(
+                "principal_mapping",
+                mapping.mapping_id,
+                tenant_id,
+            )
         now = self._iso_now()
         with self.conn:
             for mapping in batch.mappings:
-                self.conn.execute(
+                cursor = self.conn.execute(
                     """
-                    INSERT OR REPLACE INTO principal_mappings (
+                    INSERT INTO principal_mappings (
                         mapping_id, connector_id, tenant_id, principal_type, local_principal_id,
                         remote_principal_id, remote_name, groups_json, last_synced_at,
                         created_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(mapping_id) DO UPDATE SET
+                        connector_id = excluded.connector_id,
+                        principal_type = excluded.principal_type,
+                        local_principal_id = excluded.local_principal_id,
+                        remote_principal_id = excluded.remote_principal_id,
+                        remote_name = excluded.remote_name,
+                        groups_json = excluded.groups_json,
+                        last_synced_at = excluded.last_synced_at,
+                        created_at = excluded.created_at,
+                        updated_at = excluded.updated_at
+                    WHERE principal_mappings.tenant_id = excluded.tenant_id
+                      AND principal_mappings.connector_id = excluded.connector_id
+                    RETURNING tenant_id
                     """,
                     (
                         mapping.mapping_id,
@@ -1532,12 +2726,14 @@ class ProvenaStore:
                         self._to_iso(mapping.updated_at) or now,
                     ),
                 )
+                self._require_tenant_owned_upsert(cursor)
             self._insert_audit(
                 "principal_mappings_saved",
                 None,
                 tenant_id,
                 {"connector_id": connector_id, "count": len(batch.mappings)},
             )
+        self._invalidate_tenant_cache(tenant_id)
         return self.list_principal_mappings(connector_id, tenant_id)
 
     def list_principal_mappings(self, connector_id: str, tenant_id: str) -> list[PrincipalMapping]:
@@ -1553,15 +2749,54 @@ class ProvenaStore:
         tenant_id: str,
         batch: SourcePermissionBatch,
     ) -> list[SourcePermissionGrant]:
+        self._assert_tenant_owned_id(
+            "connector",
+            connector_id,
+            tenant_id,
+            require_exists=True,
+        )
+        for grant in batch.grants:
+            if grant.connector_id != connector_id or grant.tenant_id != tenant_id:
+                raise TenantOwnershipConflictError("resource write conflict")
+            self._assert_tenant_owned_id(
+                "source_permission_grant",
+                grant.grant_id,
+                tenant_id,
+            )
+            self._assert_tenant_owned_id(
+                "connector_source",
+                grant.source_id,
+                tenant_id,
+                require_exists=True,
+            )
+            source = self.conn.execute(
+                "SELECT connector_id FROM connector_sources WHERE source_id = ? AND tenant_id = ?",
+                (grant.source_id, tenant_id),
+            ).fetchone()
+            if source is None or source["connector_id"] != connector_id:
+                raise TenantOwnershipConflictError("resource write conflict")
         now = self._iso_now()
         with self.conn:
             for grant in batch.grants:
-                self.conn.execute(
+                cursor = self.conn.execute(
                     """
-                    INSERT OR REPLACE INTO source_permission_grants (
+                    INSERT INTO source_permission_grants (
                         grant_id, source_id, connector_id, tenant_id, principal_type,
                         principal_id, permission_level, inherited, remote_permission_id, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(grant_id) DO UPDATE SET
+                        source_id = excluded.source_id,
+                        connector_id = excluded.connector_id,
+                        principal_type = excluded.principal_type,
+                        principal_id = excluded.principal_id,
+                        permission_level = excluded.permission_level,
+                        inherited = excluded.inherited,
+                        remote_permission_id = excluded.remote_permission_id,
+                        created_at = excluded.created_at
+                    WHERE source_permission_grants.tenant_id = excluded.tenant_id
+                      AND source_permission_grants.connector_id = excluded.connector_id
+                      AND source_permission_grants.source_id = excluded.source_id
+                    RETURNING tenant_id
                     """,
                     (
                         grant.grant_id,
@@ -1576,12 +2811,14 @@ class ProvenaStore:
                         self._to_iso(grant.created_at) or now,
                     ),
                 )
+                self._require_tenant_owned_upsert(cursor)
             self._insert_audit(
                 "source_permission_grants_saved",
                 None,
                 tenant_id,
                 {"connector_id": connector_id, "count": len(batch.grants)},
             )
+        self._invalidate_tenant_cache(tenant_id)
         return self.list_source_permission_grants(connector_id, tenant_id)
 
     def list_source_permission_grants(self, connector_id: str, tenant_id: str, source_id: str | None = None) -> list[SourcePermissionGrant]:
@@ -1606,13 +2843,35 @@ class ProvenaStore:
         return [self._row_to_source_permission_grant(row) for row in rows]
 
     def save_sync_job(self, connector_id: str, tenant_id: str, job: SyncJob) -> SyncJob:
+        self._assert_tenant_owned_id(
+            "connector",
+            connector_id,
+            tenant_id,
+            require_exists=True,
+        )
+        if job.connector_id != connector_id or job.tenant_id != tenant_id:
+            raise TenantOwnershipConflictError("resource write conflict")
+        self._assert_tenant_owned_id("sync_job", job.job_id, tenant_id)
         with self.conn:
-            self.conn.execute(
+            cursor = self.conn.execute(
                 """
-                INSERT OR REPLACE INTO sync_jobs (
+                INSERT INTO sync_jobs (
                     job_id, connector_id, tenant_id, job_type, status, cursor, stats_json,
                     error_message, started_at, finished_at, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    connector_id = excluded.connector_id,
+                    job_type = excluded.job_type,
+                    status = excluded.status,
+                    cursor = excluded.cursor,
+                    stats_json = excluded.stats_json,
+                    error_message = excluded.error_message,
+                    started_at = excluded.started_at,
+                    finished_at = excluded.finished_at,
+                    created_at = excluded.created_at
+                WHERE sync_jobs.tenant_id = excluded.tenant_id
+                  AND sync_jobs.connector_id = excluded.connector_id
+                RETURNING tenant_id
                 """,
                 (
                     job.job_id,
@@ -1628,6 +2887,7 @@ class ProvenaStore:
                     self._to_iso(job.created_at) or self._iso_now(),
                 ),
             )
+            self._require_tenant_owned_upsert(cursor)
             self._insert_audit(
                 "sync_job_saved",
                 None,
@@ -1736,12 +2996,24 @@ class ProvenaStore:
         )
 
     def save_retention_policy(self, policy: RetentionPolicy) -> RetentionPolicy:
+        self._assert_tenant_owned_id(
+            "retention_policy",
+            policy.policy_id,
+            policy.tenant_id,
+        )
         with self.conn:
-            self.conn.execute(
+            cursor = self.conn.execute(
                 """
-                INSERT OR REPLACE INTO retention_policies (
+                INSERT INTO retention_policies (
                     policy_id, tenant_id, kind, max_age_days, action, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(policy_id) DO UPDATE SET
+                    kind = excluded.kind,
+                    max_age_days = excluded.max_age_days,
+                    action = excluded.action,
+                    created_at = excluded.created_at
+                WHERE retention_policies.tenant_id = excluded.tenant_id
+                RETURNING tenant_id
                 """,
                 (
                     policy.policy_id,
@@ -1752,6 +3024,7 @@ class ProvenaStore:
                     self._to_iso(policy.created_at) or self._iso_now(),
                 ),
             )
+            self._require_tenant_owned_upsert(cursor)
         return policy
 
     def list_retention_policies(self, tenant_id: str | None = None) -> list[RetentionPolicy]:
@@ -1777,13 +3050,22 @@ class ProvenaStore:
         ]
 
     def place_legal_hold(self, hold: LegalHold) -> LegalHold:
+        self._assert_tenant_owned_id("legal_hold", hold.hold_id, hold.tenant_id)
         resolved_ids = self._resolve_legal_hold_targets(hold.tenant_id, hold.memory_ids, hold.scope)
         with self.conn:
-            self.conn.execute(
+            cursor = self.conn.execute(
                 """
-                INSERT OR REPLACE INTO legal_holds (
+                INSERT INTO legal_holds (
                     hold_id, tenant_id, memory_ids_json, scope_json, reason, hold_until, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(hold_id) DO UPDATE SET
+                    memory_ids_json = excluded.memory_ids_json,
+                    scope_json = excluded.scope_json,
+                    reason = excluded.reason,
+                    hold_until = excluded.hold_until,
+                    created_at = excluded.created_at
+                WHERE legal_holds.tenant_id = excluded.tenant_id
+                RETURNING tenant_id
                 """,
                 (
                     hold.hold_id,
@@ -1795,6 +3077,7 @@ class ProvenaStore:
                     self._to_iso(hold.created_at) or self._iso_now(),
                 ),
             )
+            self._require_tenant_owned_upsert(cursor)
             self._refresh_hold_state(resolved_ids)
         return hold.model_copy(update={"memory_ids": resolved_ids})
 
@@ -1830,9 +3113,11 @@ class ProvenaStore:
         held = [row["memory_id"] for row in rows if int(row["held"]) == 1]
         deletable = [row["memory_id"] for row in rows if int(row["held"]) == 0]
         if deletable:
-            placeholders = ", ".join("?" for _ in deletable)
             with self.conn:
-                self.conn.execute(f"DELETE FROM memories WHERE memory_id IN ({placeholders})", deletable)
+                self._record_repository_event_erasures(deletable, "right_to_be_forgotten")
+                self._purge_memory_indexes(deletable)
+                self._delete_memory_rows(deletable)
+        self._purge_tenant_cache(payload.tenant_id)
         return RTBFResponse(deleted_memories=len(deletable), held_memories=held)
 
     def enforce_retention(self, tenant_id: str | None = None) -> RetentionEnforcementResponse:
@@ -1852,21 +3137,28 @@ class ProvenaStore:
                   AND (? IS NULL OR kind = ?)
                   AND datetime(created_at) < datetime(?)
                 """,
-                (tenant_id, policy.kind, policy.kind, cutoff.isoformat()),
+                (policy.tenant_id, policy.kind, policy.kind, cutoff.isoformat()),
             ).fetchall()
             eligible = [row["memory_id"] for row in rows if int(row["held"]) == 0]
             if not eligible:
+                self._purge_tenant_cache(policy.tenant_id)
                 continue
             expired.extend(eligible)
             placeholders = ", ".join("?" for _ in eligible)
             with self.conn:
+                self._record_repository_event_erasures(
+                    eligible,
+                    f"retention:{policy.policy_id}:{policy.action}",
+                )
                 if policy.action == "delete_soft":
                     self.conn.execute(
                         f"UPDATE memories SET status = ?, updated_at = ? WHERE memory_id IN ({placeholders})",
                         (MemoryStatus.DELETED.value, self._iso_now(), *eligible),
                     )
                 else:
-                    self.conn.execute(f"DELETE FROM memories WHERE memory_id IN ({placeholders})", eligible)
+                    self._purge_memory_indexes(eligible)
+                    self._delete_memory_rows(eligible)
+            self._purge_tenant_cache(policy.tenant_id)
         return RetentionEnforcementResponse(expired_memory_ids=expired)
 
     def _row_to_record(self, row: sqlite3.Row) -> MemoryRecord:
@@ -2082,14 +3374,37 @@ class ProvenaStore:
         record: MemoryRecord,
         access: AccessContext | None,
     ) -> bool:
-        if not self._can_access(record, access, ACLPermission.READ):
+        return self._can_access_memory(
+            record,
+            access,
+            ACLPermission.READ,
+            source_permission_levels=READABLE_PERMISSION_LEVELS,
+        )
+
+    def _can_access_memory(
+        self,
+        record: MemoryRecord,
+        access: AccessContext | None,
+        required_acl: ACLPermission,
+        *,
+        source_permission_levels: frozenset[str] | None = None,
+        allowed_roles: frozenset[str] | None = None,
+    ) -> bool:
+        if access is not None and allowed_roles is not None and access.role not in allowed_roles:
             return False
-        return self._has_required_source_grants(record, access)
+        if not self._can_access(record, access, required_acl):
+            return False
+        return source_permission_levels is None or self._has_required_source_grants(
+            record,
+            access,
+            source_permission_levels,
+        )
 
     def _has_required_source_grants(
         self,
         record: MemoryRecord,
         access: AccessContext | None,
+        permission_levels: frozenset[str] = READABLE_PERMISSION_LEVELS,
     ) -> bool:
         source_rows = self._connected_source_rows(record)
         if not source_rows:
@@ -2103,7 +3418,7 @@ class ProvenaStore:
             dict.fromkeys((row["source_id"], row["connector_id"]) for row in source_rows)
         )
         source_ids = [source_id for source_id, _ in source_keys]
-        permission_placeholders = ", ".join("?" for _ in READABLE_PERMISSION_LEVELS)
+        permission_placeholders = ", ".join("?" for _ in permission_levels)
         source_placeholders = ", ".join("?" for _ in source_ids)
         grant_rows = self.conn.execute(
             f"""
@@ -2116,7 +3431,7 @@ class ProvenaStore:
             (
                 record.scope.tenant_id,
                 *source_ids,
-                *sorted(READABLE_PERMISSION_LEVELS),
+                *sorted(permission_levels),
             ),
         ).fetchall()
         grants_by_source: dict[tuple[str, str], list[sqlite3.Row]] = {}
@@ -2158,7 +3473,7 @@ class ProvenaStore:
             FROM connector_sources
             WHERE tenant_id = ?
               AND source_id IN ({placeholders})
-            ORDER BY rowid ASC
+            ORDER BY source_id ASC, connector_id ASC
             """,
             (record.scope.tenant_id, *source_ids),
         ).fetchall()
@@ -2216,7 +3531,7 @@ class ProvenaStore:
             SELECT audit_id, action, memory_id, actor_id, tenant_id, details_json, created_at
             FROM audit_log
             WHERE memory_id = ?
-            ORDER BY datetime(created_at) DESC, rowid DESC
+            ORDER BY datetime(created_at) DESC, audit_id DESC
             LIMIT ?
             """,
             (memory_id, limit),
@@ -2354,11 +3669,11 @@ class ProvenaStore:
         prefix = f"{alias}." if alias else ""
         if include_deleted:
             return "", []
-        # Superseded memories stay retrievable (the evaluator ranks them below
-        # the latest revision); only deleted memories are excluded by default.
+        # Generic superseded revisions remain searchable for compatibility;
+        # source-attested repo projections are rejected during evaluation.
         return (
-            f" AND {prefix}status != ?",
-            [MemoryStatus.DELETED.value],
+            f" AND {prefix}status NOT IN (?, ?)",
+            [MemoryStatus.DELETED.value, MemoryStatus.RETRACTED.value],
         )
 
     def _evaluate_search_candidate(
@@ -2388,10 +3703,13 @@ class ProvenaStore:
         if payload.entity_keys and not set(payload.entity_keys).intersection(record.entity_keys):
             rejection_reasons.append("entity keys filtered")
         if not payload.include_deleted:
-            if record.status == MemoryStatus.DELETED:
-                rejection_reasons.append("deleted")
-            # Superseded memories are NOT rejected: they remain retrievable and
-            # are ranked below the latest revision by the scoring logic.
+            if record.status in {MemoryStatus.DELETED, MemoryStatus.RETRACTED}:
+                rejection_reasons.append(record.status.value)
+            elif (
+                record.status == MemoryStatus.SUPERSEDED
+                and record.metadata.get("provena_projection") == "repo-ledger"
+            ):
+                rejection_reasons.append(record.status.value)
         if record.valid_from and now < record.valid_from:
             rejection_reasons.append("not yet valid")
         if record.valid_to and now > record.valid_to:
@@ -2507,10 +3825,10 @@ class ProvenaStore:
     def _search_scope_clauses(self, scope: ScopeEnvelope) -> tuple[list[str], list[Any]]:
         clauses: list[str] = []
         params: list[Any] = []
-        for field in ("workspace_id", "project_id", "user_id", "agent_id", "session_id"):
-            value = getattr(scope, field)
+        for scope_field in ("workspace_id", "project_id", "user_id", "agent_id", "session_id"):
+            value = getattr(scope, scope_field)
             if value:
-                clauses.append(f"(m.{field} IS NULL OR m.{field} = ?)")
+                clauses.append(f"(m.{scope_field} IS NULL OR m.{scope_field} = ?)")
                 params.append(value)
         return clauses, params
 
@@ -2656,8 +3974,7 @@ class ProvenaStore:
             SELECT m.*, NULL AS fts_rank
             FROM memories AS m
             WHERE m.tenant_id = ?{status_sql}
-              AND m.embedding_json IS NOT NULL
-              AND m.embedding_json NOT IN ('[]', 'null', ''){scope_sql}
+              AND {self._embedding_candidate_predicate('m')}{scope_sql}
             ORDER BY datetime(m.updated_at) DESC
             LIMIT ?
             """,
@@ -2684,6 +4001,13 @@ class ProvenaStore:
         )
         return scored[:candidate_limit]
 
+    @staticmethod
+    def _embedding_candidate_predicate(alias: str) -> str:
+        return (
+            f"{alias}.embedding_json IS NOT NULL "
+            f"AND {alias}.embedding_json NOT IN ('[]', 'null', '')"
+        )
+
     def _merge_search_candidates(
         self,
         fts_candidates: list[SearchCandidate],
@@ -2706,7 +4030,8 @@ class ProvenaStore:
     def _normalize_fts_rank(self, fts_rank: float | None) -> float:
         if fts_rank is None:
             return 0.0
-        return max(0.0, 1.0 - min(abs(fts_rank), 10.0) / 10.0)
+        magnitude = abs(fts_rank)
+        return magnitude / (1.0 + magnitude)
 
     def _fuse_retrieval_score(
         self,
@@ -2763,13 +4088,20 @@ class ProvenaStore:
             (memory_id, memory_id),
         ).fetchall()
         related: list[RelatedMemory] = []
+        now = datetime.now(UTC)
         for row in rows:
             record = self.get_memory(
                 row["to_memory_id"],
                 access=access,
                 enforce_source_grants=True,
             )
-            if record is None:
+            if (
+                record is None
+                or record.status in {MemoryStatus.DELETED, MemoryStatus.RETRACTED}
+                or (record.valid_from is not None and now < record.valid_from)
+                or (record.valid_to is not None and now > record.valid_to)
+                or (record.expires_at is not None and record.expires_at <= now)
+            ):
                 continue
             related.append(RelatedMemory(relation=RelationKind(row["relation"]), memory=record))
         return related
@@ -2851,7 +4183,12 @@ class ProvenaStore:
 
     def _sources_for(self, memory_id: str) -> list[SourceReference]:
         rows = self.conn.execute(
-            "SELECT * FROM memory_sources WHERE memory_id = ? ORDER BY rowid ASC",
+            """
+            SELECT * FROM memory_sources
+            WHERE memory_id = ?
+            ORDER BY source_type ASC, source_id ASC,
+                     COALESCE(span_start, 0) ASC, source_ref_id ASC
+            """,
             (memory_id,),
         ).fetchall()
         return [
@@ -2870,10 +4207,28 @@ class ProvenaStore:
 
     def _trigger_phrases_for(self, memory_id: str) -> list[str]:
         rows = self.conn.execute(
-            "SELECT phrase FROM trigger_index WHERE memory_id = ? ORDER BY rowid ASC",
+            """
+            SELECT phrase FROM trigger_index
+            WHERE memory_id = ?
+            ORDER BY phrase ASC, trigger_id ASC
+            """,
             (memory_id,),
         ).fetchall()
         return [row["phrase"] for row in rows]
+
+    def _trigger_rows_for(self, memory_id: str) -> list[tuple[str, str]]:
+        rows = self.conn.execute(
+            """
+            SELECT phrase, tenant_id FROM trigger_index
+            WHERE memory_id = ?
+            ORDER BY phrase ASC, trigger_id ASC
+            """,
+            (memory_id,),
+        ).fetchall()
+        return sorted(
+            [(row["phrase"], row["tenant_id"]) for row in rows],
+            key=lambda item: (self._repository_text_sort_key(item[0]), item[1]),
+        )
 
     def _replace_trigger_phrases(self, memory_id: str, tenant_id: str, phrases: Iterable[str]) -> None:
         self.conn.execute("DELETE FROM trigger_index WHERE memory_id = ?", (memory_id,))
@@ -2950,6 +4305,70 @@ class ProvenaStore:
             (memory_id, title, summary, content, " ".join(tags), " ".join(entity_keys)),
         )
 
+    def _memory_index_matches(
+        self,
+        memory_id: str,
+        title: str | None,
+        summary: str | None,
+        content: str,
+        tags: list[str],
+        entity_keys: list[str],
+    ) -> bool:
+        rows = self.conn.execute(
+            """
+            SELECT title, summary, content, tags, entity_keys
+            FROM memories_fts WHERE memory_id = ?
+            """,
+            (memory_id,),
+        ).fetchall()
+        expected = (
+            title,
+            summary,
+            content,
+            " ".join(tags),
+            " ".join(entity_keys),
+        )
+        return len(rows) == 1 and tuple(rows[0]) == expected
+
+    def _assert_tenant_owned_id(
+        self,
+        resource: str,
+        resource_id: str,
+        tenant_id: str,
+        *,
+        require_exists: bool = False,
+    ) -> None:
+        """Prevent a globally unique id from being moved across tenants.
+
+        The database keeps these ids globally unique for stable connector and
+        governance references. Every upsert must therefore prove ownership
+        before its conflict clause can update the row. `resource` is selected
+        from a closed internal map so table and column names never come from a
+        request.
+        """
+
+        try:
+            table, id_column = TENANT_OWNED_ID_TABLES[resource]
+        except KeyError as exc:  # pragma: no cover - internal programming error
+            raise RuntimeError(f"unknown tenant-owned resource: {resource}") from exc
+        row = self.conn.execute(
+            f"SELECT tenant_id FROM {table} WHERE {id_column} = ?",
+            (resource_id,),
+        ).fetchone()
+        if row is None:
+            if require_exists:
+                raise TenantOwnershipConflictError("resource write conflict")
+            return
+        if row["tenant_id"] != tenant_id:
+            raise TenantOwnershipConflictError("resource write conflict")
+
+    @staticmethod
+    def _require_tenant_owned_upsert(cursor: Any) -> None:
+        """Reject an atomic guarded upsert that lost a tenant-id race."""
+
+        if cursor.fetchone() is None:
+            raise TenantOwnershipConflictError("resource write conflict")
+
     def _insert_audit(self, action: str, memory_id: str | None, tenant_id: str | None, details: dict[str, Any]) -> None:
         self.conn.execute(
             """
@@ -2990,10 +4409,10 @@ class ProvenaStore:
     def _memory_ids_for_hold_scope(self, tenant_id: str, scope: dict[str, Any]) -> list[str]:
         clauses = ["tenant_id = ?"]
         params: list[Any] = [tenant_id]
-        for field in ("workspace_id", "project_id", "user_id", "agent_id", "session_id"):
-            value = scope.get(field)
+        for scope_field in ("workspace_id", "project_id", "user_id", "agent_id", "session_id"):
+            value = scope.get(scope_field)
             if value:
-                clauses.append(f"{field} = ?")
+                clauses.append(f"{scope_field} = ?")
                 params.append(value)
         rows = self.conn.execute(
             f"SELECT memory_id FROM memories WHERE {' AND '.join(clauses)}",
@@ -3021,9 +4440,9 @@ class ProvenaStore:
     def _hold_scope_matches(self, scope_filter: dict[str, Any], memory_scope: ScopeEnvelope) -> bool:
         if not scope_filter:
             return False
-        for field in ("workspace_id", "project_id", "user_id", "agent_id", "session_id"):
-            expected = scope_filter.get(field)
-            if expected and getattr(memory_scope, field) != expected:
+        for scope_field in ("workspace_id", "project_id", "user_id", "agent_id", "session_id"):
+            expected = scope_filter.get(scope_field)
+            if expected and getattr(memory_scope, scope_field) != expected:
                 return False
         return True
 
@@ -3116,6 +4535,19 @@ class ProvenaStore:
             for column, statement in migrations.items():
                 if column not in columns:
                     self.conn.execute(statement)
+            projection_columns = {
+                row["name"]
+                for row in self.conn.execute(
+                    "PRAGMA table_info(repo_memory_event_projections)"
+                ).fetchall()
+            }
+            if "projection_version" not in projection_columns:
+                self.conn.execute(
+                    """
+                    ALTER TABLE repo_memory_event_projections
+                    ADD COLUMN projection_version INTEGER NOT NULL DEFAULT 1
+                    """
+                )
 
     def _iso_now(self) -> str:
         return datetime.now(UTC).isoformat()
@@ -3207,6 +4639,9 @@ class ProvenaStore:
     def _invalidate_tenant_cache(self, tenant_id: str) -> None:
         self.hot_cache.bump_search_version(tenant_id)
 
+    def _purge_tenant_cache(self, tenant_id: str) -> None:
+        self.hot_cache.purge_tenant(tenant_id)
+
     def _insert_history(
         self,
         memory_id: str,
@@ -3245,6 +4680,396 @@ class ProvenaStore:
             return MemoryLayer.USER
         return MemoryLayer.ORGANIZATION
 
+    def _canonical_repository_json(self, value: Any) -> str:
+        return rfc8785.dumps(value).decode("utf-8")
+
+    def _repository_json_object(self, pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON object key")
+            result[key] = value
+        return result
+
+    def _sort_repository_json(self, value: Any) -> Any:
+        if isinstance(value, list):
+            return [self._sort_repository_json(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: self._sort_repository_json(value[key])
+                for key in sorted(value, key=self._repository_text_sort_key)
+            }
+        return value
+
+    def _repository_text_sort_key(self, value: str) -> bytes:
+        return value.encode("utf-16-be", errors="surrogatepass")
+
+    def _elapsed_ms(self, started: float) -> float:
+        return round((time.perf_counter() - started) * 1000, 3)
+
+    def _chunks(self, values: Iterable[str], size: int = 500) -> Iterable[list[str]]:
+        items = list(values)
+        for offset in range(0, len(items), size):
+            yield items[offset : offset + size]
+
+    def _repository_memory_id(
+        self,
+        scope: ScopeEnvelope,
+        repository_id: str,
+        event_id: str,
+    ) -> str:
+        if scope.project_id is None:
+            raise ValueError("repository projection requires project_id")
+        digest = hashlib.sha256(
+            (
+                f"repo-ledger\0{scope.tenant_id}\0{scope.project_id}\0"
+                f"{repository_id}\0{event_id}"
+            ).encode("utf-8")
+        ).hexdigest()
+        return f"repoevt_{digest}"
+
+    def _repository_projection_fingerprint(
+        self,
+        scope: ScopeEnvelope,
+        repository_id: str,
+        event_fingerprint: str,
+    ) -> str:
+        value = self._canonical_repository_json(
+            {
+                "projection_version": REPOSITORY_LEDGER_PROJECTION_VERSION,
+                "scope": scope.model_dump(exclude_none=True),
+                "repository_id": repository_id,
+                "event_fingerprint": event_fingerprint,
+            }
+        )
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    def _repository_projection_status(
+        self,
+        event: RepositoryMemoryEvent,
+        referenced_status: MemoryStatus | None,
+        current_status: str | None = None,
+        pre_hold_status: str | None = None,
+    ) -> tuple[MemoryStatus, MemoryStatus | None]:
+        rank = {
+            MemoryStatus.ACTIVE: 0,
+            MemoryStatus.SUPERSEDED: 1,
+            MemoryStatus.RETRACTED: 2,
+        }
+        desired = MemoryStatus(event.status.value)
+        if referenced_status is not None and rank[referenced_status] > rank[desired]:
+            desired = referenced_status
+        if current_status == MemoryStatus.HELD.value:
+            held_base = (
+                MemoryStatus(pre_hold_status)
+                if pre_hold_status in {item.value for item in rank}
+                else MemoryStatus.ACTIVE
+            )
+            return MemoryStatus.HELD, max((held_base, desired), key=rank.get)
+        if current_status in {item.value for item in rank}:
+            current = MemoryStatus(current_status)
+            desired = max((current, desired), key=rank.get)
+        return desired, None
+
+    def _attested_repository_projection(
+        self,
+        memory_id: str,
+        *,
+        row: Any | None = None,
+        expected_scope: ScopeEnvelope | None = None,
+        expected_repository_id: str | None = None,
+        expected_event_record: dict[str, Any] | None = None,
+        expected_event_fingerprint: str | None = None,
+    ) -> dict[str, Any] | None:
+        row = row or self.conn.execute(
+            "SELECT * FROM memories WHERE memory_id = ?",
+            (memory_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        metadata = self._json_to_dict(row["metadata_json"])
+        metadata_keys = {
+            "provena_projection",
+            "provena_projection_version",
+            "provena_repository_id",
+            "provena_event",
+            "provena_event_fingerprint",
+            "provena_ingested_at",
+        }
+        event_record = metadata.get("provena_event")
+        repository_id = metadata.get("provena_repository_id")
+        event_fingerprint = metadata.get("provena_event_fingerprint")
+        if not all(
+            [
+                set(metadata) == metadata_keys,
+                metadata.get("provena_projection") == "repo-ledger",
+                metadata.get("provena_projection_version")
+                == REPOSITORY_LEDGER_PROJECTION_VERSION,
+                isinstance(repository_id, str),
+                bool(repository_id),
+                isinstance(event_record, dict),
+                isinstance(event_fingerprint, str),
+                isinstance(metadata.get("provena_ingested_at"), str),
+                bool(metadata.get("provena_ingested_at")),
+            ]
+        ):
+            return None
+        try:
+            event = RepositoryMemoryEvent.model_validate(event_record)
+            canonical_event = self._canonical_repository_json(event_record)
+        except (ValidationError, ValueError, TypeError, rfc8785.CanonicalizationError):
+            return None
+        if hashlib.sha256(canonical_event.encode("utf-8")).hexdigest() != event_fingerprint:
+            return None
+        if expected_repository_id is not None and repository_id != expected_repository_id:
+            return None
+        if expected_event_fingerprint is not None and event_fingerprint != expected_event_fingerprint:
+            return None
+        if expected_event_record is not None:
+            try:
+                if canonical_event != self._canonical_repository_json(expected_event_record):
+                    return None
+            except (ValueError, TypeError, rfc8785.CanonicalizationError):
+                return None
+
+        scopes: list[ScopeEnvelope] = []
+        if expected_scope is not None:
+            scopes.append(expected_scope)
+        else:
+            scope_rows = self.conn.execute(
+                """
+                SELECT tenant_id, project_id
+                FROM repo_memory_sync_state
+                WHERE repository_id = ?
+                """,
+                (repository_id,),
+            ).fetchall()
+            scopes.extend(
+                ScopeEnvelope(tenant_id=item["tenant_id"], project_id=item["project_id"])
+                for item in scope_rows
+            )
+        for scope in scopes:
+            if self._repository_memory_id(scope, repository_id, event.id) != memory_id:
+                continue
+            projection_fingerprint = self._repository_projection_fingerprint(
+                scope,
+                repository_id,
+                event_fingerprint,
+            )
+            if row["fingerprint"] != projection_fingerprint:
+                continue
+            return {
+                "tenant_id": scope.tenant_id,
+                "project_id": scope.project_id,
+                "repository_id": repository_id,
+                "event_id": event.id,
+                "event_fingerprint": event_fingerprint,
+                "event": event,
+                "row": row,
+            }
+        return None
+
+    def _is_repository_event_projection(self, memory_id: str) -> bool:
+        mapped = self.conn.execute(
+            "SELECT 1 FROM repo_memory_event_projections WHERE memory_id = ?",
+            (memory_id,),
+        ).fetchone()
+        return mapped is not None or self._attested_repository_projection(memory_id) is not None
+
+    def _validate_supersession_target(
+        self,
+        target_memory_id: str,
+        successor_memory_id: str,
+        tenant_id: str,
+        access: AccessContext | None,
+    ) -> None:
+        if target_memory_id == successor_memory_id:
+            raise ValueError("a memory cannot supersede itself")
+        row = self.conn.execute(
+            "SELECT * FROM memories WHERE memory_id = ?",
+            (target_memory_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("superseded memory not found or inaccessible")
+        target = self._row_to_record(row)
+        if target.scope.tenant_id != tenant_id or not self._can_access_memory(
+            target,
+            access,
+            ACLPermission.WRITE,
+            source_permission_levels=EDITABLE_PERMISSION_LEVELS,
+            allowed_roles=MEMORY_WRITE_ROLES,
+        ):
+            raise ValueError("superseded memory not found or inaccessible")
+        if self._is_repository_event_projection(target_memory_id):
+            raise RepositoryEventConflictError(
+                "repository ledger projections are immutable; append a source-attested superseding event"
+            )
+
+    def _record_repository_event_erasures(
+        self,
+        memory_ids: Iterable[str],
+        reason: str,
+    ) -> int:
+        ids = sorted(set(memory_ids))
+        if not ids:
+            return 0
+        rows: list[Any] = []
+        mapped_ids: set[str] = set()
+        for id_chunk in self._chunks(ids):
+            placeholders = ", ".join("?" for _ in id_chunk)
+            mapped_rows = self.conn.execute(
+                    f"""
+                    SELECT p.memory_id, p.tenant_id, p.project_id, p.repository_id, p.event_id,
+                           p.event_fingerprint, m.metadata_json, m.created_at
+                    FROM repo_memory_event_projections AS p
+                    JOIN memories AS m ON m.memory_id = p.memory_id
+                    WHERE p.memory_id IN ({placeholders})
+                    """,
+                    id_chunk,
+                ).fetchall()
+            rows.extend(mapped_rows)
+            mapped_ids.update(row["memory_id"] for row in mapped_rows)
+        for memory_id in ids:
+            if memory_id in mapped_ids:
+                continue
+            attested = self._attested_repository_projection(memory_id)
+            if attested is None:
+                continue
+            memory_row = attested["row"]
+            rows.append(
+                {
+                    "tenant_id": attested["tenant_id"],
+                    "project_id": attested["project_id"],
+                    "repository_id": attested["repository_id"],
+                    "event_id": attested["event_id"],
+                    "event_fingerprint": attested["event_fingerprint"],
+                    "metadata_json": memory_row["metadata_json"],
+                    "created_at": memory_row["created_at"],
+                }
+            )
+        erased_at = self._iso_now()
+        for row in rows:
+            metadata = self._json_to_dict(row["metadata_json"])
+            try:
+                event = RepositoryMemoryEvent.model_validate(metadata.get("provena_event"))
+                authority = event.authority.value
+                event_created_at = event.created_at
+            except ValidationError:
+                # Governance deletion must not be blockable by legacy or
+                # corrupted projection metadata. Highest authority is the
+                # conservative admission fallback for later supersession.
+                authority = "human"
+                event_created_at = row["created_at"]
+                self._insert_audit(
+                    "repository_memory_erasure_provenance_fallback",
+                    None,
+                    row["tenant_id"],
+                    {
+                        "repository_id": row["repository_id"],
+                        "event_id": row["event_id"],
+                        "reason": reason,
+                    },
+                )
+            self.conn.execute(
+                """
+                INSERT INTO repo_memory_event_erasures (
+                    tenant_id, project_id, repository_id, event_id,
+                    event_fingerprint, authority, event_created_at, erased_at, reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (tenant_id, project_id, repository_id, event_id) DO UPDATE SET
+                    event_fingerprint = excluded.event_fingerprint,
+                    authority = excluded.authority,
+                    event_created_at = excluded.event_created_at,
+                    erased_at = excluded.erased_at,
+                    reason = excluded.reason
+                """,
+                (
+                    row["tenant_id"],
+                    row["project_id"],
+                    row["repository_id"],
+                    row["event_id"],
+                    row["event_fingerprint"],
+                    authority,
+                    event_created_at,
+                    erased_at,
+                    reason,
+                ),
+            )
+        return len(rows)
+
+    def _repository_event_entity_keys(
+        self,
+        repository_id: str,
+        event: RepositoryMemoryEvent,
+    ) -> list[str]:
+        keys = {
+            f"repo:{repository_id}",
+            f"subject:{event.subject_type.value}",
+        }
+        for path in event.applies_to:
+            keys.add(f"file:{repository_id}:{path}")
+        for source in event.sources:
+            keys.add(f"file:{repository_id}:{source.path}")
+            if source.symbol:
+                keys.add(f"symbol:{repository_id}:{source.path}#{source.symbol}")
+        return sorted(keys, key=self._repository_text_sort_key)
+
+    def _repository_event_sources(
+        self,
+        repository_id: str,
+        ledger_path: str,
+        event: RepositoryMemoryEvent,
+        event_fingerprint: str,
+    ) -> list[SourceReference]:
+        encoded_repository_id = quote(repository_id, safe="")
+        sources = [
+            SourceReference(
+                source_type="repository_ledger",
+                source_id=f"repo-event:{repository_id}:{event.id}",
+                uri=(
+                    f"provena://repository/{encoded_repository_id}/memory-events/"
+                    f"{quote(event.id, safe='')}"
+                ),
+                title=ledger_path,
+                metadata={
+                    "repository_id": repository_id,
+                    "event_id": event.id,
+                    "event_fingerprint": event_fingerprint,
+                },
+            )
+        ]
+        for source in event.sources:
+            source_identity = self._canonical_repository_json(
+                {
+                    "repository_id": repository_id,
+                    "path": source.path,
+                    "symbol": source.symbol,
+                    "start_line": source.start_line,
+                    "end_line": source.end_line,
+                }
+            )
+            source_id = "repo-file:" + hashlib.sha256(source_identity.encode("utf-8")).hexdigest()
+            metadata = {
+                "repository_id": repository_id,
+                "event_id": event.id,
+                **source.model_dump(exclude={"path", "start_line", "end_line"}, exclude_none=True),
+            }
+            sources.append(
+                SourceReference(
+                    source_type="repository_file",
+                    source_id=source_id,
+                    uri=(
+                        f"provena://repository/{encoded_repository_id}/"
+                        f"{quote(source.path, safe='/')}"
+                    ),
+                    title=source.path,
+                    span_start=source.start_line,
+                    span_end=source.end_line,
+                    metadata=metadata,
+                )
+            )
+        return sources
+
     def _fingerprint(
         self,
         scope: ScopeEnvelope,
@@ -3253,12 +5078,23 @@ class ProvenaStore:
         content: str,
         metadata: dict[str, Any] | None = None,
     ) -> str:
-        scope_json = self._to_json(scope.model_dump(exclude_none=True))
+        # JSON.stringify emits Unicode directly; preserve exact CLI parity for
+        # deterministic fingerprints when scope identifiers are non-ASCII.
+        scope_json = json.dumps(
+            scope.model_dump(exclude_none=True),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         generated = (metadata or {}).get("provena_generated_fingerprint")
+        parts = [
+            scope_json,
+            kind,
+            (title or "").strip().lower(),
+            content.strip().lower(),
+        ]
         if isinstance(generated, str) and re.fullmatch(r"[0-9a-f]{64}", generated):
-            value = "|".join([scope_json, "provena-generated-v1", generated])
-        else:
-            value = "|".join([scope_json, kind, (title or "").strip().lower(), content.strip().lower()])
+            parts.extend(["provena-generated-v2", generated])
+        value = "|".join(parts)
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
     def _scope_matches(self, record_scope: ScopeEnvelope, request_scope: ScopeEnvelope) -> bool:

@@ -3,7 +3,7 @@
   "mode": "codex-loop",
   "branchName": "codex/provena-product-loop",
   "objective": "Turn Provena into a production-ready, self-hostable, embeddable governed memory plane that can keep iterating through PM-authored stories and QA-authored test coverage until explicitly stopped.",
-  "updatedAt": "2026-04-15T18:28:18Z",
+  "updatedAt": "2026-07-13T19:24:04Z",
   "sentry": {
     "enabledIfEnvPresent": true,
     "requiredEnv": "SENTRY_AUTH_TOKEN",
@@ -88,6 +88,59 @@
         "Release steps are explicit.",
         "OpenAPI and image concerns are included.",
         "Verification commands are standardized."
+      ]
+    },
+    {
+      "featureId": "FEATURE-CANONICAL-EVENT-PLANE",
+      "epicId": "EPIC-CONNECTED",
+      "featureTitle": "Canonical repository event plane",
+      "featureDescription": "The deterministic repository ledger should replicate into the governed memory store without losing attestation, authority, provenance, temporal, or lifecycle semantics.",
+      "expectedBehaviors": [
+        "The exact repository ledger bytes and SHA-256 fingerprint cross one explicit replication boundary.",
+        "Repository events project into governed storage with stable identities and lossless canonical metadata.",
+        "Replay is idempotent and advances a durable checkpoint only after a fully validated batch succeeds."
+      ]
+    },
+    {
+      "featureId": "FEATURE-LIVING-REPO-MEMORY",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "Living source-grounded repository memory",
+      "featureDescription": "Provena should convert deterministic facts already observed by the portable repo map into durable, reconciled memories whenever the repo brain refreshes, without inferring intent or requiring a service.",
+      "expectedBehaviors": [
+        "Manifest-declared packages and runnable commands become source-attested observed memories.",
+        "Repeated refreshes are ledger no-ops, while changed or removed declarations create auditable lifecycle transitions.",
+        "Manual, session-start, Git-hook, and daemon refreshes reuse one reconciler under the existing repository-memory lock."
+      ],
+      "dependencies": [
+        "FEATURE-CANONICAL-EVENT-PLANE"
+      ]
+    },
+    {
+      "featureId": "FEATURE-TEMPORAL-MEMORY-GRAPH",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "Temporal repository memory graph",
+      "featureDescription": "Provena should project the complete canonical repository ledger into an append-preserving memory lineage graph, expose deterministic producer-effective-time views over the current repo topology, and synchronize the full projection to Neo4j without mistaking memory-only changes for an unchanged graph.",
+      "expectedBehaviors": [
+        "Every durable memory event remains represented as a namespaced graph node with its direct supersession lineage and bounded temporal metadata.",
+        "Current and explicit memory-as-of views select deterministic active heads without claiming historical source-code reconstruction or bi-temporal truth.",
+        "Neo4j projection identity changes when either the repo map or exact raw memory ledger changes."
+      ],
+      "dependencies": [
+        "FEATURE-LIVING-REPO-MEMORY"
+      ]
+    },
+    {
+      "featureId": "FEATURE-LOCAL-MCP-HTTP",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "Opt-in local Streamable HTTP MCP",
+      "featureDescription": "Provena should expose the portable repository-memory MCP surface through an explicit, loopback-only Streamable HTTP command for local clients that cannot launch stdio processes, without turning the portable runtime into a remotely reachable service.",
+      "expectedBehaviors": [
+        "One foreground command exposes the existing repository MCP resources and tools on a fixed loopback interface with a documented health endpoint.",
+        "HTTP requests are bounded, stateless, DNS-rebinding resistant, origin checked, and isolated without introducing authentication or remote-host claims.",
+        "Existing stdio MCP, managed client configs, the portable runtime, and the optional Python governed store retain their current behavior."
+      ],
+      "dependencies": [
+        "FEATURE-TEMPORAL-MEMORY-GRAPH"
       ]
     }
   ],
@@ -803,6 +856,430 @@
       "lastEngineerStartedAt": "2026-04-15T14:12:34Z",
       "lastPmReviewStartedAt": "2026-04-15T14:21:51Z",
       "lastTesterExecutionStartedAt": "2026-04-15T14:26:05Z"
+    },
+    {
+      "id": "PROVENA-012",
+      "epicId": "EPIC-CONNECTED",
+      "epicTitle": "Connected Memory Plane",
+      "featureId": "FEATURE-CANONICAL-EVENT-PLANE",
+      "featureTitle": "Canonical repository event plane",
+      "title": "Replicate the source-attested repository ledger into governed storage",
+      "priority": 12,
+      "status": "passed",
+      "passes": true,
+      "attempts": 3,
+      "qaStatus": "passed",
+      "qaAttempts": 1,
+      "persona": "Developer using Provena as the durable memory layer for an existing repository",
+      "userStory": "As a developer, I want Provena's canonical repository memory ledger to replicate into the governed store so local agents and connected retrieval share one verifiable memory history.",
+      "problemStatement": "The portable repository brain writes an append-only, source-attested ledger, while the connected store, retrieval, and graph surfaces currently operate on a separate memory plane with no canonical bridge.",
+      "featureDescription": "Add an explicit CLI-to-store replication command and API that verify the raw ledger fingerprint, validate every event before projection, preserve canonical event semantics, replay idempotently, and record a durable replication checkpoint with measured duration.",
+      "expectedBehaviors": [
+        "`provena sync store` reads one consistent ledger snapshot and sends its exact UTF-8 bytes, SHA-256 fingerprint, stable repository identity, and configured scope to the store.",
+        "The store rejects oversized, malformed, duplicate-id, schema-invalid, or fingerprint-mismatched ledgers before projecting any event.",
+        "Each event receives a deterministic repository-scoped memory identity and preserves its canonical kind, subject, authority, provenance, sensitivity, applicability, structured data, sources, triggers, timestamps, tags, and causal links.",
+        "Active, superseded, and retracted lifecycle states plus every supersedes edge are projected without erasing the retained event record.",
+        "Replaying the same ledger creates no duplicate memories, sources, relations, or history and returns an explicit no-op result.",
+        "The replication checkpoint advances only after a fully validated batch completes and exposes event counts, projection counts, exact fingerprint, and `duration_ms`.",
+        "The existing zero-service `provena refresh` path remains available when the governed store is absent."
+      ],
+      "acceptanceCriteria": [
+        "The CLI exposes `provena sync store` and uses the configured loopback-safe `store_url`, `repository_id`, tenant, and project scope without reading the ledger twice.",
+        "A store endpoint accepts the exact raw JSONL ledger plus its SHA-256 fingerprint, validates the complete request before persistence, and rejects invalid input with no checkpoint advancement.",
+        "Repository events project to stable memory ids while their complete canonical payload remains recoverable from governed storage without lossy kind coercion.",
+        "Superseded and retracted events are excluded from normal retrieval while their records, sources, history, and causal relations remain auditable.",
+        "An identical replay is idempotent and reports zero new projections; a later valid fingerprint advances the same repository checkpoint.",
+        "The response and CLI output include precise elapsed milliseconds and projection counters suitable for benchmark baselines.",
+        "Focused Node and Python contract tests, OpenAPI export, and the existing cross-service verification gate pass."
+      ],
+      "verificationCommands": [
+        "cd cli && npm run build",
+        "cd cli && node tests/repo-memory-sync.test.mjs",
+        "python -m pytest tests/test_main.py -q",
+        "python scripts/export_openapi.py",
+        "python scripts/run_e2e.py"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": true,
+        "integration": true,
+        "ui": false
+      },
+      "sentryChecks": [
+        "When Provena-owned telemetry is available, watch repository replication failures, validation-error rates, fingerprint mismatches, partial projection retries, and p50/p95 replication duration by event count."
+      ],
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-012"
+      ],
+      "notes": "This slice uses the existing Node fetch and store abstractions plus the small pure-Python RFC 8785 serializer required for exact JavaScript/Python canonical-number parity. It does not add a queue, direct SQLite coupling, automatic background sync, or temporal query semantics.",
+      "qaNotes": "Sentry verification is pending because SENTRY_AUTH_TOKEN and SENTRY_DSN are unavailable on this host.",
+      "pmPrdAttempts": 1,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 3,
+      "pmReviewAttempts": 4,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "PM contract completed for the canonical event bridge. The raw ledger bytes are the attestation boundary; stable ids and checkpoints make replay deterministic; every local lifecycle, authority, source, and provenance field remains recoverable; and local zero-service operation remains independent.",
+      "testerPlanNotes": "QA planning covers exact-byte fingerprint verification, complete-batch schema validation, stable projection ids, lossless payload preservation, lifecycle and causal edges, replay idempotency, checkpoint safety, timing counters, CLI transport, OpenAPI alignment, and cross-service regression continuity. Sentry follow-up is pending because credentials are unavailable.",
+      "pmReviewNotes": "Final PM re-review approved PROVENA-012. Partial connected-source removal now scopes owner authorization to the exact removed-source set while retained and added sources continue to require edit or owner and the memory ACL continues to require share. The regression explicitly downgrades the retained source to edit, proves denial before the removed source receives owner, and then proves retained-edit plus removed-owner succeeds. All prior PostgreSQL ownership, transaction, JSONB, CI-isolation, authenticated-gateway, exact-ledger, lifecycle, replay, and OpenAPI findings remain resolved. Tester execution can proceed.",
+      "testerExecutionNotes": "Independent tester execution is green for T01-T12. Focused ledger tests (8), focused security tests (7), full Python (63 passed plus 3 subtests), full CLI including Windows packed portable install, Go control-plane tests, deterministic OpenAPI export, and standalone/polyglot authenticated E2E all passed. PostgreSQL's 13 contracts collected but could not run locally because PROVENA_DATABASE_URL is unset and Docker daemon was unavailable; the checked-in CI gate runs them against PostgreSQL 16. Sentry credentials are absent, so telemetry follow-up remains pending.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastPmPrdStartedAt": "2026-07-13T11:47:07Z",
+      "lastTesterPlanStartedAt": "2026-07-13T11:47:07Z",
+      "lastEngineerStartedAt": "2026-07-13T15:37:14Z",
+      "lastPmReviewStartedAt": "2026-07-13T15:39:39Z",
+      "lastTesterExecutionStartedAt": "2026-07-13T15:48:08Z"
+    },
+    {
+      "id": "PROVENA-013",
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "featureId": "FEATURE-LIVING-REPO-MEMORY",
+      "featureTitle": "Living source-grounded repository memory",
+      "title": "Automatically reconcile manifest-backed repository memories during refresh",
+      "priority": 13,
+      "status": "passed",
+      "passes": true,
+      "attempts": 2,
+      "qaStatus": "passed",
+      "qaAttempts": 1,
+      "persona": "Developer relying on Provena to keep an existing repository understandable across agent sessions",
+      "userStory": "As a developer, I want every Provena refresh to preserve durable memories of declared packages and runnable workflows so agents receive current, source-verifiable operating context without a human rewriting it after repository changes.",
+      "problemStatement": "The portable repo map detects packages and commands, but those observations are only current-state artifacts. They do not create durable history, reconcile changes, or record when an observed workflow disappears.",
+      "featureDescription": "Add one deterministic reconciler to the existing refresh generation. It derives package facts and command workflows only from RepoMap, assigns stable logical identities and source fingerprints, and appends ADD, SUPERSEDE, or RETRACT events while unchanged observations produce NOOP. Generated events remain tool-authority, observed, internal, and source-attested.",
+      "expectedBehaviors": [
+        "Each detected package produces one fact candidate and each declared command produces one workflow candidate.",
+        "Generated memories cite the manifest path and its scanned SHA-256 and carry stable generator, logical-key, and candidate-fingerprint metadata.",
+        "The first observation is added once, an unchanged refresh is byte-for-byte ledger stable, a changed observation supersedes its prior generated head, and a removed observation creates one retraction tombstone.",
+        "Incomplete, capped, or unreadable scans may add or supersede observed candidates but defer every apparent deletion until a complete scan confirms it.",
+        "The reconciler never generates decisions, preferences, or rationale and never mutates or supersedes manually authored memories.",
+        "Higher-authority overrides win; ambiguous generated lineages or reserved-id collisions fail safely before persistence.",
+        "The ledger, brain, map, graph, views, and manifest commit as one refresh generation or roll back together.",
+        "Refresh output exposes candidate, ADD, NOOP, SUPERSEDE, RETRACT, deferred, conflict, and elapsed-millisecond counters without persisting timing noise.",
+        "Session start, installed Git hooks, and the daemon receive the behavior through their existing refreshRepoBrain call path."
+      ],
+      "acceptanceCriteria": [
+        "Candidate extraction reads source facts only from RepoMap.packages, RepoMap.commands, and their corresponding RepoFile SHA-256 values; it performs no additional source scan, network call, model call, or database call.",
+        "Package candidates use kind fact and command candidates use kind workflow; all generated events use authority tool, provenance method observed, sensitivity internal, and an exact reserved generator marker.",
+        "Logical identity is independent of mutable candidate content. Candidate fingerprints are computed from the canonical normalized declaration and source path, while the event separately records the scanned manifest SHA-256; generated event ids are deterministic from logical identity, action, fingerprint, and predecessor, and unrelated edits in the same manifest do not churn unaffected candidates.",
+        "A first refresh appends exactly one event per candidate. A second unchanged refresh appends zero bytes, preserves the exact memory fingerprint, and reports every candidate as NOOP.",
+        "Changing a manifest-backed observation appends one active successor that supersedes the prior generated head. Removing it appends one retracted successor, repeated absence is a NOOP, and reappearance supersedes the tombstone.",
+        "Repo-map scan diagnostics distinguish a complete scan from a capped or unreadable scan; incomplete scans report deferred removals and append no retraction tombstones.",
+        "Real observation timestamps are created only when an event is appended and are injectable for deterministic tests; timestamps and duration are not part of candidate identity.",
+        "Existing human, agent, and system memories remain byte-identical. No automatic event may use kind decision or preference or contain a rationale field.",
+        "A higher-authority successor blocks automatic regeneration for that logical key and increments conflicts without modification. Multiple generated heads, malformed reserved metadata, or a reserved-id collision abort refresh before any file changes.",
+        "The pre-existing raw ledger remains an exact byte prefix, including its line-ending style and blank lines, while the final raw ledger is included in the same locked generation and rollback set as derived artifacts; manifest and context fingerprints hash the committed ledger bytes.",
+        "Refresh JSON exposes reconciliation.candidates, added, noops, superseded, retracted, deferred, conflicts, and duration_ms; human-readable refresh and daemon logs expose the same counts without changing quiet-hook behavior.",
+        "CLI documentation explains automatically managed observed memories, lifecycle behavior, the explicit-only decision/preference boundary, incomplete-scan deferral, and the zero-service execution model.",
+        "Focused reconciliation, rollback, concurrency, integration-runtime, packed-install, and full CLI regression tests pass."
+      ],
+      "verificationCommands": [
+        "cd cli && npm run build",
+        "cd cli && node tests/repo-memory-reconcile.test.mjs",
+        "cd cli && npm test"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": false,
+        "integration": true,
+        "ui": false
+      },
+      "sentryChecks": [
+        "When Provena-owned telemetry is available, watch reconciliation failures, structural conflicts, deferred retractions, rollback failures, generated-event counts, and p50/p95 duration by candidate count."
+      ],
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-013"
+      ],
+      "notes": "This slice intentionally covers only manifest-backed package facts and command invocations exposed by the current RepoMap. Script-body-only and dependency-version-only changes are not observable in this schema and remain explicit limitations rather than overclaimed supersession behavior. LLM extraction, free-form code or documentation claims, conversational and tool-outcome capture, automatic decisions/preferences/rationale, temporal graph projection, embeddings, remote sync scheduling, incremental filesystem CDC, configurable extractors, dreaming, consolidation, and subagent orchestration are out of scope. Existing Node and Provena helpers are sufficient; no dependency is approved.",
+      "qaNotes": "Sentry verification is pending because SENTRY_AUTH_TOKEN and SENTRY_DSN are unavailable on this host.",
+      "pmPrdAttempts": 1,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 2,
+      "pmReviewAttempts": 2,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "PM contract completed for the smallest automatic-memory slice: deterministic RepoMap observations become source-attested package facts and command workflows; reconciliation is append-only, authority-safe, transactionally generated with refresh artifacts, measurable, and reused by every existing refresh trigger without model or service dependencies. Adversarial review added fail-safe retraction deferral for incomplete scans and exact preservation of pre-existing ledger bytes.",
+      "testerPlanNotes": "QA planning defines 15 focused cases covering source-only candidate extraction, the complete reserved metadata contract, cross-root and representation determinism, fixed and backward clocks, exact raw-ledger prefix preservation, ADD/NOOP/SUPERSEDE/RETRACT and resurrection lineages, incomplete-scan deferral, manual and higher-authority protection, corrupt-lineage and id-collision fail-safe behavior, generic secret rejection, handled rollback versus crash recovery, same- and cross-process races, exact fingerprint and counter accounting, installed runtime triggers, packed installation, honest limitations, and full CLI regression. Sentry follow-up remains pending because credentials are unavailable.",
+      "pmReviewNotes": "Approved after focused remediation. Fallback and configured candidate enumeration now propagate glob errors and non-ENOENT .gitignore failures; scanRepo turns either into a generic credential-safe incomplete diagnostic, and deterministic regressions prove managed removals defer without retraction. Both current-state architecture diagrams now say rollback-capable, matching the documented handled-failure and next-refresh crash-repair boundary. QA risk traceability now points to existing T14/T15 cases. All other deterministic lineage, exact-ledger, authority, trigger, counter, secret, rollback, and limitation contracts remain satisfied. Tester execution may proceed; retaining the last successful map after total enumeration failure is a separate non-blocking product decision.",
+      "testerExecutionNotes": "Independent tester execution is green for all 15 planned cases. npm run build passed in 2.262 seconds, the focused reconciliation suite passed in 15.822 seconds, nine supporting suites passed in 11.968 seconds, and the latest full npm test passed in 354.258 seconds across all 30 Node test files including the previously failing Windows packed-install path. T01-T09 and T11 were proven by reconciliation; T10 by reconciliation and security; T12 by reconciliation, lock, and events; T13 by reconciliation, context, sync, and CLI behavior; T14 by installation, MCP, daemon, and reconciliation; and T15 by build, packed install, full regression, and documentation review. All 13 acceptance criteria and nine expected behaviors are traced. Expected forced-failure logs from negative index tests were asserted successfully. Sentry verification remains pending because credentials are absent.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastPmPrdStartedAt": "2026-07-13T15:55:15Z",
+      "lastTesterPlanStartedAt": "2026-07-13T16:03:44Z",
+      "lastEngineerStartedAt": "2026-07-13T17:51:01Z",
+      "lastPmReviewStartedAt": "2026-07-13T17:53:54Z",
+      "lastTesterExecutionStartedAt": "2026-07-13T18:03:58Z"
+    },
+    {
+      "id": "PROVENA-014",
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "featureId": "FEATURE-TEMPORAL-MEMORY-GRAPH",
+      "featureTitle": "Temporal repository memory graph",
+      "title": "Project the canonical ledger as a deterministic temporal memory graph",
+      "priority": 14,
+      "status": "passed",
+      "passes": true,
+      "attempts": 2,
+      "qaStatus": "passed",
+      "qaAttempts": 1,
+      "persona": "Coding agent resuming repository work that needs the memories effective at a chosen point, their causal lineage, and their relationships to the current source graph",
+      "userStory": "As a coding agent, I want Provena to preserve every memory transition in the repo graph and let me retrieve the active memory heads at an explicit timestamp so I can understand what changed, what replaced it, and which current source locations support it.",
+      "problemStatement": "The current graph contains only latest code topology, context can select only current ledger heads, and Neo4j cleanup keys only on the code fingerprint. Memory history therefore has no graph representation, no point-in-time query surface, and no memory-sensitive projection identity.",
+      "featureDescription": "Regenerate graph schema v2 after reconciliation from the exact final ledger snapshot. Add bounded memory nodes, supersession and current-source relationships, linear-time producer-effective intervals, deterministic current and memory-as-of graph views, timeline inspection, context and MCP as-of inputs, and a Neo4j projection token derived from schema, source, and raw-ledger fingerprints.",
+      "expectedBehaviors": [
+        "The graph is built only after reconciliation and attests both the current repo-map fingerprint and exact committed ledger fingerprint.",
+        "Every ledger event becomes one namespaced memory node; code node and edge identifiers remain unchanged.",
+        "Direct supersession, source citation, and applicability relationships are represented without dangling endpoints or copying memory bodies and arbitrary structured data into the graph.",
+        "Memory nodes expose half-open producer-effective intervals derived in linear time from event createdAt and direct successors.",
+        "An explicit memory-as-of timestamp selects the ledger heads effective at that instant while code files, symbols, and imports remain the current repo snapshot.",
+        "No as-of input preserves existing deterministic current-head behavior and does not inject the wall clock into generated artifacts.",
+        "Context packets expose and render the memory-as-of boundary, retain the full raw-ledger fingerprint, and prevent inactive history from distorting graph ranking.",
+        "CLI graph timeline and memory-as-of queries, plus existing MCP context/graph tools, share the same temporal helpers.",
+        "Neo4j projects memory and temporal properties and cleans stale rows using a projection fingerprint sensitive to both source and memory changes.",
+        "Documentation distinguishes this single effective-time axis from unimplemented bi-temporal history and historical code snapshots."
+      ],
+      "acceptanceCriteria": [
+        "Graph schema v2 includes sourceFingerprint, memoryFingerprint, projectionFingerprint, and timeSemantics set to event-effective-time; the memory fingerprint exactly equals SHA-256 of committed raw ledger bytes.",
+        "refreshRepoBrain reconciles the final ledger before graph construction, and the graph, manifest, context, and ledger all expose the same memory fingerprint in that generation.",
+        "Memory graph IDs are namespaced from event IDs; duplicate node or edge IDs abort construction rather than overwriting another record; all pre-existing code node and edge IDs remain byte-identical.",
+        "Each ledger event projects only bounded indexing fields: event id, title, kind, subject type, declared status, authority, confidence, importance, sensitivity, createdAt-derived validFrom, and validTo. Body, arbitrary structuredData, credentials, and raw secret material are not copied into graph metadata.",
+        "For an active event, validTo is the earliest createdAt of any direct successor; declared superseded and retracted events encode an empty interval as validTo equal to validFrom, while null is reserved for an open active leaf; intervals are half-open, equal-time successors win at the boundary, and multiple successor branches remain explicit.",
+        "Supersedes edges connect successor to predecessor. Citation and applies-to edges resolve only exact current repository/file/symbol targets, with dot resolving to repo root; missing historical paths remain cited in the ledger but create no dangling graph edge.",
+        "Temporal interval and reverse-reference construction is O(events plus supersession references), proven by deterministic event-visit and supersession-reference-visit diagnostics plus a large-chain/fan-out smoke. Structural output is independent of RepoMap collection ordering; raw ledger order is an attested input and is never reordered or claimed byte-equivalent.",
+        "memoryAsOf accepts only a canonical UTC timestamp in YYYY-MM-DDTHH:mm:ss.sssZ form and rejects invalid or hostile input with a generic error that does not reflect the value.",
+        "The memory-as-of view uses events created at or before the boundary and the existing active-head rules over that prefix; later appended backdated events may change prior effective views, which is documented as effective-time rather than transaction-time behavior.",
+        "ContextQuery and ContextPacket expose memoryAsOf; rendered packets state that memory is as of the selected timestamp while repository topology is current, preserve the full ledger fingerprint, and rank only the induced active-memory graph plus current code topology.",
+        "The context CLI supports --memory-as-of, graph queries support --memory-as-of, and graph timeline resolves raw or namespaced memory IDs and returns complete deterministic supersession/retraction lineage.",
+        "Existing MCP context, graph-neighbor, and graph-path tools accept the same optional memoryAsOf input and return the same induced graph behavior without adding a redundant server or model call.",
+        "Neo4j projection fingerprint is SHA-256 of a canonical tuple containing adapter namespace, projection version, source fingerprint, and memory fingerprint; it drives stale node and edge cleanup and is returned with source and memory fingerprints in sync results.",
+        "Graph v1 remains readable as a code-only legacy artifact, algorithms continue to accept v1 and v2, and the next locked refresh regenerates v2 without changing memory-event schema v1, manifest schema v1, or canonical sync bytes.",
+        "A pure stored-artifact integrity validator used by the harness rejects mismatched graph/manifest memory fingerprints and malformed temporal endpoints without first repairing them. Documentation and CLI help explicitly state that historical repo maps, bi-temporal recorded time, and live Neo4j integration proof remain outside this slice."
+      ],
+      "verificationCommands": [
+        "cd cli && npm run build",
+        "cd cli && node tests/repo-brain-events.test.mjs",
+        "cd cli && node tests/temporal-memory-graph.test.mjs",
+        "cd cli && node tests/context-packet.test.mjs",
+        "cd cli && node tests/neo4j-adapter.test.mjs",
+        "cd cli && node tests/mcp-server.test.mjs",
+        "cd cli && npm test"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": true,
+        "integration": true,
+        "ui": false
+      },
+      "sentryChecks": [
+        "When Provena-owned telemetry is available, watch temporal graph construction failures, fingerprint mismatches, invalid as-of requests, Neo4j projection cleanup failures, and p50/p95 graph-build duration by memory-event and edge count."
+      ],
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-014"
+      ],
+      "notes": "This slice implements one producer-effective-time axis from ledger createdAt and ledger order over the current repo map. It does not claim trustworthy ingestion time, transaction-time history, bi-temporal facts, commit-scoped or historical code topology, temporal graph embeddings, live Neo4j integration proof, or automatic semantic inference. Existing Node helpers and neo4j-driver are sufficient; no dependency or database migration is approved.",
+      "qaNotes": "Sentry verification is pending because SENTRY_AUTH_TOKEN and SENTRY_DSN are unavailable on this host. A live Neo4j server is unavailable, so local proof is limited to deterministic graph behavior and adapter query construction.",
+      "pmPrdAttempts": 1,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 2,
+      "pmReviewAttempts": 2,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "PM contract completed for a bounded temporal-memory slice: graph v2 projects every canonical ledger event after reconciliation, derives deterministic producer-effective intervals and lineage, exposes explicit memory-as-of context over current code topology, and makes Neo4j projection identity sensitive to exact ledger bytes. The contract explicitly rejects bi-temporal and historical-code overclaims and adds no dependency.",
+      "testerPlanNotes": "QA planning defines 15 deterministic cases tracing all 15 acceptance criteria and all 10 expected behaviors across locked fingerprint convergence, stable graph identities and collision rejection, bounded non-leaking memory metadata, exact half-open chain/equal-time/branch/retraction intervals, current source links, diagnostic-proven O(V + E) construction, canonical non-reflective as-of validation, backdated effective views, induced context ranking, CLI/MCP parity, graph-v1 regeneration, pre-repair harness validation, packed installation, docs, and full regression. Neo4j token proof independently freezes namespace provena.neo4j.graph and integer projection version 2. Sentry and live Neo4j verification remain pending because credentials and a server are unavailable.",
+      "pmReviewNotes": "Final PM re-review approved PROVENA-014. One locked, source-attested generation now binds the self-hashed repo map, exact raw ledger, canonical graph projection, manifest, context, and Neo4j projection token. Coordinated map, graph-v1, graph-v2, and manifest tampering fail before consumption; duplicate identities abort; temporal construction retains the proven linear contract; and shared 64 MiB artifact plus 128 MiB generation caps reject hostile stored state before allocation. Frozen legacy IDs, complete T01-T15 traceability, CLI/MCP parity, and corrected product/enterprise documentation close the prior findings. Live Neo4j and Sentry remain unavailable and are not claimed.",
+      "testerExecutionNotes": "Independent tester execution is green for T01-T15 with 15/15 acceptance criteria, 10/10 expected behaviors, and 7/7 story commands traced. Post-fix build and temporal graph, temporal harness, and context tests passed; the prior full npm test passed all 32 Node suites in 392.706 seconds including the Windows packed-install path. T13 proves graph-v1 readability, coordinated tamper rejection, deterministic v2 regeneration, and unchanged ledger/schema/sync bytes. T14 proves pure pre-repair no-write rejection, exact artifact sets, canonical map/graph checks, and per-artifact plus aggregate caps. Sentry credentials and a live Neo4j server were unavailable.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastPmPrdStartedAt": "2026-07-13T18:13:54Z",
+      "lastTesterPlanStartedAt": "2026-07-13T18:23:36Z",
+      "lastEngineerStartedAt": "2026-07-13T19:08:23Z",
+      "lastPmReviewStartedAt": "2026-07-13T19:20:06Z",
+      "lastTesterExecutionStartedAt": "2026-07-13T19:20:06Z"
+    },
+    {
+      "id": "PROVENA-015",
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "featureId": "FEATURE-LOCAL-MCP-HTTP",
+      "featureTitle": "Opt-in local Streamable HTTP MCP",
+      "title": "Serve the portable repository MCP over a bounded loopback HTTP endpoint",
+      "priority": 15,
+      "status": "passed",
+      "passes": true,
+      "attempts": 1,
+      "qaStatus": "passed",
+      "qaAttempts": 1,
+      "persona": "Developer using a local coding agent or IDE that can connect to a Streamable HTTP MCP URL but cannot reliably launch a project-scoped stdio subprocess",
+      "userStory": "As a developer, I want one Provena command to expose this repository's existing MCP surface on a safe local URL so an HTTP-capable coding agent can use the same source-attested brain without Python, Docker, a cloud service, or a second install flow.",
+      "problemStatement": "The portable CLI currently serves MCP only over stdio. Local clients that accept a Streamable HTTP URL must either add custom wrappers or use the separate authenticated Go deployment, even though the bundled MCP SDK already contains the supported Node HTTP transport.",
+      "featureDescription": "Add `provena mcp serve --http [--port <port>]` as an explicit foreground mode. Reuse the existing `createRepoMcpServer` registrations with the bundled `createMcpExpressApp` and `StreamableHTTPServerTransport`, bind only `127.0.0.1`, expose POST `/mcp` and GET `/healthz`, use a fresh stateless JSON-response MCP server and transport per request, and make the same command available from the persisted portable runtime and a freshly installed package.",
+      "expectedBehaviors": [
+        "The explicit foreground command listens on `127.0.0.1:18093` by default, exposes `/mcp` and `/healthz`, and reports the actual URL plus startup duration.",
+        "Stdio MCP, managed stdio configs, and the separate Python store command and port remain unchanged.",
+        "HTTP exposes the same repository-bound resources and tools as stdio without refreshing at startup.",
+        "Each POST uses a fresh stateless JSON-response MCP server and transport; concurrent mutations retain the existing repository lock.",
+        "Fixed loopback binding, Host and Origin checks, a 100 KiB body cap, bounded generic errors, and non-cacheable responses protect the unauthenticated local endpoint.",
+        "SIGINT and SIGTERM close the foreground listener without durable HTTP state or orphaned processes.",
+        "The persisted runtime and packed installation serve HTTP offline from bundled dependencies.",
+        "Documentation distinguishes this local-process trust boundary from authenticated remote and enterprise MCP."
+      ],
+      "acceptanceCriteria": [
+        "CLI help documents `provena mcp serve --http [--port <port>]`; default is 18093; exactly one canonical base-10 port from 1 through 65535 is accepted, and invalid or unknown input fails generically.",
+        "Without `--http`, stdio remains silent and listener-free; `mcp install` keeps stdio configs; top-level `provena serve` still owns the optional Python store on 18092.",
+        "HTTP has no host option and binds only `127.0.0.1`; bind collision fails promptly. GET `/healthz` returns bounded non-sensitive JSON, POST `/mcp` is the only MCP route, known wrong methods return 405, and unknown routes return 404.",
+        "Bundled `createMcpExpressApp({ host: \"127.0.0.1\" })` and `StreamableHTTPServerTransport` are used. Each POST gets a fresh server/transport with no session ID generator and `enableJsonResponse: true`, closes in a finally path, and exposes no GET SSE or DELETE session flow.",
+        "A real HTTP MCP client can initialize, list the same five tools, read brain/map/graph/manifest, and call read and mutation tools with stdio-equivalent behavior. Git root is fixed at startup, requests cannot override it, and concurrent mutations use the existing lock.",
+        "Missing, malformed, or non-local Host is rejected. Origin may be absent; when present it must exactly match `http://127.0.0.1:<port>`, `http://localhost:<port>`, or `http://[::1]:<port>`; other origins receive 403 and no permissive CORS header.",
+        "JSON bodies are capped at 100 KiB before MCP parsing. All responses include `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`; bounded 4xx/5xx errors and logs never echo bodies, headers, hostile values, stack traces, absolute repo paths, memory content, environment values, or credentials.",
+        "The programmatic start result and one CLI startup line expose actual host, port, MCP URL, and finite nonnegative monotonic `startupMs`. Foreground SIGINT/SIGTERM closes the listener, releases the port, and leaves no pid, session, token, or database state.",
+        "Generated `runtime.mjs` delegates `mcp serve --http` to its installed `@provena/cli`. Fresh packed CLI and persisted-runtime tests complete a real HTTP MCP exchange offline without source, Python, Docker, model access, or another registry call.",
+        "README, CLI README, Quickstart, and architecture docs cover command, URL, health, shutdown, and threat model: any local process can invoke read and mutation tools. TLS, auth, remote binding, CORS, sessions/SSE, daemonization, client-config migration, rate limiting, and enterprise-proxy replacement are excluded."
+      ],
+      "verificationCommands": [
+        "cd cli && npm run build",
+        "cd cli && node tests/mcp-http-server.test.mjs",
+        "cd cli && node tests/mcp-server.test.mjs",
+        "cd cli && node tests/cli-behavior.test.mjs",
+        "cd cli && node tests/install-integrations.test.mjs",
+        "cd cli && node tests/pack.test.mjs",
+        "cd cli && node tests/pack-install.test.mjs",
+        "cd cli && npm test",
+        "python scripts/run_e2e.py"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": true,
+        "integration": true,
+        "ui": false
+      },
+      "sentryChecks": [
+        "When Provena-owned telemetry is available, watch HTTP MCP startup and bind failures, rejected Host and Origin requests, 413 and protocol-validation rates, transport/tool failures, graceful-shutdown failures, active requests, and p50/p95 startup plus request duration without attaching bodies, headers, absolute repo paths, memory content, or credentials."
+      ],
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-015"
+      ],
+      "notes": "Package decision: reuse bundled @modelcontextprotocol/sdk 1.29.0 `createMcpExpressApp` and `StreamableHTTPServerTransport`, plus Node's listener and lifecycle primitives. No dependency, lockfile change, database migration, Python service, or custom MCP protocol implementation is approved. Stateless JSON response mode is the smallest reliable local bridge; managed agent configs intentionally remain stdio because they already launch the persisted package directly.",
+      "qaNotes": "Sentry verification is pending because SENTRY_AUTH_TOKEN and SENTRY_DSN are unavailable on this host. This story requires deterministic local HTTP tests and packed offline proof; it does not claim external network, TLS, authentication, or production conformance.",
+      "pmPrdAttempts": 1,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 1,
+      "pmReviewAttempts": 1,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "PM contract completed for the smallest HTTP compatibility slice: explicit foreground loopback-only Streamable HTTP over the existing MCP registrations, stateless per-request isolation, DNS-rebinding and Origin defenses, 100 KiB bodies, generic bounded errors, graceful shutdown, portable-runtime and packed-install proof, honest local-process trust boundaries, and no new dependency.",
+      "testerPlanNotes": "QA planning defines nine focused cases covering strict CLI/default-port behavior, stdio and Python-store non-regression, fixed loopback routes and health timing, real protocol parity, per-request stateless concurrency and cleanup, Host/Origin rejection, the 100 KiB and generic-error boundary, SIGINT/SIGTERM cleanup, packed offline runtime reuse, honest documentation, and full CLI plus E2E regression. All 10 acceptance criteria, eight expected behaviors, and nine verification commands are traced. Sentry remains pending because credentials are unavailable.",
+      "pmReviewNotes": "Approved after independent product and adversarial security review. The explicit loopback-only HTTP mode preserves stdio and the Python store, reuses the bundled SDK with fresh stateless transports, fixes the repository root at startup, enforces exact routes plus Host/Origin/media/body boundaries, bounds protocol and tool errors at the public transport-send boundary, drains accepted mutations on shutdown while rejecting slow incomplete requests, and ships through both packed and persisted runtimes. All 10 acceptance criteria and eight expected behaviors are satisfied. The unauthenticated local-process trust boundary and SDK message-semantics coupling are documented residual risks; Sentry remains unavailable.",
+      "testerExecutionNotes": "Independent tester execution is green for T01-T09, all 10 acceptance criteria, all eight expected behaviors, and all nine verification commands. The full npm test passed in 467.194 seconds across every CLI suite, including the real HTTP protocol, adversarial boundary, Windows packed-install, persisted-runtime, and stdio regressions. The repository-venv E2E passed in 140.938 seconds with 47 Python tests plus TypeScript, Go, Rust, standalone, and polyglot verification. The machine's unrelated Hermes Python lacked rfc8785, but the already checked-in repo virtual environment ran the exact command without installing anything. Sentry remains pending because credentials are unavailable.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastPmPrdStartedAt": "2026-07-13T19:24:04Z",
+      "lastTesterPlanStartedAt": "2026-07-13T19:27:50Z",
+      "lastEngineerStartedAt": "2026-07-13T19:59:27Z",
+      "lastPmReviewStartedAt": "2026-07-13T19:59:27Z",
+      "lastTesterExecutionStartedAt": "2026-07-13T20:10:00Z"
+    },
+    {
+      "id": "PROVENA-016",
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "featureId": "FEATURE-LIVING-MAINTENANCE",
+      "featureTitle": "Deterministic living-memory maintenance",
+      "title": "Compile bounded maintenance proposals and subagent-ready context packets",
+      "priority": 16,
+      "status": "passed",
+      "passes": true,
+      "attempts": 1,
+      "qaStatus": "passed",
+      "qaAttempts": 1,
+      "persona": "Developer using multiple coding agents who needs the repository brain to identify stale or weak memory safely without silently rewriting project history",
+      "userStory": "As a developer, I want each normal Provena refresh to compile deterministic maintenance tasks and cited task contexts so agents can review evidence gaps, stale references, and exact duplicates without granting an autonomous process permission to mutate durable memory.",
+      "problemStatement": "The repository brain refreshes current topology and source-grounded package and workflow memories, but it does not yet expose bounded review work for unsupported memories, missing current paths, or exact duplicate active claims. Calling this dreaming or subagent coordination without a durable deterministic proposal contract would overstate the product and create an unsafe self-modification boundary.",
+      "featureDescription": "Add a manifest-attested `.provena/maintenance.plan.json` derived only from the committed RepoMap and canonical ledger heads. The compiler emits capped evidence-gap, source-not-in-map, scope-not-in-map, and exact-content-overlap issues plus deterministic review tasks. CLI and MCP read the plan and compile exact-memory, exact-path, cited, token-bounded context packets suitable for delegation, but never spawn processes, approve proposals, or write ledger events.",
+      "expectedBehaviors": [
+        "Every refresh generation deterministically regenerates the maintenance plan from the same source and exact-ledger snapshots used by the graph and manifest.",
+        "The plan identifies active memories without evidence, references absent from a complete current map, scopes absent from a complete current map, and exact normalized active-memory overlaps.",
+        "Incomplete scans defer every absence-based source and scope issue rather than turning partial visibility into stale-memory advice.",
+        "Exact overlap detection is linear in active events plus references and never performs pairwise semantic comparison or a model call.",
+        "The plan is compact, bounded, non-sensitive, and carries stable issue and task identities plus source, memory, and plan fingerprints.",
+        "Maintenance remains proposal-only: generating, reading, or compiling a task context never appends, supersedes, retracts, approves, or deletes a memory.",
+        "CLI users can list plan tasks, compile one task context, and request exact memories in ordinary context packets.",
+        "Stdio and loopback HTTP MCP expose the same maintenance plan and context operations through the existing repository-bound server.",
+        "Session start, Git hooks, daemon ticks, manual refresh, and installed runtimes inherit plan regeneration through the existing refresh path without a new scheduler or service."
+      ],
+      "acceptanceCriteria": [
+        "`.provena/maintenance.plan.json` joins the exact managed artifact set, is committed before the manifest in the same locked rollback-capable generation, and is covered by manifest hash/byte declarations plus the existing per-artifact and aggregate read caps.",
+        "Plan schema v1 records planner namespace and integer version, sourceFingerprint, exact raw-ledger memoryFingerprint, planFingerprint, scanComplete, truncated, summary counters, issues, and tasks. planFingerprint hashes one canonical self-excluding payload and the stored plan must exactly equal a canonical recomputation before consumption.",
+        "Only canonical active memory heads are inspected. Evidence-gap means both sources and appliesTo are empty; source-not-in-map uses missing source paths; scope-not-in-map uses missing appliesTo paths except dot; and exact-content-overlap groups two or more events by kind, subject type, normalized title, normalized body, and normalized appliesTo.",
+        "When RepoMap.scan.complete is false, source-not-in-map and scope-not-in-map checks produce no issues, increment a bounded deferred-path-check count, and leave evidence-gap and exact-overlap checks deterministic.",
+        "Overlap indexing and reference inspection visit each active event, source, and scope a bounded number of times, expose deterministic diagnostics for tests, and do not use embeddings, edit distance, all-pairs comparison, network, database, filesystem rescan, or model inference.",
+        "The compiler emits at most 256 issues and 256 tasks, each record carries at most 32 sorted unique memory IDs and 32 normalized repo-relative paths, serialized plan size is at most 512 KiB, and deterministic truncation plus summary counters disclose omitted work.",
+        "The plan never copies memory title, body, structuredData, provenance actor, agent, session, command, environment values, source snippets, credentials, or arbitrary user content. It contains only fixed planner text, enum values, IDs, repo-relative paths, fingerprints, versions, booleans, and numeric counters and passes the secret-material guard.",
+        "Plan generation and reads preserve exact ledger bytes and memory fingerprint. No maintenance command or read-only MCP maintenance tool changes the ledger, graph, map, manifest generation, source tree, Git configuration, daemon state, or external storage except the normal explicit refresh performed before CLI plan creation.",
+        "ContextQuery accepts bounded repeatable memoryIds. Exact active IDs receive the highest selection tier, seed graph expansion, retain citations, respect sensitivity and as-of filtering, fail generically on malformed or unavailable IDs when used by a maintenance task, and remain within existing character/token budgets.",
+        "`provena maintain plan [--limit N] [--json]` and `provena maintain context <task-id> [--max-tokens N] [--json]` use strict bounded parsing, default to limits 32 and 1500, refresh once, reject unknown or duplicate scalar options generically, and write only the existing ignored `.provena/context/latest.*` context output for the context subcommand.",
+        "The existing context CLI accepts repeatable `--memory-id <event-id>` and includes exact selected active memories without weakening path, symbol, command, sensitivity, temporal, citation, attestation, or budget behavior.",
+        "The shared MCP server adds read-only `provena_maintenance_plan` and `provena_maintenance_context` tools with bounded schemas and the same plan/task behavior over stdio and loopback HTTP. Existing tools/resources, repository-root fixation, stateless HTTP lifecycle, generic error sanitization, and mutation locking remain unchanged.",
+        "README, CLI README, bootloader, architecture, MCP, durable-artifact, lifecycle, threat-model, and roadmap documentation distinguish shipped deterministic maintenance proposals and subagent-ready packets from unimplemented semantic consolidation, decay, autonomous subagent DAG execution, automatic approval/apply, transaction-time history, historical code maps, or a new scheduler. Focused tamper, cap, determinism, trigger, packed-install, full CLI, and E2E regressions pass."
+      ],
+      "verificationCommands": [
+        "cd cli && npm run build",
+        "cd cli && node tests/maintenance-plan.test.mjs",
+        "cd cli && node tests/context-packet.test.mjs",
+        "cd cli && node tests/mcp-server.test.mjs",
+        "cd cli && node tests/mcp-http-server.test.mjs",
+        "cd cli && node tests/cli-behavior.test.mjs",
+        "cd cli && node tests/pack.test.mjs",
+        "cd cli && npm test",
+        "python scripts/run_e2e.py"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": true,
+        "integration": true,
+        "ui": false
+      },
+      "sentryChecks": [
+        "When Provena-owned telemetry is available, watch maintenance compilation failures, issue/task/truncation/deferred counts, attestation failures, invalid task-context requests, and p50/p95 compiler duration by active event and reference count without attaching plan paths, memory content, IDs, or credentials."
+      ],
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-016"
+      ],
+      "notes": "Package decision: use existing canonical JSON, hashing, ledger-head, repo-map, context, graph, lock, manifest, CLI, MCP, and portable-runtime helpers. No dependency, model, database, migration, network call, filesystem watcher, new scheduler, or process runner is approved. This is the smallest honest living-maintenance primitive: deterministic review proposals and delegation packets, not autonomous reasoning or self-modification.",
+      "qaNotes": "Sentry verification is pending because SENTRY_AUTH_TOKEN and SENTRY_DSN are unavailable on this host. Live Neo4j is unrelated to this slice and remains unverified.",
+      "pmPrdAttempts": 1,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 1,
+      "pmReviewAttempts": 1,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "PM contract completed for a bounded deterministic maintenance compiler: one manifest-attested proposal plan identifies four exact classes of review work, defers absence advice on incomplete scans, enforces strict count/payload caps, and compiles exact-memory cited contexts through CLI and MCP. The contract explicitly forbids silent ledger mutation, semantic inference, autonomous process spawning, approval/apply, and new service or scheduler dependencies.",
+      "testerPlanNotes": "QA planning defines 10 deterministic cases covering manifest/generation attestation and repair, exact active-head issue semantics, incomplete-scan deferral, diagnostic-proven linear compilation, count/list/UTF-8-byte and confidentiality caps, proposal-only no-write behavior, exact-memory temporal/sensitivity/budget context selection, strict CLI defaults and parsing, stdio/HTTP MCP parity and error bounds, lifecycle triggers, packed runtimes, honest documentation, full CLI, and cross-stack E2E. All 13 acceptance criteria, nine expected behaviors, nine verification commands, and Sentry follow-up are traced.",
+      "pmReviewNotes": "Approved after reviewing all 13 acceptance criteria and nine expected behaviors against the implementation, docs, focused regressions, and independent core/surface reviews. The shipped boundary is accurate: one canonical manifest-attested proposal artifact, four exact issue classes, incomplete-scan deferral, bounded deterministic compilation, exact-memory cited task packets, strict CLI and read-only MCP views, inherited lifecycle refreshes, and no model/network/database/process/approval/apply path. Review found and engineering fixed exact path identity, exact-tier overwrite, cross-type ID/graph collisions, exact-memory budget omission, and durable Git allowlisting before approval.",
+      "testerExecutionNotes": "Tester execution is green. T01-T09 passed through the focused artifact-attestation, maintenance-plan, context-packet, stdio and loopback HTTP MCP, CLI, security, temporal-harness, repository-sync, intelligence-header, Go gateway/MCP, and package regressions. Independent general, security, test-writer, and documentation gates found no unresolved P0/P1/blocking P2 findings after fixes for full managed-artifact verification, whole-repo appliesTo scope parity, intelligence identity propagation, authoritative network-MCP bearer validation, SSE admission limits, and bounded single-document RPC parsing. T10 passed when the complete CLI suite finished in 429.2 seconds with every Node suite green, including Windows packed portable installation, and the repository-venv E2E finished in 131.1 seconds with 47 Python tests plus TypeScript, Go, Rust, OpenAPI, standalone, and polyglot verification. npm audit is clean. Local PostgreSQL, live Redis, live Neo4j, Sentry, and Go race-detector proof remain environment-dependent; PostgreSQL 16 is still a required CI service, Neo4j remains mock-driver proven only, and no live-service or competitive benchmark superiority claim is made.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "fixRecommendations": [],
+      "lastPmPrdStartedAt": "2026-07-13T20:18:34Z",
+      "lastTesterPlanStartedAt": "2026-07-13T20:23:46Z",
+      "lastEngineerStartedAt": "2026-07-13T20:35:00Z",
+      "lastPmReviewStartedAt": "2026-07-13T20:51:01Z",
+      "lastTesterExecutionStartedAt": "2026-07-13T21:32:50Z"
     }
   ]
 }

@@ -62,7 +62,35 @@ The packet is printed and cached under `.provena/context/`. Results combine
 exact matches, lexical relevance, graph proximity, and active memories. Every
 item carries a file/line/symbol or memory-event citation.
 
-## 4. Record durable knowledge
+To force one or more exact eligible active memories into the highest selection
+tier, repeat `--memory-id` (up to 32 times):
+
+```powershell
+npx provena context "review the authorization decision" `
+  --memory-id decision-auth-boundary `
+  --memory-id workflow-auth-tests
+```
+
+## 4. Review deterministic maintenance proposals
+
+```powershell
+npx provena maintain plan --limit 32
+npx provena maintain plan --limit 32 --json
+$MaintenanceTask = "task-id-from-the-plan"
+npx provena maintain context $MaintenanceTask --max-tokens 1500
+```
+
+The canonical `.provena/maintenance.plan.json` is regenerated and attested by
+every normal refresh. The plan command returns a bounded view of exact evidence
+gaps, paths absent from a complete current map, and exact active-memory
+overlaps. The context command compiles one cited packet and caches it only as
+the existing ignored `.provena/context/latest.md` or `latest.json` output.
+
+These are proposal-only review surfaces. They do not spawn agents, approve or
+apply changes, rewrite the ledger, perform semantic consolidation/decay, or add
+a scheduler. Autonomous subagent DAG execution remains roadmap.
+
+## 5. Record durable knowledge
 
 ```powershell
 npx provena remember decision "Gateway owns authorization" `
@@ -81,7 +109,7 @@ put secrets in memory; Provena rejects likely credentials and private keys as
 a best-effort guard. The tracked ledger accepts only `public` and `internal`
 events. Store confidential/restricted material in the governed service instead.
 
-## 5. Start and finish an agent session
+## 6. Start and finish an agent session
 
 ```powershell
 npx provena session start "repair token refresh" --agent codex
@@ -120,18 +148,43 @@ From a Provena source checkout:
 $env:PROVENA_STORE_ROOT = "C:\path\to\provena"
 npx provena serve --detach
 npx provena doctor
+npx provena sync store --dry-run
+npx provena sync store --json
 npx provena index --store
 npx provena search --store "authentication" --limit 10
 ```
 
-The portable repo-brain path starts no HTTP server and opens no port. The
-CLI-managed optional store defaults to `127.0.0.1:18092`.
+`sync store` projects the complete canonical JSONL ledger; `index --store`
+remains the deeper TS/JS chunk indexer. Sync verifies the exact raw-ledger
+SHA-256, commits stable event/source/relation projections and its checkpoint in
+one transaction, and treats an identical replay as a no-op. It does not run
+automatic extraction over already-canonical events.
+
+The portable repo-brain path defaults to stdio and opens no port. If a local
+client requires Streamable HTTP, start the same MCP surface explicitly:
+
+```powershell
+npx provena mcp serve --http
+# MCP:    http://127.0.0.1:18093/mcp
+# Health: http://127.0.0.1:18093/healthz
+```
+
+Use `--port <port>` for another canonical local port and Ctrl+C to stop the
+foreground listener. Managed MCP configs remain stdio. This loopback endpoint
+is unauthenticated, so any local process can invoke both read and mutation
+tools while it runs. Both transports expose five resources and seven tools,
+including the two read-only maintenance tools. It has no TLS, remote binding, permissive CORS,
+SSE/sessions, daemon mode, rate limiting, or enterprise-proxy guarantees.
+
+The separate CLI-managed optional store defaults to `127.0.0.1:18092`, and
+ordinary refresh does not fail when that optional store is absent.
 
 ## Clone, upgrade, and uninstall
 
-Commit the durable `.provena/` artifacts, including `config.json` and the event
-ledger. Runtime dependencies, context packets, daemon state, logs, and local
-databases remain ignored. After cloning, run `npx provena init` to recreate the
+Commit the durable `.provena/` artifacts, including `config.json`,
+`maintenance.plan.json`, and the event ledger. Runtime dependencies, context
+packets, daemon state, logs, and local databases remain ignored. After cloning,
+run `npx provena init` to recreate the
 runtime and managed agent/MCP/hook integrations. Run it again after upgrading
 the package to refresh and repair the installation.
 
@@ -147,6 +200,7 @@ then remove `.provena/` after preserving any ledger events you need.
 | Git hooks show `0` installed | A global/out-of-repo hooks path is configured; session + daemon refresh still work |
 | Daemon should not run | `npx provena daemon stop`; re-init later with `--no-daemon` |
 | MCP client cannot find Provena | Run `npx provena mcp install`, then restart the client |
+| MCP client requires an HTTP URL | Run `npx provena mcp serve --http`, use `http://127.0.0.1:18093/mcp`, and keep the foreground process running |
 | Neo4j sync reports missing env | Set URI, username, and password in the process environment |
 | Optional store cannot start | Set `PROVENA_STORE_ROOT` to the source checkout containing `app/main.py` |
 

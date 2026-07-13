@@ -1,5 +1,5 @@
 // Command gateway runs the Provena API gateway on :8080.
-// Middleware chain: trace -> metrics -> logging -> rate-limit -> auth -> write-permission.
+// Middleware chain: trace -> metrics -> logging -> client-IP limit -> auth -> tenant limit -> write-permission.
 package main
 
 import (
@@ -48,7 +48,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	rl := gateway.NewRateLimiter(100, 200)
+	tenantRL := gateway.NewRateLimiter(100, 200)
+	clientIPRL := gateway.NewRateLimiter(200, 400)
 	ha := gateway.NewHealthAggregator(map[string]string{
 		"orchestration": orchestrationURL + "/healthz",
 		"intelligence":  intelligenceURL + "/healthz",
@@ -67,6 +68,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))
 	})
+	mux.Handle("GET /v1/auth/validate", auth.VerifiedKeyHandler())
 	mux.HandleFunc("GET /metrics", observability.MetricsHandler())
 	mux.Handle("GET /ui/observability", storeProxy)
 	mux.Handle("GET /ui/assets/{file...}", storeProxy)
@@ -82,6 +84,7 @@ func main() {
 	mux.Handle("POST /v1/memories/graph/temporal", storeProxy)
 	mux.Handle("POST /v1/memories/relations", storeProxy)
 	mux.Handle("DELETE /v1/memories/{id}", storeProxy)
+	mux.Handle("POST /v1/repositories/{repository_id}/memory-events/sync", storeProxy)
 	mux.Handle("GET /v1/admin/memories/{id}/inspect", storeProxy)
 	mux.Handle("POST /v1/admin/memories/search/explain", storeProxy)
 
@@ -124,14 +127,11 @@ func main() {
 	})
 
 	var handler http.Handler = mux
-	// WritePermission must be wrapped *before* Auth so that Auth runs first
-	// and populates the AuthContext the permission check reads. Reversing
-	// these makes WritePermission a no-op (FromContext returns ok=false).
+	// Execution order is client-IP limit -> auth -> tenant limit -> permission.
 	handler = auth.WritePermissionMiddleware(handler)
+	handler = gateway.RateLimitMiddleware(tenantRL)(handler)
 	handler = auth.AuthMiddleware(keyStore, authEnabled)(handler)
-	// Rate-limit OUTSIDE auth: throttle floods of invalid tokens before they
-	// reach the CPU-intensive key validation (SHA-256 + constant-time compare).
-	handler = gateway.RateLimitMiddleware(rl)(handler)
+	handler = gateway.ClientIPRateLimitMiddleware(clientIPRL)(handler)
 	handler = gateway.RequestLogger(handler)
 	handler = observability.MetricsMiddleware(handler)
 	handler = observability.TraceMiddleware(handler)

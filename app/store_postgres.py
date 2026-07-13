@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.hot_cache import InMemoryHotCache, MemoryHotCache
-from app.models import MemoryLayer, MemoryStatus, ScopeEnvelope
+from app.models import MemoryLayer
 from app.pg_connection import IntegrityError as PgIntegrityError
 from app.pg_connection import OperationalError, PostgresConnection
 from app.store import AccessContext, ProvenaStore, SearchCandidate, SearchRequest
@@ -70,10 +70,42 @@ class PostgresStore(ProvenaStore):
             for column, statement in migrations.items():
                 if column not in columns:
                     self.conn.execute(statement)
+            projection_columns = {
+                row["column_name"]
+                for row in self.conn.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'repo_memory_event_projections'
+                    """
+                ).fetchall()
+            }
+            if "projection_version" not in projection_columns:
+                self.conn.execute(
+                    """
+                    ALTER TABLE repo_memory_event_projections
+                    ADD COLUMN IF NOT EXISTS projection_version INTEGER NOT NULL DEFAULT 1
+                    """
+                )
 
     def _init_vector_index(self) -> bool:
         # pgvector KNN is PLAN-16; linear cosine scan fallback is used until then.
         return False
+
+    @staticmethod
+    def _embedding_candidate_predicate(alias: str) -> str:
+        return (
+            f"{alias}.embedding_json IS NOT NULL "
+            f"AND jsonb_typeof({alias}.embedding_json) = 'array' "
+            f"AND {alias}.embedding_json <> '[]'::jsonb"
+        )
+
+    def _purge_memory_indexes(self, memory_ids) -> None:
+        # PostgreSQL search vectors live on the memory row and are deleted with
+        # it. Keep the hook symmetric for future external vector indexes.
+        for memory_id in memory_ids:
+            self._vec_delete(memory_id)
 
     def _index_memory(
         self,
@@ -103,6 +135,35 @@ class PostgresStore(ProvenaStore):
             """,
             (document, memory_id),
         )
+
+    def _memory_index_matches(
+        self,
+        memory_id: str,
+        title: str | None,
+        summary: str | None,
+        content: str,
+        tags: list[str],
+        entity_keys: list[str],
+    ) -> bool:
+        document = " ".join(
+            part
+            for part in [
+                title or "",
+                summary or "",
+                content,
+                " ".join(tags),
+                " ".join(entity_keys),
+            ]
+            if part
+        )
+        row = self.conn.execute(
+            """
+            SELECT search_vector = to_tsvector('english', ?) AS matches
+            FROM memories WHERE memory_id = ?
+            """,
+            (document, memory_id),
+        ).fetchone()
+        return bool(row and row["matches"])
 
     def _fts_candidate_rows(self, payload: SearchRequest, candidate_limit: int) -> list[SearchCandidate]:
         if not payload.query.strip():
@@ -164,9 +225,10 @@ class PostgresStore(ProvenaStore):
         aliases: list[str] | None = None,
         entity_type: str | None = None,
     ) -> str:
+        self._assert_tenant_owned_id("entity", entity_id, tenant_id)
         now = self._iso_now()
         with self.conn:
-            self.conn.execute(
+            cursor = self.conn.execute(
                 """
                 INSERT INTO entity_registry (
                     entity_id, canonical_name, aliases_json, entity_type, tenant_id, created_at, updated_at
@@ -175,8 +237,9 @@ class PostgresStore(ProvenaStore):
                     canonical_name = EXCLUDED.canonical_name,
                     aliases_json = EXCLUDED.aliases_json,
                     entity_type = EXCLUDED.entity_type,
-                    tenant_id = EXCLUDED.tenant_id,
                     updated_at = EXCLUDED.updated_at
+                WHERE entity_registry.tenant_id = EXCLUDED.tenant_id
+                RETURNING tenant_id
                 """,
                 (
                     entity_id,
@@ -188,6 +251,7 @@ class PostgresStore(ProvenaStore):
                     now,
                 ),
             )
+            self._require_tenant_owned_upsert(cursor)
         return entity_id
 
     def _count_scalar(self, query: str, params: tuple[Any, ...] = ()) -> int:

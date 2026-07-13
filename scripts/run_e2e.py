@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
+import rfc8785
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -92,6 +93,17 @@ class ManagedProcess:
     def stop(self) -> None:
         try:
             if self.process.poll() is None:
+                if IS_WINDOWS:
+                    # `go run` spawns the compiled service as a child process;
+                    # terminating only the wrapper leaves the service listening.
+                    subprocess.run(
+                        ["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.process.wait(timeout=5)
+                    return
                 self.process.terminate()
                 try:
                     self.process.wait(timeout=10)
@@ -406,6 +418,7 @@ def verify_polyglot_http(base_urls: dict[str, str], lifecycle_available: bool) -
             "scope": {"workspace_id": "ws-held", "project_id": "proj-held"},
             "reason": "smoke-test hold",
         },
+        request_headers=admin_headers,
     )
     held_write = post_json(
         f"{gateway}/v1/memories",
@@ -433,6 +446,7 @@ def verify_polyglot_http(base_urls: dict[str, str], lifecycle_available: bool) -
     release = httpx.delete(
         f"{governance_base}/v1/admin/legal-hold/{hold['hold_id']}",
         params={"tenant_id": "tenant-poly"},
+        headers=admin_headers,
         timeout=10.0,
     )
     release.raise_for_status()
@@ -636,7 +650,9 @@ def verify_permission_aware_gateway_retrieval(
 ) -> None:
     auth_gateway_url = f"http://127.0.0.1:{AUTH_GATEWAY_PORT}"
     superadmin_token = "prov_e2e_superadmin"
+    editor_token = "prov_e2e_editor"
     viewer_token = "prov_e2e_viewer"
+    denied_viewer_token = "prov_e2e_viewer_denied"
     auth_gateway_env = env.copy()
     auth_gateway_env["PROVENA_LISTEN_ADDR"] = f"127.0.0.1:{AUTH_GATEWAY_PORT}"
     auth_gateway_env["PROVENA_ORCHESTRATION_URL"] = base_urls["orchestration"]
@@ -650,15 +666,35 @@ def verify_permission_aware_gateway_retrieval(
                 "key_id": "superadmin-e2e",
                 "tenant_id": "",
                 "role": "superadmin",
+                "principal_id": "principal-admin-1",
+                "groups": ["admins", "security"],
                 "hashed_key": sha256_hex(superadmin_token),
                 "description": "polyglot permission smoke superadmin",
+            },
+            {
+                "key_id": "editor-e2e",
+                "tenant_id": "tenant-poly",
+                "role": "editor",
+                "principal_id": "repo-sync-editor",
+                "groups": ["repo-writers"],
+                "hashed_key": sha256_hex(editor_token),
+                "description": "polyglot repository sync editor",
             },
             {
                 "key_id": "viewer-e2e",
                 "tenant_id": "tenant-poly",
                 "role": "viewer",
+                "principal_id": "pm-1",
                 "hashed_key": sha256_hex(viewer_token),
                 "description": "polyglot permission smoke viewer",
+            },
+            {
+                "key_id": "viewer-denied-e2e",
+                "tenant_id": "tenant-poly",
+                "role": "viewer",
+                "principal_id": "pm-2",
+                "hashed_key": sha256_hex(denied_viewer_token),
+                "description": "polyglot permission smoke denied viewer",
             },
         ],
         separators=(",", ":"),
@@ -690,8 +726,89 @@ def verify_permission_aware_gateway_retrieval(
             principal_id="principal-admin-1",
             groups=["admins", "security"],
         )
-        viewer_pm_1 = auth_headers(viewer_token, principal_id="pm-1")
-        viewer_pm_2 = auth_headers(viewer_token, principal_id="pm-2")
+        # Caller-supplied identity headers are intentionally false. The
+        # gateway must authorize only the verified claims on each API key.
+        viewer_pm_1 = auth_headers(
+            viewer_token,
+            principal_id="spoofed-pm-2",
+            groups=["spoofed-group"],
+        )
+        viewer_pm_2 = auth_headers(
+            denied_viewer_token,
+            principal_id="pm-1",
+            groups=["spoofed-granted-group"],
+        )
+        editor_sync_headers = auth_headers(
+            editor_token,
+            principal_id="spoofed-superadmin-principal",
+            groups=["spoofed-admins"],
+        )
+        editor_sync_headers.update(
+            {
+                "X-Provena-Tenant-Id": "spoofed-tenant",
+                "X-Provena-Role": "superadmin",
+                "X-Provena-Key-Id": "spoofed-key",
+            }
+        )
+
+        repository_event = {
+            "applies_to": [],
+            "authority": "tool",
+            "body": "Authenticated gateway sync preserves verified repository ownership.",
+            "confidence": 1.0,
+            "created_at": "2026-07-13T10:00:00.000Z",
+            "id": "event-auth-gateway-001",
+            "importance": 1.0,
+            "kind": "invariant",
+            "provenance": {"actor": "e2e", "method": "observed"},
+            "schema_version": 1,
+            "sensitivity": "internal",
+            "sources": [],
+            "status": "active",
+            "structured_data": {"boundary": "verified-gateway-claims"},
+            "subject_type": "repo",
+            "supersedes": [],
+            "tags": ["gateway", "sync"],
+            "title": "Verified repository sync",
+            "triggers": [],
+            "updated_at": "2026-07-13T10:00:00.000Z",
+        }
+        repository_ledger = rfc8785.dumps(repository_event).decode("utf-8") + "\n"
+        repository_sync_payload = {
+            "schema_version": 1,
+            "scope": {"tenant_id": "tenant-poly", "project_id": "project-auth-sync"},
+            "ledger_path": ".provena/memory/events.jsonl",
+            "memory_fingerprint": hashlib.sha256(repository_ledger.encode("utf-8")).hexdigest(),
+            "ledger_bytes": len(repository_ledger.encode("utf-8")),
+            "ledger": repository_ledger,
+        }
+        repository_sync_url = (
+            f"{auth_gateway_url}/v1/repositories/repo-auth-gateway-e2e/memory-events/sync"
+        )
+        first_sync = post_json(
+            repository_sync_url,
+            repository_sync_payload,
+            editor_sync_headers,
+        )
+        if first_sync["created_memories"] != 1 or first_sync["no_op"]:
+            raise RuntimeError("auth-enabled gateway repository sync did not create its projection")
+
+        denied_sync = httpx.post(
+            repository_sync_url,
+            json=repository_sync_payload,
+            headers=viewer_pm_1,
+            timeout=20.0,
+        )
+        if denied_sync.status_code != 403:
+            raise RuntimeError("auth-enabled gateway allowed a viewer to sync repository memory")
+
+        replay_sync = post_json(
+            repository_sync_url,
+            repository_sync_payload,
+            editor_sync_headers,
+        )
+        if not replay_sync["no_op"] or replay_sync["unchanged_memories"] != 1:
+            raise RuntimeError("auth-enabled gateway identical repository replay was not a no-op")
 
         connector = post_json(
             f"{auth_gateway_url}/v1/integrations/connectors",
@@ -770,6 +887,13 @@ def verify_permission_aware_gateway_retrieval(
                 },
                 "title": "Granted connected memory",
                 "content": "Connected permission smoke should return the granted roadmap memory only.",
+                "acl": [
+                    {
+                        "principal_id": "pm-1",
+                        "principal_type": "user",
+                        "permissions": ["read"],
+                    }
+                ],
                 "source_references": [
                     {"source_type": "channel", "source_id": "src-authz-allowed"}
                 ],
@@ -788,6 +912,13 @@ def verify_permission_aware_gateway_retrieval(
                 },
                 "title": "Blocked connected memory",
                 "content": "Connected permission smoke should hide blocked roadmap memory.",
+                "acl": [
+                    {
+                        "principal_id": "pm-1",
+                        "principal_type": "user",
+                        "permissions": ["read"],
+                    }
+                ],
                 "source_references": [
                     {"source_type": "channel", "source_id": "src-authz-blocked"}
                 ],
@@ -921,6 +1052,9 @@ def run_polyglot_suite() -> None:
             intelligence_env["PROVENA_INTEL_PIPELINE_URL"] = base_urls["store"]
             intelligence_env["PROVENA_INTEL_ORCHESTRATION_URL"] = base_urls["orchestration"]
             intelligence_env["PROVENA_INTEL_LISTEN_PORT"] = str(POLYGLOT_PORTS["intelligence"])
+            intelligence_env["PROVENA_INTEL_SERVICE_ROLE"] = "superadmin"
+            intelligence_env["PROVENA_INTEL_SERVICE_KEY_ID"] = "e2e-intelligence"
+            intelligence_env["PROVENA_INTEL_SERVICE_PRINCIPAL_ID"] = "e2e-intelligence"
             processes.append(
                 launch(
                     "intelligence",
@@ -967,6 +1101,9 @@ def run_polyglot_suite() -> None:
             gateway_env["PROVENA_INTELLIGENCE_URL"] = base_urls["intelligence"]
             gateway_env["PROVENA_STORE_URL"] = base_urls["store"]
             gateway_env["PROVENA_LIFECYCLE_URL"] = base_urls["lifecycle"]
+            # The base smoke exercises routing without credentials. A separate
+            # auth-enabled gateway below proves tenant and grant enforcement.
+            gateway_env["PROVENA_AUTH_ENABLED"] = "false"
             processes.append(
                 launch(
                     "gateway",
@@ -995,6 +1132,7 @@ def run_polyglot_suite() -> None:
             mcp_env = env.copy()
             mcp_env["PROVENA_MCP_LISTEN_ADDR"] = f"127.0.0.1:{POLYGLOT_PORTS['mcp']}"
             mcp_env["PROVENA_GATEWAY_URL"] = base_urls["gateway"]
+            mcp_env["PROVENA_MCP_REQUIRE_AUTH"] = "false"
             processes.append(
                 launch(
                     "mcp",

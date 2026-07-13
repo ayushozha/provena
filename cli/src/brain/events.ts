@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
+import { TextDecoder } from "node:util";
 import {
   MEMORY_KINDS,
   MEMORY_SUBJECT_TYPES,
@@ -9,7 +10,14 @@ import {
   type MemorySource,
   type NewMemoryEvent,
 } from "./types.js";
-import { canonicalJson, compareText, normalizeRepoPath, sha256, stableId } from "./utils.js";
+import {
+  canonicalJson,
+  compareText,
+  normalizeRepoPath,
+  sha256,
+  stableId,
+  writeFileAtomic,
+} from "./utils.js";
 import { assertNoSecretMaterial } from "../security/memory.js";
 import { withRepoMemoryLock } from "./lock.js";
 import { assertSafeRepoPath } from "../security/paths.js";
@@ -29,6 +37,8 @@ export interface MemoryLedgerSnapshot {
   events: MemoryEvent[];
   memoryFingerprint: string;
   bytes: number;
+  /** Exact UTF-8 ledger snapshot used to compute memoryFingerprint. */
+  rawLedger: string;
 }
 
 function requiredText(value: string, field: string, maxCharacters = MAX_BODY_CHARACTERS): string {
@@ -62,6 +72,46 @@ function weight(value: number | undefined, fallback: number, field: string): num
     throw new Error(`${field} must be between 0 and 1`);
   }
   return result;
+}
+
+function assertPortableJsonValue(value: unknown, path = "event"): void {
+  if (typeof value === "string") {
+    if (value.includes("\0")) {
+      throw new Error(`${path} contains NUL text that cannot be persisted portably`);
+    }
+    for (let index = 0; index < value.length; index += 1) {
+      const code = value.charCodeAt(index);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = value.charCodeAt(index + 1);
+        if (!(next >= 0xdc00 && next <= 0xdfff)) {
+          throw new Error(`${path} contains an unpaired UTF-16 surrogate`);
+        }
+        index += 1;
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        throw new Error(`${path} contains an unpaired UTF-16 surrogate`);
+      }
+    }
+    return;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || Object.is(value, -0)) {
+      throw new Error(`${path} must contain finite, non-negative-zero JSON numbers`);
+    }
+    if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
+      throw new Error(`${path} integers must stay within the interoperable JSON safe-integer range`);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertPortableJsonValue(item, `${path}[${index}]`));
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      assertPortableJsonValue(key, `${path}.key`);
+      assertPortableJsonValue(item, `${path}.${key}`);
+    }
+  }
 }
 
 function timestamp(value: string, field: string): string {
@@ -164,10 +214,10 @@ function validateExplicitClaims(input: NewMemoryEvent): void {
   }
 }
 
-function buildEvent(
+export function prepareMemoryEvent(
   repoRoot: string,
   input: NewMemoryEvent,
-  now: () => Date,
+  options: AppendMemoryOptions = {},
 ): MemoryEvent {
   if (!MEMORY_KINDS.includes(input.kind)) throw new Error(`unknown memory kind: ${input.kind}`);
   if (!MEMORY_SUBJECT_TYPES.includes(input.subjectType)) {
@@ -177,7 +227,7 @@ function buildEvent(
     throw new Error("provenance is required");
   }
   validateExplicitClaims(input);
-  const current = now().toISOString();
+  const current = (options.now ?? (() => new Date()))().toISOString();
   const createdAt = timestamp(input.createdAt ?? current, "createdAt");
   const updatedAt = timestamp(input.updatedAt ?? createdAt, "updatedAt");
   if (Date.parse(updatedAt) < Date.parse(createdAt)) {
@@ -211,6 +261,7 @@ function buildEvent(
   ) {
     throw new Error("structuredData must be an object");
   }
+  assertPortableJsonValue(input.structuredData ?? {}, "structuredData");
   if (JSON.stringify(input.structuredData ?? {}).length > MAX_STRUCTURED_DATA_CHARACTERS) {
     throw new Error(
       `structuredData must not exceed ${MAX_STRUCTURED_DATA_CHARACTERS} serialized characters`,
@@ -219,7 +270,7 @@ function buildEvent(
   const agent = optionalText(input.provenance.agent, "provenance.agent");
   const sessionId = optionalText(input.provenance.sessionId, "provenance.sessionId");
   const command = optionalText(input.provenance.command, "provenance.command", 8_192);
-  return {
+  const event: MemoryEvent = {
     schemaVersion: 1,
     id,
     kind: input.kind,
@@ -247,6 +298,8 @@ function buildEvent(
     tags: cleanStrings(input.tags),
     triggers: cleanStrings(input.triggers),
   };
+  assertPortableJsonValue(memoryEventToRecord(event));
+  return event;
 }
 
 export function memoryEventToRecord(event: MemoryEvent): MemoryEventRecord {
@@ -355,6 +408,57 @@ function isMemoryEventRecord(value: unknown): value is MemoryEventRecord {
   );
 }
 
+const AUTHORITY_RANK = { tool: 1, agent: 2, system: 3, human: 4 } as const;
+
+function validateMemoryTransition(
+  existingById: ReadonlyMap<string, MemoryEvent>,
+  event: MemoryEvent,
+): void {
+  if (existingById.has(event.id)) {
+    throw new Error(`memory id already exists: ${event.id}`);
+  }
+  for (const supersededId of event.supersedes) {
+    const superseded = existingById.get(supersededId);
+    if (!superseded) {
+      throw new Error(`cannot supersede unknown memory id: ${supersededId}`);
+    }
+    if (AUTHORITY_RANK[event.authority] < AUTHORITY_RANK[superseded.authority]) {
+      throw new Error(
+        `${event.authority} memory cannot supersede ${superseded.authority} memory ${supersededId}`,
+      );
+    }
+    if (Date.parse(event.createdAt) < Date.parse(superseded.createdAt)) {
+      throw new Error(
+        `memory ${event.id} cannot supersede newer memory ${supersededId}`,
+      );
+    }
+  }
+}
+
+function validateLedgerEvent(
+  repoRoot: string,
+  event: MemoryEvent,
+): { event: MemoryEvent; serialized: string } {
+  assertPortableJsonValue(event);
+  const candidate = canonicalJson(event);
+  assertNoSecretMaterial(candidate);
+  const record = memoryEventToRecord(event);
+  const validated = prepareMemoryEvent(repoRoot, recordToInput(record), {
+    now: () => new Date(record.created_at),
+  });
+  if (canonicalJson(validated) !== candidate) {
+    throw new Error("memory event is not canonical or contains unsupported fields");
+  }
+  const serialized = canonicalJson(memoryEventToRecord(validated));
+  assertNoSecretMaterial(serialized);
+  if (["confidential", "restricted"].includes(validated.sensitivity)) {
+    throw new Error(
+      `${validated.sensitivity} memory cannot be written to the Git-tracked repo ledger; use the governed store`,
+    );
+  }
+  return { event: validated, serialized };
+}
+
 export async function readMemoryLedgerSnapshot(
   repoRoot: string,
 ): Promise<MemoryLedgerSnapshot> {
@@ -374,9 +478,16 @@ export async function readMemoryLedgerSnapshot(
   if (ledger.byteLength > MAX_LEDGER_BYTES) {
     throw new Error(`${MEMORY_LEDGER_PATH} exceeds the ${MAX_LEDGER_BYTES} byte safety cap`);
   }
-  const text = ledger.toString("utf8");
+  let text: string;
+  try {
+    // Buffer.toString() silently replaces malformed bytes, which would make
+    // rawLedger differ from the bytes used for memoryFingerprint.
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(ledger);
+  } catch {
+    throw new Error(`${MEMORY_LEDGER_PATH} must contain valid UTF-8`);
+  }
   const events: MemoryEvent[] = [];
-  const ids = new Set<string>();
+  const existingById = new Map<string, MemoryEvent>();
   for (const [index, line] of text.split(/\r?\n/).entries()) {
     if (!line.trim()) continue;
     let parsed: unknown;
@@ -385,32 +496,161 @@ export async function readMemoryLedgerSnapshot(
     } catch {
       throw new Error(`${MEMORY_LEDGER_PATH}:${index + 1}: invalid JSON`);
     }
+    try {
+      assertPortableJsonValue(parsed);
+    } catch (error) {
+      throw new Error(`${MEMORY_LEDGER_PATH}:${index + 1}: ${(error as Error).message}`);
+    }
+    if (canonicalJson(parsed).slice(0, -1) !== line) {
+      throw new Error(
+        `${MEMORY_LEDGER_PATH}:${index + 1}: memory event must be canonical RFC 8785 JSON without duplicate keys`,
+      );
+    }
     if (!isMemoryEventRecord(parsed)) {
       throw new Error(`${MEMORY_LEDGER_PATH}:${index + 1}: invalid memory event`);
     }
+    try {
+      assertNoSecretMaterial(canonicalJson(parsed));
+    } catch (error) {
+      throw new Error(`${MEMORY_LEDGER_PATH}:${index + 1}: ${(error as Error).message}`);
+    }
     let validated: MemoryEvent;
     try {
-      validated = buildEvent(
+      validated = prepareMemoryEvent(
         repoRoot,
         recordToInput(parsed),
-        () => new Date(parsed.created_at),
+        { now: () => new Date(parsed.created_at) },
       );
+      if (["confidential", "restricted"].includes(validated.sensitivity)) {
+        throw new Error(
+          `${validated.sensitivity} memory cannot be read from the Git-tracked repo ledger; use the governed store`,
+        );
+      }
       if (canonicalJson(memoryEventToRecord(validated)) !== canonicalJson(parsed)) {
         throw new Error("memory event is not canonical or contains unsupported fields");
       }
+      validateMemoryTransition(existingById, validated);
     } catch (error) {
       throw new Error(
         `${MEMORY_LEDGER_PATH}:${index + 1}: ${(error as Error).message}`,
       );
     }
-    if (ids.has(validated.id)) {
-      throw new Error(`${MEMORY_LEDGER_PATH}:${index + 1}: duplicate memory id ${validated.id}`);
-    }
-    ids.add(validated.id);
+    existingById.set(validated.id, validated);
     events.push(validated);
   }
   return {
     events,
+    memoryFingerprint: sha256(ledger),
+    bytes: ledger.byteLength,
+    rawLedger: text,
+  };
+}
+
+const MEMORY_LEDGER_ATTESTATION_ERROR =
+  "memory ledger snapshot events do not match rawLedger or its byte attestation";
+
+/**
+ * Verify that one parsed snapshot is the exact ordered interpretation of its
+ * raw UTF-8 ledger bytes. Every failure is intentionally non-reflective.
+ */
+export function assertMemoryLedgerSnapshotAttestation(
+  snapshot: MemoryLedgerSnapshot,
+): void {
+  try {
+    if (
+      !snapshot ||
+      typeof snapshot !== "object" ||
+      typeof snapshot.rawLedger !== "string" ||
+      !Array.isArray(snapshot.events)
+    ) {
+      throw new Error();
+    }
+    const ledger = Buffer.from(snapshot.rawLedger, "utf8");
+    if (
+      ledger.toString("utf8") !== snapshot.rawLedger ||
+      ledger.byteLength > MAX_LEDGER_BYTES ||
+      snapshot.bytes !== ledger.byteLength ||
+      snapshot.memoryFingerprint !== sha256(ledger)
+    ) {
+      throw new Error();
+    }
+    const lines = snapshot.rawLedger.split(/\r?\n/).filter((line) => line.trim());
+    if (lines.length !== snapshot.events.length) throw new Error();
+    for (const [index, event] of snapshot.events.entries()) {
+      const line = lines[index]!;
+      const parsed = JSON.parse(line) as unknown;
+      if (
+        canonicalJson(parsed).slice(0, -1) !== line ||
+        canonicalJson(memoryEventToRecord(event)).slice(0, -1) !== line
+      ) {
+        throw new Error();
+      }
+    }
+  } catch {
+    throw new Error(MEMORY_LEDGER_ATTESTATION_ERROR);
+  }
+}
+
+function validateSnapshotConsistency(
+  repoRoot: string,
+  snapshot: MemoryLedgerSnapshot,
+): void {
+  const existingById = new Map<string, MemoryEvent>();
+  for (const existing of snapshot.events) {
+    const { event } = validateLedgerEvent(repoRoot, existing);
+    if (canonicalJson(event) !== canonicalJson(existing)) {
+      throw new Error("memory ledger snapshot events do not match rawLedger");
+    }
+    validateMemoryTransition(existingById, event);
+    existingById.set(event.id, event);
+  }
+}
+
+export function extendMemoryLedgerSnapshot(
+  repoRoot: string,
+  snapshot: MemoryLedgerSnapshot,
+  events: readonly MemoryEvent[],
+): MemoryLedgerSnapshot {
+  assertMemoryLedgerSnapshotAttestation(snapshot);
+  const prefix = Buffer.from(snapshot.rawLedger, "utf8");
+  validateSnapshotConsistency(repoRoot, snapshot);
+
+  const existingById = new Map<string, MemoryEvent>();
+  for (const existing of snapshot.events) {
+    if (existingById.has(existing.id)) {
+      throw new Error(`duplicate memory id ${existing.id} in the ledger snapshot`);
+    }
+    existingById.set(existing.id, existing);
+  }
+
+  const appended: MemoryEvent[] = [];
+  const suffix: string[] = [];
+  let bytes = prefix.byteLength;
+  if (events.length > 0 && snapshot.rawLedger && !snapshot.rawLedger.endsWith("\n")) {
+    suffix.push("\n");
+    bytes += 1;
+  }
+  for (const candidate of events) {
+    const { event, serialized } = validateLedgerEvent(repoRoot, candidate);
+    validateMemoryTransition(existingById, event);
+    const serializedBytes = Buffer.byteLength(serialized, "utf8");
+    if (bytes + serializedBytes > MAX_LEDGER_BYTES) {
+      throw new Error(`${MEMORY_LEDGER_PATH} would exceed the ${MAX_LEDGER_BYTES} byte safety cap`);
+    }
+    suffix.push(serialized);
+    bytes += serializedBytes;
+    appended.push(event);
+    existingById.set(event.id, event);
+  }
+
+  if (bytes > MAX_LEDGER_BYTES) {
+    throw new Error(`${MEMORY_LEDGER_PATH} would exceed the ${MAX_LEDGER_BYTES} byte safety cap`);
+  }
+  const rawLedger = snapshot.rawLedger + suffix.join("");
+  const ledger = Buffer.from(rawLedger, "utf8");
+  return {
+    events: [...snapshot.events, ...appended],
+    rawLedger,
     memoryFingerprint: sha256(ledger),
     bytes: ledger.byteLength,
   };
@@ -425,60 +665,58 @@ export async function appendMemoryEvent(
   input: NewMemoryEvent,
   options: AppendMemoryOptions = {},
 ): Promise<MemoryEvent> {
-  const event = buildEvent(repoRoot, input, options.now ?? (() => new Date()));
-  const serializedEvent = canonicalJson(memoryEventToRecord(event));
-  assertNoSecretMaterial(serializedEvent);
-  if (["confidential", "restricted"].includes(event.sensitivity)) {
-    throw new Error(
-      `${event.sensitivity} memory cannot be written to the Git-tracked repo ledger; use the governed store`,
-    );
-  }
+  const event = prepareMemoryEvent(repoRoot, input, options);
+  validateLedgerEvent(repoRoot, event);
   return withRepoMemoryLock(repoRoot, async () => {
-    const existing = await readMemoryEvents(repoRoot);
-    if (existing.some((item) => item.id === event.id)) {
-      throw new Error(`memory id already exists: ${event.id}`);
-    }
-    const authorityRank = { tool: 1, agent: 2, system: 3, human: 4 } as const;
-    for (const supersededId of event.supersedes) {
-      const superseded = existing.find((item) => item.id === supersededId);
-      if (!superseded) {
-        throw new Error(`cannot supersede unknown memory id: ${supersededId}`);
-      }
-      if (authorityRank[event.authority] < authorityRank[superseded.authority]) {
-        throw new Error(
-          `${event.authority} memory cannot supersede ${superseded.authority} memory ${supersededId}`,
-        );
-      }
-    }
+    const snapshot = await readMemoryLedgerSnapshot(repoRoot);
+    const extended = extendMemoryLedgerSnapshot(repoRoot, snapshot, [event]);
     const ledgerPath = join(repoRoot, ...MEMORY_LEDGER_PATH.split("/"));
-    assertSafeRepoPath(repoRoot, dirname(ledgerPath));
-    assertSafeRepoPath(repoRoot, ledgerPath);
-    await mkdir(dirname(ledgerPath), { recursive: true });
-    assertSafeRepoPath(repoRoot, ledgerPath);
-    const currentBytes = await stat(ledgerPath)
-      .then((info) => info.size)
-      .catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return 0;
-        throw error;
-      });
-    const eventBytes = Buffer.byteLength(serializedEvent, "utf8");
-    if (currentBytes + eventBytes > MAX_LEDGER_BYTES) {
-      throw new Error(`${MEMORY_LEDGER_PATH} would exceed the ${MAX_LEDGER_BYTES} byte safety cap`);
-    }
-    const handle = await open(ledgerPath, "a");
-    try {
-      await handle.write(serializedEvent);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
+    // Replace instead of opening the destination in append mode: the exact
+    // prefix remains byte-identical, while a pre-existing hard link is safely
+    // detached rather than mutating its other name outside the repository.
+    await writeFileAtomic(repoRoot, ledgerPath, extended.rawLedger);
     return event;
   });
 }
 
-export function activeMemoryEvents(events: MemoryEvent[]): MemoryEvent[] {
+const MEMORY_AS_OF_ERROR =
+  "memoryAsOf must be a canonical UTC timestamp in YYYY-MM-DDTHH:mm:ss.sssZ form";
+
+/** Validate an optional producer-effective memory boundary without reflecting input. */
+export function canonicalMemoryAsOf(value?: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+  ) {
+    throw new Error(MEMORY_AS_OF_ERROR);
+  }
+  const millis = Date.parse(value);
+  if (!Number.isFinite(millis) || new Date(millis).toISOString() !== value) {
+    throw new Error(MEMORY_AS_OF_ERROR);
+  }
+  return value;
+}
+
+export function activeMemoryEvents(events: readonly MemoryEvent[]): MemoryEvent[] {
   const superseded = new Set(events.flatMap((event) => event.supersedes));
   return events.filter(
     (event) => event.status === "active" && !superseded.has(event.id),
+  );
+}
+
+/**
+ * Return active heads over the ledger's producer-effective prefix. Ledger order
+ * remains unchanged; a later append with an earlier createdAt can revise a view.
+ */
+export function activeMemoryEventsAt(
+  events: readonly MemoryEvent[],
+  memoryAsOf?: string,
+): MemoryEvent[] {
+  const boundary = canonicalMemoryAsOf(memoryAsOf);
+  return activeMemoryEvents(
+    boundary === undefined
+      ? events
+      : events.filter((event) => event.createdAt <= boundary),
   );
 }

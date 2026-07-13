@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -96,19 +97,33 @@ func (rl *RateLimiter) Allow(tenantID string) bool {
 	return true
 }
 
-// RateLimitMiddleware returns middleware that rate-limits by tenant.
-// It extracts tenant from the X-Tenant-Id header.
+// RateLimitMiddleware rate-limits by the tenant verified by AuthMiddleware.
 func RateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			tenant := r.Header.Get("X-Tenant-Id")
+			tenant := "unscoped"
 			if ac, ok := auth.FromContext(r.Context()); ok && ac.TenantID != "" {
 				tenant = ac.TenantID
 			}
-			if tenant == "" {
-				tenant = "default"
-			}
 			if !rl.Allow(tenant) {
+				http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// ClientIPRateLimitMiddleware limits unauthenticated floods before API-key
+// verification. It deliberately ignores caller-controlled tenant headers.
+func ClientIPRateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			clientIP := r.RemoteAddr
+			if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+				clientIP = host
+			}
+			if !rl.Allow(clientIP) {
 				http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
 				return
 			}
@@ -165,6 +180,30 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, v := range vv {
 			req.Header.Add(k, v)
 		}
+	}
+	for _, connectionHeader := range strings.Split(req.Header.Get("Connection"), ",") {
+		if header := strings.TrimSpace(connectionHeader); header != "" {
+			req.Header.Del(header)
+		}
+	}
+	for _, header := range []string{
+		"Authorization",
+		"Proxy-Authorization",
+		"Cookie",
+		"Connection",
+		"Keep-Alive",
+		"Proxy-Authenticate",
+		"Te",
+		"Trailer",
+		"Transfer-Encoding",
+		"Upgrade",
+		"X-Provena-Tenant-Id",
+		"X-Provena-Role",
+		"X-Provena-Key-Id",
+		"X-Provena-Principal-Id",
+		"X-Provena-Groups",
+	} {
+		req.Header.Del(header)
 	}
 	if ac, ok := auth.FromContext(ctx); ok {
 		req.Header.Set("X-Provena-Tenant-Id", ac.TenantID)

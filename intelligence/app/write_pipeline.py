@@ -55,6 +55,7 @@ class WritePipeline:
         orchestration_url: str = "http://localhost:50051",
         fact_extractor: FactExtractor | None = None,
         llm: LLMClient | None = None,
+        service_headers: dict[str, str] | None = None,
     ) -> None:
         self.embedding_manager = embedding_manager
         self.model_router = model_router
@@ -63,9 +64,14 @@ class WritePipeline:
         self.orchestration_url = orchestration_url
         self.fact_extractor = fact_extractor or FactExtractor(model_router)
         self.llm = llm or LLMClient(model_router)
+        self.service_headers = service_headers or {}
         self._fingerprints: set[str] = set()
 
-    async def process(self, request: WriteRequest) -> WriteResponse:
+    async def process(
+        self,
+        request: WriteRequest,
+        access_headers: dict[str, str] | None = None,
+    ) -> WriteResponse:
         start = time.monotonic()
         trace = PipelineTrace()
 
@@ -85,6 +91,7 @@ class WritePipeline:
                 start,
                 update_overview=index == len(facts) - 1,
                 fact_count=fact_count,
+                access_headers=access_headers,
             )
             if result.created:
                 stored_count += 1
@@ -110,7 +117,9 @@ class WritePipeline:
         start: float,
         update_overview: bool,
         fact_count: int = 1,
+        access_headers: dict[str, str] | None = None,
     ) -> WriteResponse:
+        resolved_headers = access_headers or self.service_headers
         fingerprint = self._fingerprint(request.content, request.scope, request.metadata)
         is_dup, dup_id = self._deduplicate(fingerprint)
         if is_dup:
@@ -124,17 +133,31 @@ class WritePipeline:
         entities = self._resolve_entities(request.content, request.entity_keys)
         trace.resolved_entities = entities
 
-        conflicts = await self._detect_conflicts(request.content, request.scope, entities, embedding)
+        conflicts = await self._detect_conflicts(
+            request.content,
+            request.scope,
+            entities,
+            embedding,
+            access_headers=resolved_headers,
+        )
         trace.detected_conflicts = conflicts
 
         memory = self._memory_payload(request, kind, embedding, entities, fact_count=fact_count)
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(f"{self.store_url}/v1/memories", json=memory)
+                response = await client.post(
+                    f"{self.store_url}/v1/memories",
+                    json=memory,
+                    headers=resolved_headers,
+                )
                 if response.status_code >= 400 and request.memory_id and "UNIQUE" in response.text:
                     memory["memory_id"] = str(uuid.uuid4())
-                    response = await client.post(f"{self.store_url}/v1/memories", json=memory)
+                    response = await client.post(
+                        f"{self.store_url}/v1/memories",
+                        json=memory,
+                        headers=resolved_headers,
+                    )
                 if response.status_code >= 400:
                     raise WritePipelineError(response.status_code, response.text or "store rejected write")
                 stored = response.json()
@@ -151,7 +174,10 @@ class WritePipeline:
             await self._index_triggers(memory, request.scope)
 
         if update_overview:
-            trace.overview_updated = await self._update_overview(request.scope)
+            trace.overview_updated = await self._update_overview(
+                request.scope,
+                access_headers=resolved_headers,
+            )
 
         return WriteResponse(created=created, memory=memory, pipeline_trace=trace)
 
@@ -229,7 +255,10 @@ class WritePipeline:
         generated = (metadata or {}).get("provena_generated_fingerprint")
         scope_str = json.dumps(scope, sort_keys=True)
         if isinstance(generated, str) and re.fullmatch(r"[0-9a-f]{64}", generated):
-            value = f"{scope_str}|provena-generated-v1|{generated}"
+            value = (
+                f"{content.strip().lower()}|{scope_str}|"
+                f"provena-generated-v2|{generated}"
+            )
         else:
             value = f"{content.strip().lower()}|{scope_str}"
         return hashlib.sha256(value.encode()).hexdigest()
@@ -264,6 +293,7 @@ class WritePipeline:
         scope: dict[str, Any],
         entity_keys: list[str],
         query_embedding: list[float] | None = None,
+        access_headers: dict[str, str] | None = None,
     ) -> list[str]:
         """Flag existing memories that overlap the new content but negate it.
 
@@ -272,7 +302,12 @@ class WritePipeline:
         polarity. Best-effort and advisory (surfaced in the pipeline trace): a
         store hiccup yields no conflicts rather than failing the write.
         """
-        candidates = await self._conflict_candidates(content, scope, query_embedding)
+        candidates = await self._conflict_candidates(
+            content,
+            scope,
+            query_embedding,
+            access_headers=access_headers,
+        )
         if not candidates:
             return []
         new_terms = self._conflict_terms(content)
@@ -296,6 +331,7 @@ class WritePipeline:
         content: str,
         scope: dict[str, Any],
         query_embedding: list[float] | None,
+        access_headers: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         payload: dict[str, Any] = {
             "query": content,
@@ -307,7 +343,11 @@ class WritePipeline:
             payload["query_embedding"] = query_embedding
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.post(f"{self.store_url}/v1/memories/search", json=payload)
+                response = await client.post(
+                    f"{self.store_url}/v1/memories/search",
+                    json=payload,
+                    headers=access_headers or self.service_headers,
+                )
                 if response.status_code >= 400:
                     return []
                 return response.json().get("results", [])
@@ -332,7 +372,11 @@ class WritePipeline:
         except Exception:
             return False
 
-    async def _update_overview(self, scope: dict[str, Any]) -> bool:
+    async def _update_overview(
+        self,
+        scope: dict[str, Any],
+        access_headers: dict[str, str] | None = None,
+    ) -> bool:
         if not self.overview_generator:
             return False
         tenant_id = scope.get("tenant_id", "")
@@ -341,7 +385,11 @@ class WritePipeline:
             return False
 
         try:
-            overview: ProjectOverview = await self.overview_generator.generate(scope)
+            resolved_headers = access_headers or self.service_headers
+            overview: ProjectOverview = await self.overview_generator.generate(
+                scope,
+                access_headers=resolved_headers,
+            )
             async with httpx.AsyncClient(timeout=5.0) as client:
                 snapshot_response = await client.post(
                     f"{self.store_url}/v1/project-snapshots",
@@ -354,6 +402,7 @@ class WritePipeline:
                         "memory_count": overview.active_memory_count,
                         "created_at": overview.generated_at.isoformat(),
                     },
+                    headers=resolved_headers,
                 )
                 cache_response = await client.post(
                     f"{self.orchestration_url}/overview/cache",
@@ -399,6 +448,7 @@ class WritePipeline:
         memory_ids: list[str],
         scope: dict[str, Any],
         tier: str = "balanced",
+        access_headers: dict[str, str] | None = None,
     ) -> CompactResponse:
         """Summarize several memories into one compacted memory and mark the
         sources superseded. Fetches the source bodies from the store and uses
@@ -408,7 +458,7 @@ class WritePipeline:
         if not memory_ids or not self.llm.enabled:
             return self._compact_noop(memory_ids, scope)
 
-        bodies = await self._fetch_memory_bodies(memory_ids)
+        bodies = await self._fetch_memory_bodies(memory_ids, access_headers)
         if len(bodies) < 2:
             # Nothing meaningful to compact.
             return self._compact_noop(memory_ids, scope)
@@ -450,7 +500,11 @@ class WritePipeline:
             token_usage=TokenUsage(operation="compact"),
         )
 
-    async def _fetch_memory_bodies(self, memory_ids: list[str]) -> dict[str, str]:
+    async def _fetch_memory_bodies(
+        self,
+        memory_ids: list[str],
+        access_headers: dict[str, str] | None = None,
+    ) -> dict[str, str]:
         """Fetch memory content by id from the store. Missing/failed ids are
         skipped rather than aborting the whole compaction."""
         bodies: dict[str, str] = {}
@@ -459,7 +513,10 @@ class WritePipeline:
 
                 async def fetch(mid: str) -> tuple[str, str | None]:
                     try:
-                        response = await client.get(f"{self.store_url}/v1/memories/{mid}")
+                        response = await client.get(
+                            f"{self.store_url}/v1/memories/{mid}",
+                            headers=access_headers or self.service_headers,
+                        )
                         if response.status_code >= 400:
                             return mid, None
                         content = response.json().get("content")

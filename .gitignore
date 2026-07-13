@@ -24,3 +24,4 @@ sdk/python/dist/
 sdk/python/*.egg-info/
 sdk/rust/target/
 sdk/rust/Cargo.lock
+.gstack/

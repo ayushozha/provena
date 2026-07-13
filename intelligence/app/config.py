@@ -36,6 +36,15 @@ class IntelligenceSettings(BaseSettings):
     pipeline_url: str = "http://localhost:8000"
     orchestration_url: str = "http://localhost:50051"
 
+    # Optional identity used only when an internal caller (for example the
+    # queue consumer) did not forward an end-user access context. External
+    # gateway requests keep their own headers and never inherit this role.
+    service_tenant_id: str = ""
+    service_role: str = ""
+    service_key_id: str = ""
+    service_principal_id: str = ""
+    service_groups: str = ""
+
     # LLM-backed stages (fact extraction, rerank, contradiction detection,
     # compaction) call any OpenAI-compatible /chat/completions endpoint, selected
     # via env. Two ways to configure, both honest about what is actually served:

@@ -8,11 +8,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/altrixy/provena/control-plane/internal/gateway"
 	"github.com/altrixy/provena/control-plane/internal/mcp"
 )
+
+const maxSSEConnections = 64
 
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -27,29 +31,12 @@ func main() {
 
 	listenAddr := env("PROVENA_MCP_LISTEN_ADDR", ":8090")
 	upstreamURL := env("PROVENA_GATEWAY_URL", "http://localhost:8080")
-	// Service credential the MCP server presents to the gateway as a Bearer
-	// token, so its forwarded calls authenticate as a real principal.
-	serviceAPIKey := env("PROVENA_SERVICE_API_KEY", "")
-
-	server := mcp.NewMCPServer("provena-mcp", "0.1.0", upstreamURL, serviceAPIKey)
-
-	mux := http.NewServeMux()
-
-	// Health check
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
-	})
-
-	// JSON-RPC endpoint
-	mux.HandleFunc("POST /rpc", server.RPCHandler())
-
-	// SSE endpoint for LLM clients
-	mux.HandleFunc("GET /sse", server.SSEHandler())
+	requireAuth := !strings.EqualFold(env("PROVENA_MCP_REQUIRE_AUTH", "true"), "false")
+	server := mcp.NewMCPServer("provena-mcp", "0.1.0", upstreamURL)
 
 	srv := &http.Server{
 		Addr:         listenAddr,
-		Handler:      mux,
+		Handler:      buildHandler(server, requireAuth),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 0, // SSE needs no write timeout
 		IdleTimeout:  120 * time.Second,
@@ -66,9 +53,34 @@ func main() {
 		srv.Shutdown(ctx)
 	}()
 
-	logger.Info("mcp server starting", "addr", listenAddr)
+	logger.Info("mcp server starting", "addr", listenAddr, "auth_required", requireAuth)
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		logger.Error("mcp server failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func buildHandler(server *mcp.MCPServer, requireAuth bool) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+	var rpcHandler http.Handler = server.RPCHandler()
+	var sseHandler http.Handler = mcp.LimitConcurrentConnections(
+		server.SSEHandler(),
+		maxSSEConnections,
+	)
+	if requireAuth {
+		rpcHandler = server.RequireGatewayBearerAuth(rpcHandler)
+		sseHandler = server.RequireGatewayBearerAuth(sseHandler)
+	}
+	// Reject unauthenticated floods before gateway validation and bound the
+	// number of long-lived SSE streams admitted by this process.
+	clientRateLimit := gateway.NewRateLimiter(20, 40)
+	rpcHandler = gateway.ClientIPRateLimitMiddleware(clientRateLimit)(rpcHandler)
+	sseHandler = gateway.ClientIPRateLimitMiddleware(clientRateLimit)(sseHandler)
+	mux.Handle("POST /rpc", rpcHandler)
+	mux.Handle("GET /sse", sseHandler)
+	return mux
 }

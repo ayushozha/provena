@@ -40,6 +40,9 @@ export {
   type MemoryRecord,
   type MemoryWriteResult,
   type ProvenaClientOptions,
+  type RepositoryMemorySyncRequest,
+  type RepositoryMemorySyncResponse,
+  type RepositoryMemorySyncTimings,
   type ScopeEnvelope,
   type SearchExplainResponse,
   type SearchRequest,
@@ -47,6 +50,9 @@ export {
   type SearchResult,
   type SourceReference,
 } from "./client.js";
+
+export { printSyncHelp, runSyncCommand } from "./commands/sync.js";
+export { printMaintainHelp, runMaintainCommand } from "./commands/maintain.js";
 
 export {
   colorEnabled,
@@ -134,6 +140,9 @@ export {
 
 export {
   REPO_BRAIN_PATH,
+  REPO_BRAIN_MANAGED_ARTIFACT_PATHS,
+  MAX_STORED_ARTIFACT_BYTES,
+  MAX_STORED_GENERATION_BYTES,
   MEMORY_EVENT_SCHEMA_PATH,
   MEMORY_EVENT_JSON_SCHEMA,
   REPO_GRAPH_PATH,
@@ -141,11 +150,22 @@ export {
   REPO_MAP_PATH,
   MEMORY_LEDGER_PATH,
   activeMemoryEvents,
+  activeMemoryEventsAt,
   appendMemoryEvent,
+  canonicalMemoryAsOf,
+  extendMemoryLedgerSnapshot,
+  prepareMemoryEvent,
+  readRepoBrainArtifacts,
   readMemoryLedgerSnapshot,
   readMemoryEvents,
   memoryEventToRecord,
+  reconcileRepoMapMemories,
+  REPO_MAP_MEMORY_DATA_KEY,
+  REPO_MAP_MEMORY_GENERATOR,
+  REPO_MAP_MEMORY_GENERATOR_VERSION,
+  REPO_MAP_MEMORY_TAG,
   refreshRepoBrain,
+  repoMapSourceFingerprint,
   scanRepo,
   type AppendMemoryOptions,
   type MemoryLedgerSnapshot,
@@ -161,6 +181,9 @@ export {
   type NewMemoryEvent,
   type RefreshRepoBrainOptions,
   type RefreshRepoBrainResult,
+  type StoredRepoBrainArtifacts,
+  type ReconcileRepoMapMemoryOptions,
+  type ReconcileRepoMapMemoryResult,
   type RepoBrainManifest,
   type RepoCommand,
   type RepoDirectory,
@@ -168,27 +191,48 @@ export {
   type RepoFile,
   type RepoFileKind,
   type RepoMap,
+  type RepoMemoryAction,
+  type RepoMemoryReconciliation,
   type RepoPackage,
+  type RepoScanDiagnostics,
   type RepoSymbol,
   type ScanRepoOptions,
 } from "./brain/index.js";
 
 export {
   buildRepoGraph,
+  buildRepoGraphWithDiagnostics,
   connectedComponents,
+  deriveMemoryTemporalRecords,
   degreeCentrality,
+  induceRepoGraphAt,
+  MEMORY_GRAPH_NODE_PREFIX,
+  memoryGraphNodeId,
+  memoryTimeline,
   neighborhood,
   pageRank,
+  REPO_GRAPH_PROJECTION_NAMESPACE,
+  REPO_GRAPH_PROJECTION_VERSION,
+  repoGraphProjectionFingerprint,
   shortestPath,
   type DegreeScore,
   type GraphDirection,
+  type MemoryGraphNodeMetadata,
+  type MemoryTemporalProjection,
+  type MemoryTemporalRecord,
+  type MemoryTimeline,
+  type MemoryTimelineEntry,
   type Neighborhood,
   type PageRankOptions,
   type RepoGraph,
+  type RepoGraphBuildResult,
   type RepoGraphEdge,
   type RepoGraphEdgeType,
   type RepoGraphNode,
   type RepoGraphNodeType,
+  type RepoGraphV1,
+  type RepoGraphV2,
+  type TemporalGraphDiagnostics,
 } from "./graph/index.js";
 
 export {
@@ -199,6 +243,8 @@ export {
   type ContextPacket,
   type ContextQuery,
 } from "./context/index.js";
+
+export * from "./maintenance/index.js";
 
 export {
   installAgentInstructions,
@@ -215,6 +261,16 @@ export {
   type McpConfigResult,
 } from "./integrations/mcp-config.js";
 export {
+  DEFAULT_REPO_MCP_HTTP_PORT,
+  REPO_MCP_HTTP_BODY_LIMIT_BYTES,
+  REPO_MCP_HTTP_HOST,
+  runRepoMcpHttpServer,
+  startRepoMcpHttpServer,
+  type RepoMcpHttpLifecycleEvent,
+  type RepoMcpHttpServerOptions,
+  type RepoMcpHttpServerStartResult,
+} from "./mcp/http.js";
+export {
   installPortableRuntime,
   type RuntimeInstallResult,
 } from "./integrations/runtime.js";
@@ -227,7 +283,11 @@ export {
 } from "./storage/index.js";
 export { assertNoSecretMaterial } from "./security/memory.js";
 export {
+  inspectRepoBrainArtifactIntegrity,
   verifyRepoMemory,
+  verifyStoredRepoMemory,
+  type ArtifactIntegrityCheck,
+  type ArtifactIntegrityReport,
   type HarnessCheck,
   type HarnessReport,
 } from "./harness/index.js";

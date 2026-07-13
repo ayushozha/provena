@@ -1,5 +1,12 @@
 import neo4j, { type Driver } from "neo4j-driver";
+import {
+  REPO_GRAPH_PROJECTION_NAMESPACE,
+  REPO_GRAPH_PROJECTION_VERSION,
+  repoGraphProjectionFingerprint,
+} from "../graph/index.js";
 import type { RepoGraph, RepoGraphNode } from "../graph/types.js";
+import { assertNoSecretMaterial } from "../security/memory.js";
+import { sha256 } from "../brain/utils.js";
 
 export interface Neo4jConfig {
   uri: string;
@@ -11,9 +18,14 @@ export interface Neo4jConfig {
 export interface Neo4jSyncResult {
   repoId: string;
   sourceFingerprint: string;
+  memoryFingerprint: string;
+  projectionFingerprint: string;
   nodes: number;
   edges: number;
 }
+
+/** Graph v1 had no memory projection; its deterministic compatibility value is the empty-ledger hash. */
+const LEGACY_MEMORY_FINGERPRINT = sha256("");
 
 const ALLOWED_SCHEMES = new Set([
   "bolt:",
@@ -40,6 +52,11 @@ function validateNeo4jUri(uri: string, allowInsecure = false): URL {
   if (!ALLOWED_SCHEMES.has(parsed.protocol)) {
     throw new Error(
       "PROVENA_NEO4J_URI must use neo4j, neo4j+s, bolt, or a +ssc variant",
+    );
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(
+      "PROVENA_NEO4J_URI must not contain credentials; use PROVENA_NEO4J_USERNAME and PROVENA_NEO4J_PASSWORD",
     );
   }
   if (
@@ -95,18 +112,81 @@ function batches<T>(values: T[], size = 500): T[][] {
   return result;
 }
 
+const MEMORY_METADATA_KEYS = [
+  "eventId",
+  "title",
+  "kind",
+  "subjectType",
+  "declaredStatus",
+  "authority",
+  "confidence",
+  "importance",
+  "sensitivity",
+  "validFrom",
+  "validTo",
+] as const;
+const EMPTY_MEMORY_PROPERTIES = Object.fromEntries(
+  MEMORY_METADATA_KEYS.map((key) => [key, null]),
+);
+
+function memoryProperties(node: RepoGraphNode): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key of MEMORY_METADATA_KEYS) {
+    const value = node.metadata[key];
+    const valid = key === "validTo"
+      ? value === null || typeof value === "string"
+      : key === "confidence" || key === "importance"
+        ? typeof value === "number" && Number.isFinite(value)
+        : typeof value === "string";
+    if (!valid) {
+      throw new Error("memory graph metadata contains an unsupported value");
+    }
+    result[key] = value;
+  }
+  return result;
+}
+
 function nodeRecord(node: RepoGraphNode): Record<string, unknown> {
+  const memory = node.type === "memory"
+    ? memoryProperties(node)
+    : EMPTY_MEMORY_PROPERTIES;
   return {
     id: node.id,
     type: node.type,
     label: node.label,
     path: node.path ?? null,
-    metadataJson: JSON.stringify(node.metadata),
+    metadataJson: node.type === "memory" ? null : JSON.stringify(node.metadata),
+    memory,
   };
+}
+
+function graphMemoryFingerprint(graph: RepoGraph): string {
+  return graph.schemaVersion === 2
+    ? graph.memoryFingerprint
+    : LEGACY_MEMORY_FINGERPRINT;
 }
 
 interface CypherRunner {
   run(query: string, parameters?: Record<string, unknown>): Promise<unknown>;
+}
+
+interface ProjectionData {
+  nodes: Array<Record<string, unknown>>;
+  edges: Array<Record<string, unknown>>;
+}
+
+function projectionData(graph: RepoGraph): ProjectionData {
+  return {
+    nodes: graph.nodes.map(nodeRecord),
+    edges: graph.edges.map((edge) => ({
+      id: edge.id,
+      from: edge.from,
+      to: edge.to,
+      type: edge.type,
+      weight: edge.weight,
+      effectiveAt: edge.effectiveAt ?? null,
+    })),
+  };
 }
 
 async function ensureSchema(session: CypherRunner): Promise<void> {
@@ -124,8 +204,19 @@ async function projectGraph(
   session: CypherRunner,
   graph: RepoGraph,
   repoId: string,
+  memoryFingerprint: string,
+  projectionFingerprint: string,
+  data: ProjectionData,
 ): Promise<void> {
-  for (const batch of batches(graph.nodes.map(nodeRecord))) {
+  const projection = {
+    repoId,
+    sourceFingerprint: graph.sourceFingerprint,
+    memoryFingerprint,
+    projectionFingerprint,
+    projectionNamespace: REPO_GRAPH_PROJECTION_NAMESPACE,
+    projectionVersion: REPO_GRAPH_PROJECTION_VERSION,
+  };
+  for (const batch of batches(data.nodes)) {
     await session.run(
       `UNWIND $nodes AS item
        MERGE (node:ProvenaNode {repo_id: $repoId, id: item.id})
@@ -133,11 +224,26 @@ async function projectGraph(
            node.label = item.label,
            node.path = item.path,
            node.metadata_json = item.metadataJson,
-           node.source_fingerprint = $fingerprint`,
-      { nodes: batch, repoId, fingerprint: graph.sourceFingerprint },
+           node.event_id = item.memory.eventId,
+           node.title = item.memory.title,
+           node.kind = item.memory.kind,
+           node.subject_type = item.memory.subjectType,
+           node.declared_status = item.memory.declaredStatus,
+           node.authority = item.memory.authority,
+           node.confidence = item.memory.confidence,
+           node.importance = item.memory.importance,
+           node.sensitivity = item.memory.sensitivity,
+           node.valid_from = item.memory.validFrom,
+           node.valid_to = item.memory.validTo,
+           node.source_fingerprint = $sourceFingerprint,
+           node.memory_fingerprint = $memoryFingerprint,
+           node.projection_fingerprint = $projectionFingerprint,
+           node.projection_namespace = $projectionNamespace,
+           node.projection_version = $projectionVersion`,
+      { nodes: batch, ...projection },
     );
   }
-  for (const batch of batches(graph.edges)) {
+  for (const batch of batches(data.edges)) {
     await session.run(
       `UNWIND $edges AS item
        MATCH (source:ProvenaNode {repo_id: $repoId, id: item.from})
@@ -145,21 +251,26 @@ async function projectGraph(
        MERGE (source)-[edge:PROVENA_RELATION {repo_id: $repoId, id: item.id}]->(target)
        SET edge.type = item.type,
            edge.weight = item.weight,
-           edge.source_fingerprint = $fingerprint`,
-      { edges: batch, repoId, fingerprint: graph.sourceFingerprint },
+           edge.effective_at = item.effectiveAt,
+           edge.source_fingerprint = $sourceFingerprint,
+           edge.memory_fingerprint = $memoryFingerprint,
+           edge.projection_fingerprint = $projectionFingerprint,
+           edge.projection_namespace = $projectionNamespace,
+           edge.projection_version = $projectionVersion`,
+      { edges: batch, ...projection },
     );
   }
   await session.run(
     `MATCH (:ProvenaNode {repo_id: $repoId})-[edge:PROVENA_RELATION {repo_id: $repoId}]->()
-     WHERE edge.source_fingerprint IS NULL OR edge.source_fingerprint <> $fingerprint
+     WHERE edge.projection_fingerprint IS NULL OR edge.projection_fingerprint <> $projectionFingerprint
      DELETE edge`,
-    { repoId, fingerprint: graph.sourceFingerprint },
+    projection,
   );
   await session.run(
     `MATCH (node:ProvenaNode {repo_id: $repoId})
-     WHERE node.source_fingerprint IS NULL OR node.source_fingerprint <> $fingerprint
+     WHERE node.projection_fingerprint IS NULL OR node.projection_fingerprint <> $projectionFingerprint
      DETACH DELETE node`,
-    { repoId, fingerprint: graph.sourceFingerprint },
+    projection,
   );
 }
 
@@ -172,28 +283,59 @@ export async function syncGraphToNeo4j(
   const normalizedRepoId = repoId.trim();
   if (!normalizedRepoId) throw new Error("repoId must not be empty");
   validateNeo4jUri(config.uri, process.env.PROVENA_NEO4J_ALLOW_INSECURE === "1");
-  const driver =
-    suppliedDriver ??
-    neo4j.driver(config.uri, neo4j.auth.basic(config.username, config.password));
+  const memoryFingerprint = graphMemoryFingerprint(graph);
+  const projectionFingerprint = repoGraphProjectionFingerprint(
+    graph.sourceFingerprint,
+    memoryFingerprint,
+  );
+  if (
+    graph.schemaVersion === 2 &&
+    graph.projectionFingerprint !== projectionFingerprint
+  ) {
+    throw new Error("graph projection fingerprint does not match its attested inputs");
+  }
+  const data = projectionData(graph);
+  assertNoSecretMaterial(JSON.stringify({
+    repoId: normalizedRepoId,
+    sourceFingerprint: graph.sourceFingerprint,
+    memoryFingerprint,
+    data,
+  }));
   try {
-    await driver.verifyConnectivity();
-    const session = driver.session(
-      config.database ? { database: config.database } : undefined,
-    );
+    const driver =
+      suppliedDriver ??
+      neo4j.driver(config.uri, neo4j.auth.basic(config.username, config.password));
     try {
-      await ensureSchema(session);
-      await session.executeWrite(async (transaction) => {
-        await projectGraph(transaction, graph, normalizedRepoId);
-      });
+      await driver.verifyConnectivity();
+      const session = driver.session(
+        config.database ? { database: config.database } : undefined,
+      );
+      try {
+        await ensureSchema(session);
+        await session.executeWrite(async (transaction) => {
+          await projectGraph(
+            transaction,
+            graph,
+            normalizedRepoId,
+            memoryFingerprint,
+            projectionFingerprint,
+            data,
+          );
+        });
+      } finally {
+        await session.close();
+      }
     } finally {
-      await session.close();
+      if (!suppliedDriver) await driver.close();
     }
-  } finally {
-    if (!suppliedDriver) await driver.close();
+  } catch {
+    throw new Error("Neo4j graph sync failed");
   }
   return {
     repoId: normalizedRepoId,
     sourceFingerprint: graph.sourceFingerprint,
+    memoryFingerprint,
+    projectionFingerprint,
     nodes: graph.nodes.length,
     edges: graph.edges.length,
   };

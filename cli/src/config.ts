@@ -19,6 +19,7 @@ export const LAST_INDEX_FILENAME = "last-index.json";
 export const INDEX_ERRORS_LOG = "index-errors.log";
 export const DEFAULT_DB_PATH = ".provena/provena.db";
 export const DEFAULT_STORE_URL = "http://127.0.0.1:18092";
+export const DEFAULT_STORE_API_KEY_ENV = "PROVENA_API_KEY";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
 export function isInsecureBindAllowed(): boolean {
@@ -38,13 +39,26 @@ function normalizeHostname(hostname: string): string {
 }
 
 export function assertLoopbackStoreUrl(storeUrl: string): void {
-  if (isInsecureBindAllowed()) {
-    return;
+  const parsed = new URL(storeUrl);
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error("config.store_url must use http or https");
   }
-  const host = normalizeHostname(new URL(storeUrl).hostname);
-  if (!LOOPBACK_HOSTS.has(host)) {
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
     throw new Error(
-      `config.store_url must use a loopback host (127.0.0.1, localhost, ::1); got ${host}`,
+      "config.store_url must not include credentials, query parameters, or fragments",
+    );
+  }
+  if (parsed.pathname && parsed.pathname !== "/") {
+    throw new Error("config.store_url must be an origin without a path");
+  }
+  const host = normalizeHostname(parsed.hostname);
+  if (LOOPBACK_HOSTS.has(host)) return;
+  if (parsed.protocol !== "https:") {
+    throw new Error("config.store_url must use HTTPS for a non-loopback host");
+  }
+  if (process.env.PROVENA_ALLOW_REMOTE_STORE !== "1") {
+    throw new Error(
+      `config.store_url must use a loopback host unless PROVENA_ALLOW_REMOTE_STORE=1; got ${host}`,
     );
   }
 }
@@ -103,6 +117,8 @@ export interface ProvenaConfig {
   backend: "sqlite";
   database: ProvenaDatabase;
   store_url: string;
+  /** Fixed environment variable containing the optional governed-store API key. */
+  store_api_key_env: string;
   /** When set, memory writes use intelligence `POST /v1/pipeline/write` (PLAN-09). */
   intelligence_url?: string;
   scope: ProvenaScope;
@@ -194,6 +210,7 @@ export function createDefaultConfig(options: {
     backend: "sqlite",
     database: { path: DEFAULT_DB_PATH },
     store_url: DEFAULT_STORE_URL,
+    store_api_key_env: DEFAULT_STORE_API_KEY_ENV,
     scope: {
       tenant_id: basename(options.cwd),
       project_id: basename(options.gitRoot),
@@ -207,6 +224,29 @@ export function createDefaultConfig(options: {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function isPortableScopeIdentifier(value: unknown): value is string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 512 ||
+    value !== value.trim() ||
+    /[\u0000-\u001f\u007f-\u009f]/u.test(value)
+  ) {
+    return false;
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -244,6 +284,13 @@ export function validateConfig(value: unknown): ProvenaConfig {
   }
   assertLoopbackStoreUrl(obj.store_url);
 
+  const storeApiKeyEnv = obj.store_api_key_env ?? DEFAULT_STORE_API_KEY_ENV;
+  if (storeApiKeyEnv !== DEFAULT_STORE_API_KEY_ENV) {
+    throw new Error(
+      `config.store_api_key_env must be ${DEFAULT_STORE_API_KEY_ENV}`,
+    );
+  }
+
   let intelligenceUrl: string | undefined;
   if (obj.intelligence_url !== undefined && obj.intelligence_url !== null) {
     if (!isNonEmptyString(obj.intelligence_url)) {
@@ -267,11 +314,11 @@ export function validateConfig(value: unknown): ProvenaConfig {
     throw new Error("config.scope must be an object");
   }
   const scopeObj = scope as Record<string, unknown>;
-  if (!isNonEmptyString(scopeObj.tenant_id)) {
-    throw new Error("config.scope.tenant_id must be a non-empty string");
+  if (!isPortableScopeIdentifier(scopeObj.tenant_id)) {
+    throw new Error("config.scope.tenant_id must be a portable boundary-trimmed identifier");
   }
-  if (!isNonEmptyString(scopeObj.project_id)) {
-    throw new Error("config.scope.project_id must be a non-empty string");
+  if (!isPortableScopeIdentifier(scopeObj.project_id)) {
+    throw new Error("config.scope.project_id must be a portable boundary-trimmed identifier");
   }
 
   const index = obj.index;
@@ -292,6 +339,7 @@ export function validateConfig(value: unknown): ProvenaConfig {
     backend: "sqlite",
     database: { path: dbPath },
     store_url: obj.store_url,
+    store_api_key_env: storeApiKeyEnv,
     ...(intelligenceUrl ? { intelligence_url: intelligenceUrl } : {}),
     scope: {
       tenant_id: scopeObj.tenant_id,
@@ -340,6 +388,7 @@ const GITIGNORE_ENTRIES = [
   "!.provena/agent-instructions.md",
   "!.provena/repo.map.json",
   "!.provena/graph.json",
+  "!.provena/maintenance.plan.json",
   "!.provena/manifest.json",
   "!.provena/memory/",
   ".provena/memory/*",

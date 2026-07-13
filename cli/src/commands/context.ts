@@ -18,7 +18,12 @@ const VALUE_FLAGS = new Set([
   "--max-chars",
   "--max-tokens",
   "--graph-hops",
+  "--memory-as-of",
+  "--memory-id",
 ]);
+
+const MEMORY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
+const MAX_MEMORY_IDS = 32;
 
 function valuesAfter(args: string[], flag: string): string[] {
   return args.flatMap((value, index) =>
@@ -32,6 +37,28 @@ function numberAfter(args: string[], flag: string): number | undefined {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`${flag} must be a number`);
   return parsed;
+}
+
+function memoryIdsAfter(args: string[]): string[] {
+  if (args.some((value) => value.startsWith("--memory-id") && value !== "--memory-id")) {
+    throw new Error("invalid context memory selection");
+  }
+  const memoryIds: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== "--memory-id") continue;
+    const value = args[index + 1];
+    if (value === undefined || !MEMORY_ID_PATTERN.test(value)) {
+      throw new Error("invalid context memory selection");
+    }
+    memoryIds.push(value);
+  }
+  if (
+    memoryIds.length > MAX_MEMORY_IDS ||
+    new Set(memoryIds).size !== memoryIds.length
+  ) {
+    throw new Error("invalid context memory selection");
+  }
+  return memoryIds;
 }
 
 function positional(args: string[]): string[] {
@@ -53,7 +80,9 @@ export function printContextHelp(): void {
   console.log("Build a cited task packet from exact paths, symbols, commands,");
   console.log("durable memories, lexical matches, and graph proximity.");
   console.log("");
-  console.log("Options: --path, --symbol, --command, --max-tokens, --json");
+  console.log("Options: --path, --symbol, --command, --memory-id, --max-tokens, --memory-as-of, --json");
+  console.log("--memory-id accepts one exact active event ID and may be repeated up to 32 times.");
+  console.log("--memory-as-of requires YYYY-MM-DDTHH:mm:ss.sssZ; repository topology remains current.");
 }
 
 export async function runContextCommand(
@@ -64,6 +93,7 @@ export async function runContextCommand(
     printContextHelp();
     return 0;
   }
+  const memoryIds = memoryIdsAfter(args);
   const repoRoot = getGitRoot(cwd);
   loadConfig(repoRoot);
   const refreshed = await refreshRepoBrain(repoRoot);
@@ -72,11 +102,13 @@ export async function runContextCommand(
     paths: valuesAfter(args, "--path"),
     symbols: valuesAfter(args, "--symbol"),
     commands: valuesAfter(args, "--command"),
+    memoryIds,
     maxItems: numberAfter(args, "--max-items") ?? numberAfter(args, "--limit"),
     maxCharacters: numberAfter(args, "--max-chars"),
     maxTokens: numberAfter(args, "--max-tokens"),
     graphHops: numberAfter(args, "--graph-hops"),
     includeSensitive: false,
+    memoryAsOf: valuesAfter(args, "--memory-as-of").at(-1),
   };
   const packet = buildContextPacket(
     refreshed.map,

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, rename, rm } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import canonicalize from "canonicalize";
 import { assertSafeRepoPath } from "../security/paths.js";
 
 export function sha256(value: string | Buffer): string {
@@ -42,7 +43,10 @@ function sortJson(value: unknown): unknown {
 }
 
 export function canonicalJson(value: unknown, pretty = false): string {
-  return `${JSON.stringify(sortJson(value), null, pretty ? 2 : undefined)}\n`;
+  if (pretty) return `${JSON.stringify(sortJson(value), null, 2)}\n`;
+  const serialized = canonicalize(value);
+  if (serialized === undefined) throw new TypeError("value is not JSON serializable");
+  return `${serialized}\n`;
 }
 
 export async function writeFileAtomic(

@@ -91,6 +91,7 @@ try {
     ".provena/repo.brain.md",
     ".provena/repo.map.json",
     ".provena/graph.json",
+    ".provena/maintenance.plan.json",
     ".provena/manifest.json",
     ".provena/memory/events.jsonl",
     ".provena/schema/memory-event.schema.json",

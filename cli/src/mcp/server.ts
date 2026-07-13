@@ -9,8 +9,6 @@ import {
   activeMemoryEvents,
   appendMemoryEvent,
   memoryEventToRecord,
-  readMemoryLedgerSnapshot,
-  readMemoryEvents,
   readRepoBrainArtifacts,
   refreshRepoBrain,
   REPO_BRAIN_PATH,
@@ -19,9 +17,18 @@ import {
   REPO_MAP_PATH,
 } from "../brain/index.js";
 import { buildContextPacket, renderContextPacketMarkdown } from "../context/index.js";
-import { neighborhood, shortestPath, type RepoGraphNode } from "../graph/index.js";
+import {
+  induceRepoGraphAt,
+  neighborhood,
+  shortestPath,
+  type RepoGraph,
+  type RepoGraphNode,
+} from "../graph/index.js";
+import {
+  compileMaintenanceTaskContext,
+  maintenancePlanView,
+} from "../maintenance/index.js";
 import { assertNoSecretMaterial } from "../security/memory.js";
-import { assertSafeRepoPath } from "../security/paths.js";
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -32,33 +39,64 @@ async function packageVersion(): Promise<string> {
   return pkg.version;
 }
 
-async function readRepoFile(repoRoot: string, relativePath: string): Promise<string> {
-  const path = join(repoRoot, ...relativePath.split("/"));
-  assertSafeRepoPath(repoRoot, path);
-  return readFile(path, "utf8");
-}
-
 function text(value: unknown) {
   return {
     content: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }],
   };
 }
 
+export interface RepoMcpServerOptions {
+  sanitizeErrors?: boolean;
+}
+
+async function boundedMcpOperation<T>(
+  options: RepoMcpServerOptions,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!options.sanitizeErrors) throw error;
+    throw new Error("Repository memory request failed");
+  }
+}
+
 function resolveNode(nodes: RepoGraphNode[], value: string): RepoGraphNode {
   const query = value.trim().toLowerCase();
-  const matches = nodes.filter(
-    (node) =>
-      node.id.toLowerCase() === query ||
-      node.path?.toLowerCase() === query ||
-      node.label.toLowerCase() === query,
-  );
-  if (matches.length === 1) return matches[0]!;
-  if (matches.length > 1) throw new Error(`ambiguous graph node: ${value}`);
-  throw new Error(`graph node not found: ${value}`);
+  const tiers = [
+    nodes.filter((node) => node.id.toLowerCase() === query),
+    nodes.filter((node) =>
+      node.type === "memory" && typeof node.metadata.eventId === "string" &&
+      node.metadata.eventId.toLowerCase() === query,
+    ),
+    nodes.filter((node) => node.type !== "symbol" && node.path?.toLowerCase() === query),
+    nodes.filter((node) => node.label.toLowerCase() === query),
+  ];
+  for (const matches of tiers) {
+    if (matches.length === 1) return matches[0]!;
+    if (matches.length > 1) throw new Error("graph node is ambiguous");
+  }
+  throw new Error("graph node not found");
+}
+
+function graphQueryMetadata(graph: RepoGraph, memoryAsOf?: string): Record<string, unknown> {
+  return {
+    sourceFingerprint: graph.sourceFingerprint,
+    ...(graph.schemaVersion === 2
+      ? {
+          memoryFingerprint: graph.memoryFingerprint,
+          projectionFingerprint: graph.projectionFingerprint,
+          timeSemantics: graph.timeSemantics,
+        }
+      : {}),
+    repositoryTopology: "current",
+    ...(memoryAsOf ? { memoryAsOf } : {}),
+  };
 }
 
 export async function createRepoMcpServer(
   cwd = process.cwd(),
+  options: RepoMcpServerOptions = {},
 ): Promise<McpServer> {
   const repoRoot = getGitRoot(cwd);
   const server = new McpServer({ name: "provena-repo-memory", version: await packageVersion() });
@@ -73,13 +111,16 @@ export async function createRepoMcpServer(
       resource.name,
       resource.uri,
       { description: `Current Provena ${resource.name}`, mimeType: resource.mimeType },
-      async (uri) => {
+      async (uri) => boundedMcpOperation(options, async () => {
+        const stored = await readRepoBrainArtifacts(repoRoot);
+        const resourceText = stored.artifactContents[resource.path];
+        if (resourceText === undefined) throw new Error("repository memory resource is unavailable");
         return {
           contents: [
-            { uri: uri.href, mimeType: resource.mimeType, text: await readRepoFile(repoRoot, resource.path) },
+            { uri: uri.href, mimeType: resource.mimeType, text: resourceText },
           ],
         };
-      },
+      }),
     );
   }
 
@@ -87,8 +128,9 @@ export async function createRepoMcpServer(
     "repo-memories",
     "provena://repo/memories",
     { description: "Active public and internal repo memories", mimeType: "application/json" },
-    async (uri) => {
-      const events = activeMemoryEvents(await readMemoryEvents(repoRoot)).filter(
+    async (uri) => boundedMcpOperation(options, async () => {
+      const stored = await readRepoBrainArtifacts(repoRoot);
+      const events = activeMemoryEvents(stored.memory.events).filter(
         (event) => !["confidential", "restricted"].includes(event.sensitivity),
       );
       return {
@@ -100,7 +142,7 @@ export async function createRepoMcpServer(
           },
         ],
       };
-    },
+    }),
   );
 
   server.registerTool(
@@ -114,19 +156,86 @@ export async function createRepoMcpServer(
         commands: z.array(z.string()).default([]),
         maxTokens: z.number().int().min(64).max(100_000).default(2_500),
         graphHops: z.number().int().min(0).max(5).default(1),
+        memoryAsOf: z.string().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async (input) => {
-      const { map, graph } = await readRepoBrainArtifacts(repoRoot);
+    async (input) => boundedMcpOperation(options, async () => {
+      const { map, graph, memory } = await readRepoBrainArtifacts(repoRoot);
       const packet = buildContextPacket(
         map,
         graph,
-        await readMemoryLedgerSnapshot(repoRoot),
+        memory,
         input,
       );
-      return text(renderContextPacketMarkdown(packet));
+      return {
+        content: [
+          { type: "text" as const, text: renderContextPacketMarkdown(packet) },
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              sourceFingerprint: packet.sourceFingerprint,
+              memoryFingerprint: packet.memoryFingerprint,
+              repositoryTopology: packet.repositoryTopology,
+              ...(packet.memoryAsOf ? { memoryAsOf: packet.memoryAsOf } : {}),
+            }, null, 2),
+          },
+        ],
+      };
+    }),
+  );
+
+  server.registerTool(
+    "provena_maintenance_plan",
+    {
+      description: "List a bounded view of deterministic repository-memory review proposals",
+      inputSchema: {
+        limit: z.number().int().min(1).max(256).default(32),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
+    async ({ limit }) => boundedMcpOperation(options, async () => {
+      const { maintenancePlan } = await readRepoBrainArtifacts(repoRoot);
+      return text(maintenancePlanView(maintenancePlan, limit));
+    }),
+  );
+
+  server.registerTool(
+    "provena_maintenance_context",
+    {
+      description: "Compile a cited, bounded context packet for one maintenance proposal",
+      inputSchema: {
+        taskId: z.string().regex(/^maintenance-task:[a-f0-9]{20}$/),
+        maxTokens: z.number().int().min(64).max(100_000).default(1_500),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ taskId, maxTokens }) => boundedMcpOperation(options, async () => {
+      const { map, graph, memory, maintenancePlan } = await readRepoBrainArtifacts(repoRoot);
+      const packet = compileMaintenanceTaskContext(
+        map,
+        graph,
+        memory,
+        maintenancePlan,
+        taskId,
+        { maxTokens },
+      );
+      return {
+        content: [
+          { type: "text" as const, text: renderContextPacketMarkdown(packet) },
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              taskId,
+              planFingerprint: maintenancePlan.planFingerprint,
+              sourceFingerprint: packet.sourceFingerprint,
+              memoryFingerprint: packet.memoryFingerprint,
+              repositoryTopology: packet.repositoryTopology,
+            }, null, 2),
+          },
+        ],
+      };
+    }),
   );
 
   server.registerTool(
@@ -136,7 +245,7 @@ export async function createRepoMcpServer(
       inputSchema: {},
       annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async () => {
+    async () => boundedMcpOperation(options, async () => {
       const result = await refreshRepoBrain(repoRoot);
       return text({
         sourceFingerprint: result.map.sourceFingerprint,
@@ -144,9 +253,19 @@ export async function createRepoMcpServer(
         symbols: result.map.symbols.length,
         nodes: result.graph.nodes.length,
         edges: result.graph.edges.length,
+        reconciliation: {
+          candidates: result.reconciliation.candidates,
+          added: result.reconciliation.added,
+          noops: result.reconciliation.noops,
+          superseded: result.reconciliation.superseded,
+          retracted: result.reconciliation.retracted,
+          deferred: result.reconciliation.deferred,
+          conflicts: result.reconciliation.conflicts,
+          duration_ms: result.reconciliation.durationMs,
+        },
         written: result.written,
       });
-    },
+    }),
   );
 
   server.registerTool(
@@ -170,7 +289,7 @@ export async function createRepoMcpServer(
       },
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async (input) => {
+    async (input) => boundedMcpOperation(options, async () => {
       assertNoSecretMaterial(`${input.title}\n${input.body}`);
       const event = await appendMemoryEvent(repoRoot, {
         ...input,
@@ -184,46 +303,58 @@ export async function createRepoMcpServer(
       });
       await refreshRepoBrain(repoRoot);
       return text(memoryEventToRecord(event));
-    },
+    }),
   );
 
   server.registerTool(
     "provena_graph_neighbors",
     {
       description: "Return the typed neighborhood around a repo graph node, path, or label",
-      inputSchema: { node: z.string(), depth: z.number().int().min(0).max(8).default(1) },
+      inputSchema: {
+        node: z.string(),
+        depth: z.number().int().min(0).max(8).default(1),
+        memoryAsOf: z.string().optional(),
+      },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ node: value, depth }) => {
-      const { graph } = await readRepoBrainArtifacts(repoRoot);
+    async ({ node: value, depth, memoryAsOf }) => boundedMcpOperation(options, async () => {
+      const stored = await readRepoBrainArtifacts(repoRoot);
+      const graph = induceRepoGraphAt(stored.graph, memoryAsOf);
       const root = resolveNode(graph.nodes, value);
       const found = neighborhood(graph, root.id, depth);
       return text({
+        ...graphQueryMetadata(graph, memoryAsOf),
         root,
         nodes: graph.nodes.filter((node) => found.nodeIds.includes(node.id)),
         edges: graph.edges.filter((edge) => found.edgeIds.includes(edge.id)),
       });
-    },
+    }),
   );
 
   server.registerTool(
     "provena_graph_path",
     {
       description: "Find the shortest typed relationship path between two repo nodes",
-      inputSchema: { from: z.string(), to: z.string() },
+      inputSchema: {
+        from: z.string(),
+        to: z.string(),
+        memoryAsOf: z.string().optional(),
+      },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ from: fromValue, to: toValue }) => {
-      const { graph } = await readRepoBrainArtifacts(repoRoot);
+    async ({ from: fromValue, to: toValue, memoryAsOf }) => boundedMcpOperation(options, async () => {
+      const stored = await readRepoBrainArtifacts(repoRoot);
+      const graph = induceRepoGraphAt(stored.graph, memoryAsOf);
       const from = resolveNode(graph.nodes, fromValue);
       const to = resolveNode(graph.nodes, toValue);
       const ids = shortestPath(graph, from.id, to.id);
       return text({
+        ...graphQueryMetadata(graph, memoryAsOf),
         from,
         to,
         path: ids?.map((id) => graph.nodes.find((node) => node.id === id)) ?? null,
       });
-    },
+    }),
   );
   return server;
 }

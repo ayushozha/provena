@@ -1,0 +1,10 @@
+.git
+.provena
+.venv
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+**/dist
+**/target
+*.db
+*.tgz

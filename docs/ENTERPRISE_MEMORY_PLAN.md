@@ -28,7 +28,7 @@ source control as the authority for code.
 | Portable repo brain | Yes | Fleet enrollment and signed policy distribution |
 | Typed event ledger | Yes | Remote replication, retention classes, legal holds |
 | Context packets | Yes | Permission-aware cross-repo retrieval and quality SLOs |
-| Graph | Local current-code graph + Neo4j projection | Temporal event graph, tenant federation, incremental CDC, graph policies |
+| Graph | Deterministic local current-code + temporal-memory graph; optional Neo4j projection is mock-driver tested | Live Neo4j conformance, tenant federation, incremental CDC, graph policies |
 | Operational store | SQLite/PostgreSQL paths exist; PostgreSQL vector search is linear today | pgvector KNN, HA, backup/restore, migrations, capacity automation |
 | Identity and ACL | Core service foundations exist | SSO/SCIM, inherited groups, deny-by-default enforcement |
 | Connector registry | Provider records exist | Real authenticated workers, webhooks/CDC, freshness SLAs |
@@ -127,7 +127,7 @@ to database table:
 |---|---|---|
 | Memory events and audit | Immutable regional ledger | PostgreSQL query model, archive/object storage |
 | Current typed memories | PostgreSQL | `tsvector` FTS and linear cosine fallback today; pgvector/approved vector KNN after conformance work |
-| Repository graph | Rebuildable from current repo maps | Neo4j current-code projection; temporal memory graph is roadmap |
+| Repository graph | Rebuildable from the current repo map and exact memory ledger | Local temporal-memory graph; optional Neo4j full projection is mock-driver tested, while live-server conformance, federation, and incremental CDC remain roadmap |
 | Trigger/cache/session | Ephemeral | Redis |
 | Local repository boot | Git-tracked `.provena/` | Local JSON/Markdown |
 

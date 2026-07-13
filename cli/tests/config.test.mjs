@@ -31,6 +31,7 @@ function testCreateDefaultConfig() {
   assert.equal(config.backend, "sqlite");
   assert.equal(config.database.path, ".provena/provena.db");
   assert.equal(config.store_url, "http://127.0.0.1:18092");
+  assert.equal(config.store_api_key_env, "PROVENA_API_KEY");
   assert.equal(config.scope.tenant_id, "app");
   assert.equal(config.scope.project_id, "monorepo");
   assert.deepEqual(config.index.include, ["**/*"]);
@@ -41,6 +42,28 @@ function testValidateRejectsInvalid() {
   assert.throws(() => validateConfig(null), /object/);
   assert.throws(() => validateConfig({ version: 2 }), /version/);
   assert.throws(() => validateConfig({ version: 1, backend: "postgres" }), /backend/);
+  const valid = createDefaultConfig({ cwd: "/repos/app", gitRoot: "/repos/app" });
+  for (const invalid of [" tenant", "tenant\nshadow", "tenant\0shadow", "\ud800"]) {
+    assert.throws(
+      () => validateConfig({ ...valid, scope: { ...valid.scope, tenant_id: invalid } }),
+      /portable boundary-trimmed identifier/,
+    );
+  }
+  assert.equal(
+    validateConfig({ ...valid, scope: { ...valid.scope, tenant_id: "tenant-😀" } }).scope.tenant_id,
+    "tenant-😀",
+  );
+  assert.equal(
+    validateConfig({ ...valid, store_api_key_env: undefined }).store_api_key_env,
+    "PROVENA_API_KEY",
+    "older configs receive the non-secret default environment-variable name",
+  );
+  for (const invalid of ["", "9KEY", "KEY-NAME", "KEY NAME", "AWS_SECRET_ACCESS_KEY"]) {
+    assert.throws(
+      () => validateConfig({ ...valid, store_api_key_env: invalid }),
+      /must be PROVENA_API_KEY/,
+    );
+  }
 }
 
 function testRoundTrip() {
@@ -70,6 +93,7 @@ function testEnsureGitignore() {
     const content = readFileSync(join(root, ".gitignore"), "utf8");
     assert.match(content, /^\.provena\/\*$/m);
     assert.match(content, /^!\.provena\/repo\.brain\.md$/m);
+    assert.match(content, /^!\.provena\/maintenance\.plan\.json$/m);
     assert.doesNotMatch(content, /^\.provena\/$/m, "durable brain remains trackable");
 
     const addedAgain = ensureGitignore(root);
@@ -84,12 +108,18 @@ function testEnsureGitignore() {
 
     mkdirSync(join(root, ".provena"), { recursive: true });
     writeFileSync(join(root, ".provena", "repo.brain.md"), "brain\n", "utf8");
+    writeFileSync(join(root, ".provena", "maintenance.plan.json"), "{}\n", "utf8");
     writeFileSync(join(root, ".provena", "private.tmp"), "private\n", "utf8");
     spawnSync("git", ["init", "--quiet"], { cwd: root });
     assert.notEqual(
       spawnSync("git", ["check-ignore", "--quiet", ".provena/repo.brain.md"], { cwd: root }).status,
       0,
       "durable brain must remain trackable",
+    );
+    assert.notEqual(
+      spawnSync("git", ["check-ignore", "--quiet", ".provena/maintenance.plan.json"], { cwd: root }).status,
+      0,
+      "durable maintenance plan must remain trackable",
     );
     assert.equal(
       spawnSync("git", ["check-ignore", "--quiet", ".provena/private.tmp"], { cwd: root }).status,

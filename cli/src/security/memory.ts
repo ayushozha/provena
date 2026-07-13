@@ -10,8 +10,9 @@ const SECRET_PATTERNS = [
   /\bsk_live_[A-Za-z0-9]{16,}\b/,
   /\bAIza[A-Za-z0-9_-]{30,}\b/,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/,
+  /\bBearer[ \t]+[A-Za-z0-9._~+/=-]{20,}(?=$|[^A-Za-z0-9._~+/=-])/i,
   /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:[^\s/@]+@/i,
-  /\b(?:password|passwd|token|secret|api[_-]?key)\s*[:=]\s*[^\s]{8,}/i,
+  /\b(?:password|passwd|token|secret|api[_-]?key)["']?\s*[:=]\s*["']?[^\s"',}]{8,}/i,
 ];
 
 /** Best-effort guard against common raw credentials; not a DLP boundary. */
