@@ -9,10 +9,11 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
-from app.config import settings
+from app.config import IntelligenceSettings, settings
 from app.embeddings import EmbeddingManager
 from app.extract_facts import FactExtractor
 from app.llm import LLMClient
@@ -25,6 +26,11 @@ from app.models import (
 )
 from app.overview_generator import OverviewGenerator
 from app.read_pipeline import ReadPipeline
+from app.store_auth import (
+    authenticate_intelligence_request,
+    require_intelligence_write,
+    store_request_headers,
+)
 from app.write_pipeline import WritePipeline, WritePipelineError
 
 
@@ -79,13 +85,28 @@ async def lifespan(app: FastAPI):
     yield
 
 
-def create_app() -> FastAPI:
+def create_app(auth_settings: IntelligenceSettings = settings) -> FastAPI:
     """Application factory."""
     app = FastAPI(
         title="Provena Intelligence",
         version="0.1.0",
         lifespan=lifespan,
     )
+
+    @app.middleware("http")
+    async def authenticate_ingress(request: Request, call_next):
+        if request.url.path.startswith("/v1/"):
+            try:
+                request.state.provena_role = authenticate_intelligence_request(
+                    request, auth_settings
+                )
+            except HTTPException as exc:
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={"detail": exc.detail},
+                    headers=exc.headers,
+                )
+        return await call_next(request)
 
     # ------------------------------------------------------------------
     # Health
@@ -95,29 +116,25 @@ def create_app() -> FastAPI:
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    def require_write(request: Request) -> None:
-        role = (request.headers.get("X-Provena-Role") or "").strip().lower()
-        if role and role not in {"editor", "admin", "superadmin"}:
-            raise HTTPException(status_code=403, detail="write access required")
-
     # ------------------------------------------------------------------
     # Write pipeline
     # ------------------------------------------------------------------
 
     @app.post("/v1/pipeline/write")
     async def pipeline_write(request: Request, body: WriteRequest):
-        require_write(request)
+        require_intelligence_write(request)
         wp: WritePipeline = request.app.state.write_pipeline
         try:
-            result = await wp.process(body)
+            result = await wp.process(body, access_headers=store_request_headers(request))
         except WritePipelineError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         return result.model_dump()
 
     @app.post("/v1/batch-write")
     async def batch_write(request: Request, body: list[dict[str, Any]]):
-        require_write(request)
+        require_intelligence_write(request)
         wp: WritePipeline = request.app.state.write_pipeline
+        access_headers = store_request_headers(request)
         results: list[dict[str, Any]] = []
         for item in body:
             payload = item
@@ -130,7 +147,7 @@ def create_app() -> FastAPI:
                     payload = {}
             write_request = WriteRequest(**payload)
             try:
-                result = await wp.process(write_request)
+                result = await wp.process(write_request, access_headers=access_headers)
             except WritePipelineError as exc:
                 raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
             results.append(result.model_dump())
@@ -143,18 +160,7 @@ def create_app() -> FastAPI:
     @app.post("/v1/pipeline/search")
     async def pipeline_search(request: Request, body: ReadSearchRequest):
         rp: ReadPipeline = request.app.state.read_pipeline
-        access_headers = {
-            name: value
-            for name, value in {
-                "X-Provena-Tenant-Id": request.headers.get("X-Provena-Tenant-Id"),
-                "X-Provena-Role": request.headers.get("X-Provena-Role"),
-                "X-Provena-Key-Id": request.headers.get("X-Provena-Key-Id"),
-                "X-Provena-Principal-Id": request.headers.get("X-Provena-Principal-Id"),
-                "X-Provena-Groups": request.headers.get("X-Provena-Groups"),
-            }.items()
-            if value
-        }
-        result = await rp.search(body, access_headers=access_headers)
+        result = await rp.search(body, access_headers=store_request_headers(request))
         return result.model_dump()
 
     # ------------------------------------------------------------------
@@ -168,6 +174,7 @@ def create_app() -> FastAPI:
             memory_ids=body.memory_ids,
             scope=body.scope,
             tier=body.tier,
+            access_headers=store_request_headers(request),
         )
         return result.model_dump()
 
@@ -183,6 +190,7 @@ def create_app() -> FastAPI:
             scope=body.get("scope") or {},
             entity_keys=body.get("entity_keys") or [],
             query_embedding=body.get("query_embedding"),
+            access_headers=store_request_headers(request),
         )
         return {"conflicts": conflicts}
 
@@ -193,7 +201,10 @@ def create_app() -> FastAPI:
     @app.post("/v1/pipeline/overview")
     async def pipeline_overview(request: Request, body: dict[str, Any]):
         og: OverviewGenerator = request.app.state.overview_generator
-        result = await og.generate(scope=body.get("scope") or {})
+        result = await og.generate(
+            scope=body.get("scope") or {},
+            access_headers=store_request_headers(request),
+        )
         return result.model_dump()
 
     # ------------------------------------------------------------------
