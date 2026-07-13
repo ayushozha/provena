@@ -294,6 +294,23 @@ regressions, and a packed tarball installed into a fresh consumer repository.
 
 ## Configuration and lifecycle
 
+The default `development` environment explicitly permits the legacy local-only
+no-auth path. Non-local deployments require the tenant-bound service token
+documented in [DEPLOYMENT.md](./DEPLOYMENT.md).
+
+Polyglot deployments keep credentials separated: external API keys stop at the
+gateway; `PROVENA_GATEWAY_SERVICE_TOKEN` authenticates the private gateway
+transport at intelligence, store, and lifecycle ingress; `PROVENA_QUEUE_INGRESS_TOKEN` authenticates queue callers but is
+never used for downstream writes; and each lifecycle process has a distinct
+admin service token bound to one tenant. Copy [.env.example](./.env.example)
+and replace every blank credential through your secret manager before enabling
+production authentication or the queue.
+
+```powershell
+$env:PROVENA_DB_PATH = ".\\data\\provena.db"
+python -m uvicorn app.main:app --reload --port 8092
+```
+
 `.provena/config.json` records the repository UUID, tenant/project identity,
 schema version, optional-store URL/database path, and scan include/exclude
 globs. Neo4j
@@ -309,6 +326,63 @@ refresh artifacts. To remove Provena, stop the daemon, remove its managed
 instruction/config/hook blocks, uninstall `@provena/cli`, and delete `.provena/`
 only after preserving any ledger events you still need. Dedicated automated
 `upgrade` and `uninstall` commands are roadmap.
+
+The packaged Compose stack keeps the store's internal port `8000` private and
+publishes host ports `50051`, `8080`, `8081`, `8090`, `8091`, and `8092` on
+`127.0.0.1` by default. Each published address and port is overrideable for an
+operator-managed deployment. Set the matching `*_HOST_BIND` and `*_HOST_PORT`
+environment variables before `docker compose up`, for example:
+
+```powershell
+$env:PROVENA_GATEWAY_HOST_BIND = "127.0.0.1"
+$env:PROVENA_GATEWAY_HOST_PORT = "18080"
+docker compose up --build -d
+```
+
+MCP follows the same loopback-safe default. Expose it beyond the local host only
+when gateway authentication and external network policy are already in place.
+
+### Private NeverZero integration
+
+NeverZero's coordination worker talks directly to the store so deterministic
+memory IDs survive projection. The two Compose projects share an
+operator-created external network; Provena advertises only the private
+`provena-store:8000` alias on that network. The store still has no host port.
+
+Create the network once, start the Provena store first, then start NeverZero's
+worker from the NeverZero checkout:
+
+```powershell
+docker network create neverzero-provena # skip when it already exists
+
+# In the Provena checkout; configure .env first.
+docker compose up --build -d store
+
+# In the NeverZero checkout; use the same network, token, and tenant in .env.
+docker compose --profile coordination up --build -d coordination-worker
+```
+
+The matching variables are:
+
+- `PROVENA_INTEGRATION_NETWORK=neverzero-provena` in both repositories;
+- Provena `PROVENA_SERVICE_TOKEN` = NeverZero `PROVENA_API_KEY`;
+- Provena `PROVENA_SERVICE_TENANT_ID` = NeverZero `PROVENA_TENANT_ID`;
+- Provena `PROVENA_SERVICE_PRINCIPAL_ID` = NeverZero
+  `PROVENA_SERVICE_PRINCIPAL`;
+- NeverZero `PROVENA_STORE_URL=http://provena-store:8000`.
+
+The single-token variables above are the smallest tenant-dedicated setup. A
+shared private store can instead set `PROVENA_SERVICE_IDENTITIES` to a JSON
+array of `{token_sha256, tenant_id, principal_id, role}` entries. Each
+NeverZero worker keeps its raw token in its secret manager and supplies the
+matching tenant; Provena stores only the token digest in configuration and
+ignores caller-supplied identity headers. Keep the shared network private.
+
+### Export OpenAPI
+
+```powershell
+python .\scripts\export_openapi.py
+```
 
 ## Privacy and security
 
