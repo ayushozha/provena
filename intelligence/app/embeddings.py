@@ -26,6 +26,8 @@ class EmbeddingManager:
         base_url: str = "http://localhost:11434/v1",
         api_key: str = "",
     ) -> None:
+        if provider == "openai" and not model_id.strip():
+            raise ValueError("PROVENA_INTEL_EMBEDDING_MODEL must name the served embedding model")
         self.provider = provider
         self.model_id = model_id
         self.dimensions = dimensions

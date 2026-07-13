@@ -18,9 +18,17 @@ class IntelligenceSettings(BaseSettings):
 
     model_config = {"env_prefix": "PROVENA_INTEL_"}
 
+    environment: str = "development"
+    allow_unauthenticated_local: bool = True
+    gateway_service_token: SecretStr | None = Field(default=None, repr=False)
+    service_token: SecretStr | None = Field(default=None, repr=False)
+    service_tenant_id: str = ""
+    service_principal_id: str = ""
+    service_role: str = "editor"
+
     # Embeddings are produced by any OpenAI-compatible endpoint, selected
-    # entirely via env (prefix PROVENA_INTEL_). Defaults point at a local
-    # Ollama /v1 shim; for OpenRouter set, e.g.:
+    # entirely via env (prefix PROVENA_INTEL_). The endpoint defaults to a local
+    # OpenAI-compatible /v1 shim, but the served model id must be explicit:
     #   PROVENA_INTEL_EMBEDDING_BASE_URL=https://openrouter.ai/api/v1
     #   PROVENA_INTEL_EMBEDDING_MODEL=<provider/model>
     #   PROVENA_INTEL_EMBEDDING_API_KEY=sk-or-...
@@ -59,11 +67,53 @@ class IntelligenceSettings(BaseSettings):
     listen_port: int = 8081
 
     @model_validator(mode="after")
-    def require_remote_embedding_model(self) -> "IntelligenceSettings":
+    def validate_runtime_contract(self) -> "IntelligenceSettings":
         if self.embedding_provider != "local" and not self.embedding_model.strip():
             raise ValueError(
                 "PROVENA_INTEL_EMBEDDING_MODEL is required for non-local embedding providers"
             )
+
+        gateway_token = (
+            self.gateway_service_token.get_secret_value().strip()
+            if self.gateway_service_token
+            else ""
+        )
+        service_token = (
+            self.service_token.get_secret_value().strip()
+            if self.service_token
+            else ""
+        )
+        local_bypass = (
+            self.environment.strip().lower() in {"development", "local", "test"}
+            and self.allow_unauthenticated_local
+        )
+        if not local_bypass and not gateway_token and not service_token:
+            raise ValueError(
+                "PROVENA_INTEL_GATEWAY_SERVICE_TOKEN or PROVENA_INTEL_SERVICE_TOKEN "
+                "is required outside explicit local development"
+            )
+        if gateway_token and service_token and gateway_token == service_token:
+            raise ValueError(
+                "PROVENA_INTEL_GATEWAY_SERVICE_TOKEN must differ from "
+                "PROVENA_INTEL_SERVICE_TOKEN"
+            )
+        if service_token:
+            missing = [
+                name
+                for name, value in {
+                    "PROVENA_INTEL_SERVICE_TENANT_ID": self.service_tenant_id,
+                    "PROVENA_INTEL_SERVICE_PRINCIPAL_ID": self.service_principal_id,
+                }.items()
+                if not value.strip()
+            ]
+            if missing:
+                raise ValueError(
+                    "intelligence service identity requires " + ", ".join(missing)
+                )
+            if self.service_role.strip().lower() not in {"editor", "admin"}:
+                raise ValueError(
+                    "PROVENA_INTEL_SERVICE_ROLE must be editor or admin"
+                )
         return self
 
 

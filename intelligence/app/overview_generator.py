@@ -17,12 +17,16 @@ class OverviewGenerator:
     def __init__(self, store_url: str = "http://localhost:8000") -> None:
         self.store_url = store_url
 
-    async def generate(self, scope: dict[str, Any]) -> ProjectOverview:
+    async def generate(
+        self,
+        scope: dict[str, Any],
+        access_headers: dict[str, str] | None = None,
+    ) -> ProjectOverview:
         """Query recent memories and build a summary overview.
 
         No LLM calls in v1 — pure aggregation.
         """
-        memories = await self._fetch_recent_memories(scope)
+        memories = await self._fetch_recent_memories(scope, access_headers=access_headers)
 
         # Count by kind
         kind_counts: Counter[str] = Counter()
@@ -64,7 +68,9 @@ class OverviewGenerator:
         )
 
     async def _fetch_recent_memories(
-        self, scope: dict[str, Any]
+        self,
+        scope: dict[str, Any],
+        access_headers: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch recent memories from the store service."""
         try:
@@ -72,6 +78,7 @@ class OverviewGenerator:
                 resp = await client.post(
                     f"{self.store_url}/v1/memories/search",
                     json={"query": "", "scope": scope, "limit": 50},
+                    headers=access_headers,
                 )
                 if resp.status_code < 400:
                     data = resp.json()
