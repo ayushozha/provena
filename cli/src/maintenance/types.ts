@@ -1,6 +1,7 @@
 export const MAINTENANCE_ISSUE_KINDS = [
   "evidence-gap",
   "source-not-in-map",
+  "source-changed",
   "scope-not-in-map",
   "exact-content-overlap",
 ] as const;

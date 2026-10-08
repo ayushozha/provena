@@ -1,4 +1,4 @@
-FROM golang:1.23-bookworm AS builder
+FROM golang:1.27.2-bookworm AS builder
 
 ARG CMD=gateway
 WORKDIR /src

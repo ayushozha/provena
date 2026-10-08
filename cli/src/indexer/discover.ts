@@ -8,7 +8,7 @@ import {
   statSync,
 } from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
-import fg from "fast-glob";
+import { glob } from "tinyglobby";
 import ignore, { type Ignore } from "ignore";
 import type { ProvenaConfig } from "../config.js";
 
@@ -277,13 +277,13 @@ export async function enumerateFiles(
     config.index.include.length > 0 ? config.index.include : ["**/*"];
   const exclude = config.index.exclude;
 
-  const absoluteMatches = await fg(include, {
+  const absoluteMatches = await glob(include, {
     cwd: repoRoot,
     absolute: true,
     onlyFiles: true,
     dot: true,
     followSymbolicLinks: false,
-    suppressErrors: true,
+    expandDirectories: false,
     ignore: exclude,
   });
 

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
@@ -70,9 +72,14 @@ try {
     "provena_graph_path",
     "provena_maintenance_plan",
     "provena_maintenance_context",
+    "provena_procedure_learn",
+    "provena_procedure_outcome",
+    "provena_procedure_recall",
   ]) {
     assert.ok(tools.tools.some((tool) => tool.name === name), `MCP missing ${name}`);
   }
+  assert(!tools.tools.some((tool) => /procedure.*approve|approve.*procedure/i.test(tool.name)),
+    "MCP must not expose human procedure approval");
 
   const brain = await client.readResource({ uri: "provena://repo/brain" });
   assert.match(brain.contents[0]?.text ?? "", /repo brain/i);
@@ -174,6 +181,78 @@ try {
     });
   assert.equal(rejected.isError, true);
   assert.match(rejected.content[0]?.text ?? "", /credential|private key/i);
+
+  // The agent-facing protocol captures and recalls reference data. Approval remains a manual CLI action.
+  const trace = {
+    title: "Validate authorization handling", episodeId: "mcp-learn-episode", sessionId: "mcp-session",
+    goal: "Validate authorization handling before a handoff", triggers: ["authorization validation"],
+    prerequisites: [], sources: [{ path: "src/auth.ts", startLine: 1 }], verification: [],
+    steps: [{ tool: "shell", args: { command: "node -e \"require('node:fs').writeFileSync('procedure-executed.marker','executed')\"" } }],
+  };
+  const marker = join(root, "procedure-executed.marker");
+  async function procedureTool(name, args) {
+    const response = await client.callTool({ name, arguments: args });
+    assert.equal(response.isError, undefined, response.content[0]?.text);
+    assert.equal(existsSync(marker), false, "MCP must never execute a recorded procedure step");
+    return JSON.parse(response.content[0]?.text ?? "{}");
+  }
+  const learnedProcedure = await procedureTool("provena_procedure_learn", trace);
+  assert.equal(learnedProcedure.event.authority, "agent");
+  assert.equal(learnedProcedure.event.provenance.actor, "mcp-client");
+  assert.equal(learnedProcedure.event.structured_data.procedure.state, "candidate");
+  assert.match(learnedProcedure.event.sources[0].blob, /^sha256-lf:[a-f0-9]{64}$/);
+  assert.equal((await procedureTool("provena_procedure_learn", trace)).duplicate, true);
+  const procedureQuery = { query: "authorization validation", availableTools: ["shell"], includeReview: true, maxTokens: 4096 };
+  let procedureRecall = await procedureTool("provena_procedure_recall", procedureQuery);
+  assert.equal(procedureRecall.ready.length, 0);
+  assert.equal(procedureRecall.review[0].state, "candidate");
+  const receipt = {
+    receiptId: "mcp-goal-receipt", episodeId: "mcp-goal-episode", sessionId: "mcp-goal-session", goal: trace.goal,
+    outcome: "success", verification: [{ check: "Fixture caller goal attestation", passed: true, evidence: "Synthetic lifecycle receipt; no task command was executed." }],
+  };
+  const candidateOutcome = await client.callTool({
+    name: "provena_procedure_outcome", arguments: { ...receipt, procedureId: learnedProcedure.event.id },
+  });
+  assert.equal(candidateOutcome.isError, true);
+  assert.match(candidateOutcome.content[0]?.text ?? "", /exact approved procedure version/);
+  const manualApproval = spawnSync(process.execPath, [
+    fileURLToPath(new URL("../dist/cli.js", import.meta.url)), "procedure", "approve", learnedProcedure.event.id,
+    "--authority", "human", "--actor", "fixture-maintainer",
+  ], { cwd: root, encoding: "utf8", timeout: 20_000 });
+  assert.equal(manualApproval.error, undefined);
+  assert.equal(manualApproval.status, 0, manualApproval.stderr);
+  assert.equal(existsSync(marker), false);
+  const approvedProcedure = JSON.parse(manualApproval.stdout).event;
+  assert.equal(approvedProcedure.authority, "human");
+  assert.deepEqual(approvedProcedure.supersedes, [learnedProcedure.event.id]);
+  procedureRecall = await procedureTool("provena_procedure_recall", procedureQuery);
+  assert.equal(procedureRecall.ready.length, 0);
+  assert.equal(procedureRecall.review[0].state, "unverified");
+  const outcome = await procedureTool("provena_procedure_outcome", { ...receipt, procedureId: approvedProcedure.id });
+  assert.equal(outcome.event.structured_data.procedureOutcome.attestation, "caller-reported");
+  assert.equal(outcome.event.provenance.actor, "mcp-client");
+  assert.equal((await procedureTool("provena_procedure_outcome", { ...receipt, procedureId: approvedProcedure.id })).duplicate, true);
+  procedureRecall = await procedureTool("provena_procedure_recall", procedureQuery);
+  assert.equal(procedureRecall.ready.length, 1);
+  assert.equal(procedureRecall.review.length, 0);
+  assert.equal(procedureRecall.ready[0].procedureId, approvedProcedure.id);
+  assert.deepEqual(procedureRecall.ready[0].citations.outcomeIds, [outcome.event.id]);
+  assert.deepEqual(procedureRecall.ready[0].procedure.steps, trace.steps);
+  const compactProcedureResponse = await client.callTool({ name: "provena_procedure_recall", arguments: { ...procedureQuery, maxTokens: 350 } });
+  assert.equal(compactProcedureResponse.isError, undefined);
+  const compactProcedureText = compactProcedureResponse.content[0]?.text ?? "";
+  const compactProcedureResult = JSON.parse(compactProcedureText);
+  assert.equal(compactProcedureResult.ready.length, 1);
+  assert.equal(compactProcedureText.length, compactProcedureResult.characters);
+  assert(Buffer.byteLength(compactProcedureText, "utf8") <= 350 * 4, "visible MCP JSON must respect the advertised ASCII fixture budget");
+  assert.equal((await procedureTool("provena_procedure_recall", { ...procedureQuery, query: "astronomy nebulae" })).ready.length, 0);
+  const procedureMap = readFileSync(mapPath, "utf8");
+  writeFileSync(join(root, "src", "auth.ts"), "export const changedAfterProcedureReceipt = true;\n");
+  const staleProcedure = await procedureTool("provena_procedure_recall", { procedureIds: [approvedProcedure.id], includeReview: true, maxTokens: 4096 });
+  assert.equal(staleProcedure.ready.length, 0);
+  assert.equal(staleProcedure.review[0].state, "stale");
+  assert.equal(readFileSync(mapPath, "utf8"), procedureMap, "MCP procedure recall must check live sources without refreshing artifacts");
+  assert.equal((await readMemoryEvents(root)).filter((event) => event.structuredData.procedureOutcome).length, 1);
 
   const outside = join(root, "outside-resource.txt");
   const mapResource = join(root, ".provena", "repo.map.json");

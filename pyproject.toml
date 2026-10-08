@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=84.0.0,<85"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,24 +8,29 @@ version = "0.1.0"
 description = "Provenance-first memory service for LLM applications"
 requires-python = ">=3.11"
 dependencies = [
-  "fastapi>=0.116.0",
-  "uvicorn>=0.35.0",
-  "pydantic>=2.11.0",
-  "pydantic-settings>=2.7.0",
-  "httpx>=0.27.0",
-  "sqlite-vec>=0.1.9",
-  "psycopg[binary]>=3.2.0",
-  "redis>=5.0.0",
+  "fastapi>=0.143.0,<1",
+  "uvicorn>=0.54.0,<1",
+  "pydantic>=2.14.0,<3",
+  "pydantic-settings>=2.15.0,<3",
+  "httpx>=0.28.1,<1",
+  "anyio>=4.15.1,<5",
+  "sqlite-vec>=0.1.9,<0.2",
+  "psycopg[binary]>=3.3.6,<4",
+  "redis>=8.1.0,<9",
   "rfc8785>=0.1.4,<0.2.0",
 ]
 
 [project.optional-dependencies]
-postgres = ["psycopg[binary]>=3.2.0"]
-dev = ["fakeredis>=2.26.0"]
+postgres = ["psycopg[binary]>=3.3.6,<4"]
+dev = ["fakeredis>=2.39.0,<3", "pytest>=9.1.1,<10"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*"]
+include = ["app*", "storage*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+storage = ["migrations/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

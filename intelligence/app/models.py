@@ -122,9 +122,9 @@ class ReadSearchRequest(BaseModel):
     query_embedding: list[float] = Field(default_factory=list)
     include_relations: bool = False
     include_deleted: bool = False
-    limit: int = 20
-    max_tokens: int = 4096
-    model_tier: str = "balanced"
+    limit: int = Field(default=20, ge=1, le=200)
+    max_tokens: int = Field(default=4096, ge=1, le=100_000)
+    model_tier: ModelTier = ModelTier.BALANCED
 
 
 class ReadSearchResponse(BaseModel):

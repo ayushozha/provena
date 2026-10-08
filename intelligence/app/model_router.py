@@ -18,9 +18,9 @@ Configuration (env, prefix ``PROVENA_INTEL_``):
       "base_url": "https://openrouter.ai/api/v1",
       "api_key": "sk-or-...",
       "models": [
-        {"model": "anthropic/claude-3.5-haiku", "tier": "fast",
+        {"model": "<fast-model-id>", "tier": "fast",
          "tasks": ["classify", "summarize"], "cost_per_1k_input": 0.0008},
-        {"model": "anthropic/claude-3.5-sonnet", "tier": "balanced",
+        {"model": "<balanced-model-id>", "tier": "balanced",
          "tasks": ["extract", "rerank", "compact"], "cost_per_1k_input": 0.003}]}]
 
   ``route`` picks the cheapest configured model that supports the task at the

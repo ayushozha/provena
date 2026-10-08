@@ -6,17 +6,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/altrixy/provena/control-plane/internal/observability"
 )
+
+const maxLifecycleBodyBytes = 1 << 20
 
 type retentionPolicy struct {
 	PolicyID string `json:"policy_id"`
@@ -25,6 +30,20 @@ type retentionPolicy struct {
 
 type retentionResponse struct {
 	ExpiredMemoryIDs []string `json:"expired_memory_ids"`
+}
+
+type lifecycleHealth struct {
+	healthy atomic.Bool
+}
+
+func (health *lifecycleHealth) handler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if !health.healthy.Load() {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"unhealthy"}`))
+		return
+	}
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
 func env(key, fallback string) string {
@@ -41,35 +60,27 @@ func main() {
 	listenAddr := env("PROVENA_LIFECYCLE_LISTEN_ADDR", ":8092")
 	storeURL := env("PROVENA_STORE_URL", "http://localhost:8000")
 	client := &http.Client{Timeout: 30 * time.Second}
+	serviceAuth, err := loadLifecycleServiceAuth(os.Getenv)
+	if err != nil {
+		logger.Error("invalid lifecycle service identity configuration", "error", err)
+		os.Exit(1)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	go func() {
-		ticker := time.NewTicker(60 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := enforceAllTenants(ctx, client, storeURL, logger); err != nil {
-					logger.Warn("retention enforcement failed", "error", err)
-				}
-			}
-		}
-	}()
+	health := &lifecycleHealth{}
+	health.healthy.Store(!serviceAuth.enabled)
+	if serviceAuth.enabled {
+		go runRetentionLoop(ctx, client, storeURL, serviceAuth, health, logger, 60*time.Second)
+	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
-	})
-	mux.Handle("POST /v1/admin/retention-policies", proxy(client, storeURL, "/v1/admin/retention-policies"))
-	mux.Handle("GET /v1/admin/retention-policies", proxy(client, storeURL, "/v1/admin/retention-policies"))
-	mux.Handle("POST /v1/admin/legal-hold", proxy(client, storeURL, "/v1/admin/legal-hold"))
-	mux.Handle("DELETE /v1/admin/legal-hold/{hold_id}", proxy(client, storeURL, ""))
-	mux.Handle("POST /v1/admin/rtbf", proxy(client, storeURL, "/v1/admin/rtbf"))
-	mux.Handle("POST /v1/admin/retention/enforce", proxy(client, storeURL, "/v1/admin/retention/enforce"))
+	mux.HandleFunc("GET /healthz", health.handler)
+	mux.Handle("POST /v1/admin/retention-policies", proxy(client, storeURL, "/v1/admin/retention-policies", serviceAuth, health))
+	mux.Handle("GET /v1/admin/retention-policies", proxy(client, storeURL, "/v1/admin/retention-policies", serviceAuth, health))
+	mux.Handle("POST /v1/admin/legal-hold", proxy(client, storeURL, "/v1/admin/legal-hold", serviceAuth, health))
+	mux.Handle("DELETE /v1/admin/legal-hold/{hold_id}", proxy(client, storeURL, "", serviceAuth, health))
+	mux.Handle("POST /v1/admin/rtbf", proxy(client, storeURL, "/v1/admin/rtbf", serviceAuth, health))
+	mux.Handle("POST /v1/admin/retention/enforce", proxy(client, storeURL, "/v1/admin/retention/enforce", serviceAuth, health))
 
 	srv := &http.Server{
 		Addr:         listenAddr,
@@ -97,8 +108,17 @@ func main() {
 	}
 }
 
-func proxy(client *http.Client, storeURL, rewritePath string) http.Handler {
+func proxy(client *http.Client, storeURL, rewritePath string, auth lifecycleServiceAuth, health *lifecycleHealth) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !auth.authenticateIngress(r) {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, `{"error":"valid gateway service bearer required"}`, http.StatusUnauthorized)
+			return
+		}
+		if !auth.authorizeIngressCaller(r) {
+			http.Error(w, `{"error":"lifecycle admin access for the configured tenant required"}`, http.StatusForbidden)
+			return
+		}
 		targetPath := rewritePath
 		if targetPath == "" {
 			targetPath = r.URL.Path
@@ -110,8 +130,14 @@ func proxy(client *http.Client, storeURL, rewritePath string) http.Handler {
 		}
 		target.RawQuery = r.URL.RawQuery
 
+		r.Body = http.MaxBytesReader(w, r.Body, maxLifecycleBodyBytes)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
+			var oversized *http.MaxBytesError
+			if errors.As(err, &oversized) {
+				http.Error(w, `{"error":"request body exceeds 1 MiB"}`, http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, `{"error":"failed to read request body"}`, http.StatusBadRequest)
 			return
 		}
@@ -120,10 +146,21 @@ func proxy(client *http.Client, storeURL, rewritePath string) http.Handler {
 			http.Error(w, `{"error":"failed to build upstream request"}`, http.StatusBadGateway)
 			return
 		}
-		for key, values := range r.Header {
-			for _, value := range values {
-				req.Header.Add(key, value)
+		for _, key := range []string{"Content-Type", "Accept", "Traceparent", "Tracestate"} {
+			if value := r.Header.Get(key); value != "" {
+				req.Header.Set(key, value)
 			}
+		}
+		if !auth.enabled {
+			for _, key := range []string{"X-Provena-Tenant-Id", "X-Provena-Role", "X-Provena-Key-Id", "X-Provena-Principal-Id", "X-Provena-Groups"} {
+				if value := r.Header.Get(key); value != "" {
+					req.Header.Set(key, value)
+				}
+			}
+		}
+		if err := auth.apply(req); err != nil {
+			http.Error(w, `{"error":"lifecycle service identity unavailable"}`, http.StatusServiceUnavailable)
+			return
 		}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -131,6 +168,9 @@ func proxy(client *http.Client, storeURL, rewritePath string) http.Handler {
 			return
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			health.healthy.Store(false)
+		}
 
 		for key, values := range resp.Header {
 			for _, value := range values {
@@ -142,9 +182,52 @@ func proxy(client *http.Client, storeURL, rewritePath string) http.Handler {
 	})
 }
 
-func enforceAllTenants(ctx context.Context, client *http.Client, storeURL string, logger *slog.Logger) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, storeURL+"/v1/admin/retention-policies", nil)
+func runRetentionLoop(
+	ctx context.Context,
+	client *http.Client,
+	storeURL string,
+	auth lifecycleServiceAuth,
+	health *lifecycleHealth,
+	logger *slog.Logger,
+	interval time.Duration,
+) {
+	for {
+		err := enforceTenant(ctx, client, storeURL, auth, logger)
+		health.healthy.Store(err == nil)
+		delay := interval
+		if err != nil {
+			logger.Error("retention enforcement failed", "error", err)
+			if delay > 5*time.Second {
+				delay = 5 * time.Second
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+	}
+}
+
+func enforceTenant(ctx context.Context, client *http.Client, storeURL string, auth lifecycleServiceAuth, logger *slog.Logger) error {
+	if err := auth.validate(); err != nil {
+		return err
+	}
+	if !auth.enabled {
+		return nil
+	}
+	target, err := url.Parse(storeURL + "/v1/admin/retention-policies")
 	if err != nil {
+		return err
+	}
+	query := target.Query()
+	query.Set("tenant_id", auth.tenantID)
+	target.RawQuery = query.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	if err != nil {
+		return err
+	}
+	if err := auth.apply(req); err != nil {
 		return err
 	}
 	resp, err := client.Do(req)
@@ -153,7 +236,7 @@ func enforceAllTenants(ctx context.Context, client *http.Client, storeURL string
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil
+		return fmt.Errorf("retention policy lookup returned %d", resp.StatusCode)
 	}
 
 	var policies []retentionPolicy
@@ -161,41 +244,48 @@ func enforceAllTenants(ctx context.Context, client *http.Client, storeURL string
 		return err
 	}
 
-	seen := map[string]struct{}{}
+	hasPolicy := false
 	for _, policy := range policies {
-		if policy.TenantID == "" {
-			continue
+		if policy.TenantID != auth.tenantID {
+			return fmt.Errorf("retention policy lookup crossed lifecycle tenant boundary")
 		}
-		if _, ok := seen[policy.TenantID]; ok {
-			continue
-		}
-		seen[policy.TenantID] = struct{}{}
+		hasPolicy = true
+	}
+	if !hasPolicy {
+		return nil
+	}
 
-		payload, _ := json.Marshal(map[string]string{"tenant_id": policy.TenantID})
-		enforceReq, err := http.NewRequestWithContext(
-			ctx,
-			http.MethodPost,
-			storeURL+"/v1/admin/retention/enforce",
-			bytes.NewReader(payload),
-		)
-		if err != nil {
-			return err
-		}
-		enforceReq.Header.Set("Content-Type", "application/json")
-		enforceResp, err := client.Do(enforceReq)
-		if err != nil {
-			return err
-		}
+	payload, err := json.Marshal(map[string]string{"tenant_id": auth.tenantID})
+	if err != nil {
+		return err
+	}
+	enforceReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		storeURL+"/v1/admin/retention/enforce",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	enforceReq.Header.Set("Content-Type", "application/json")
+	if err := auth.apply(enforceReq); err != nil {
+		return err
+	}
+	enforceResp, err := client.Do(enforceReq)
+	if err != nil {
+		return err
+	}
+	defer enforceResp.Body.Close()
+	if enforceResp.StatusCode >= 400 {
+		return fmt.Errorf("retention enforcement returned %d", enforceResp.StatusCode)
+	}
 
-		var result retentionResponse
-		if enforceResp.StatusCode < 400 {
-			_ = json.NewDecoder(enforceResp.Body).Decode(&result)
-			if len(result.ExpiredMemoryIDs) > 0 {
-				logger.Info("retention enforcement", "tenant_id", policy.TenantID, "expired_count", len(result.ExpiredMemoryIDs))
-				observability.MemoryOperationsTotal.Add(int64(len(result.ExpiredMemoryIDs)))
-			}
-		}
-		enforceResp.Body.Close()
+	var result retentionResponse
+	_ = json.NewDecoder(enforceResp.Body).Decode(&result)
+	if len(result.ExpiredMemoryIDs) > 0 {
+		logger.Info("retention enforcement", "tenant_id", auth.tenantID, "expired_count", len(result.ExpiredMemoryIDs))
+		observability.MemoryOperationsTotal.Add(int64(len(result.ExpiredMemoryIDs)))
 	}
 	return nil
 }

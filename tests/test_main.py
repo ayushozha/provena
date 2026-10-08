@@ -9,6 +9,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 import rfc8785
@@ -377,10 +378,7 @@ class ProvenaApiTests(unittest.TestCase):
         operation = schema["paths"]["/v1/repositories/{repository_id}/memory-events/sync"]["post"]
         self.assertEqual(
             operation["security"],
-            [
-                {"ProvenaTenant": [], "ProvenaPrincipal": []},
-                {"ProvenaTenant": [], "ProvenaKey": []},
-            ],
+            [{"ProvenaServiceBearer": []}],
         )
         schemes = schema["components"]["securitySchemes"]
         self.assertEqual(schemes["ProvenaTenant"]["name"], "X-Provena-Tenant-Id")
@@ -391,12 +389,51 @@ class ProvenaApiTests(unittest.TestCase):
             for parameter in operation["parameters"]
             if parameter["name"] == "X-Provena-Role"
         )
-        self.assertTrue(role_parameter["required"])
+        self.assertFalse(role_parameter["required"])
         self.assertEqual(
-            role_parameter["schema"]["enum"],
+            role_parameter["schema"]["anyOf"][0]["enum"],
             ["editor", "admin", "superadmin"],
         )
         self.assertTrue({"200", "401", "403", "409", "422"}.issubset(operation["responses"]))
+    def test_readyz_blocks_data_plane_when_legacy_integrity_audit_is_dirty(self) -> None:
+        ready = self.client.get("/readyz")
+        self.assertEqual(ready.status_code, 200)
+        self.assertTrue(ready.json()["ready"])
+
+        blocked = {
+            "status": "blocked",
+            "ready": False,
+            "backend": "postgresql",
+            "constraints_validated": False,
+            "issues": {"connector_sources": 1},
+        }
+        store = self.client.app.state.store
+        with patch.object(store, "tenant_integrity_status", return_value=blocked):
+            readiness = self.client.get("/readyz")
+            data_plane = self.client.get("/v1/integrations/catalog")
+            liveness = self.client.get("/healthz")
+
+        self.assertEqual(readiness.status_code, 503)
+        self.assertEqual(data_plane.status_code, 503)
+        self.assertNotIn("connector_sources", data_plane.text)
+        self.assertEqual(liveness.status_code, 200)
+
+    def test_openapi_applies_service_bearer_only_to_v1(self) -> None:
+        schema = self.client.get("/openapi.json").json()
+        security_scheme = schema["components"]["securitySchemes"]["ProvenaServiceBearer"]
+        self.assertEqual(security_scheme["type"], "http")
+        self.assertEqual(security_scheme["scheme"], "bearer")
+        self.assertNotIn("security", schema["paths"]["/healthz"]["get"])
+        for path, path_item in schema["paths"].items():
+            if not path.startswith("/v1/"):
+                continue
+            for operation in path_item.values():
+                if isinstance(operation, dict) and "responses" in operation:
+                    self.assertEqual(
+                        operation["security"],
+                        [{"ProvenaServiceBearer": []}],
+                        msg=f"missing service bearer requirement on {path}",
+                    )
 
     def test_create_and_get_memory(self) -> None:
         payload = {
@@ -580,6 +617,82 @@ class ProvenaApiTests(unittest.TestCase):
             ).fetchone()["status"],
             "active",
         )
+
+    def test_repository_procedures_require_dedicated_recall_after_store_sync(self) -> None:
+        repository_id = "repository-procedure-recall-gate"
+        events = []
+        for index in range(6):
+            event = self._repository_event(
+                f"procedure-{index}", kind="workflow",
+                body="PROCEDURE_ONLY_GUIDANCE validation session",
+            )
+            event["structured_data"] = {"procedure": {
+                "schemaVersion": 1, "state": "candidate" if index == 0 else "approved",
+                "episodeId": f"learn-{index}", "sessionId": "session-learning",
+                "goal": "PROCEDURE_ONLY_GUIDANCE validation session",
+                "triggers": ["validation session"], "prerequisites": [],
+                "steps": [{"tool": "shell", "args": {"command": "PROCEDURE_STEP_SENTINEL", "unicode": "😀", "epsilon": 1e-7}}],
+                "verification": [],
+            }}
+            if index == 0:
+                event["created_at"] = event["updated_at"] = "2026-07-13T08:00:00.000Z"
+            events.append(event)
+        for outcome in ("success", "failure"):
+            event = self._repository_event(
+                f"outcome-{outcome}", kind="mistake" if outcome == "failure" else "fact",
+                body="PROCEDURE_ONLY_GUIDANCE validation session",
+            )
+            event["structured_data"] = {"procedureOutcome": {"outcome": outcome}}
+            events.append(event)
+        ordinary = self._repository_event(
+            "ordinary-validation", kind="invariant", body="Ordinary validation session guidance.",
+            created_at="2026-07-13T09:00:00.000Z", supersedes=["procedure-0"],
+        )
+        events.append(ordinary)
+        ledger = b"".join(rfc8785.dumps(event) + b"\n" for event in events).decode("utf-8")
+        synced = self._sync_repository(repository_id, ledger)
+        self.assertEqual(synced.status_code, 200, synced.text)
+        headers = self._admin_headers()
+        scope = {"tenant_id": "tenant-acme", "project_id": "project-repo-brain"}
+        ordinary_id = self._repository_memory_id(repository_id, ordinary["id"])
+
+        for event in events[:-1]:
+            memory_id = self._repository_memory_id(repository_id, event["id"])
+            raw = self.client.get(f"/v1/memories/{memory_id}", headers=headers)
+            self.assertEqual(raw.status_code, 200, raw.text)
+            self.assertEqual(raw.json()["metadata"]["provena_event"], event)
+
+        for query in ("validation session", ""):
+            searched = self.client.post("/v1/memories/search", headers=headers, json={
+                "query": query, "scope": scope, "include_deleted": True,
+                "include_relations": True, "limit": 1,
+            })
+            self.assertEqual(searched.status_code, 200, searched.text)
+            results = searched.json()["results"]
+            self.assertEqual([item["memory"]["memory_id"] for item in results], [ordinary_id])
+            self.assertEqual(results[0]["related_memories"], [])
+            self.assertNotIn("PROCEDURE_ONLY_GUIDANCE", searched.text)
+
+        context_payload = {
+            "query": "validation session", "scope": scope, "max_memories": 1,
+        }
+        context = self.client.post("/v1/agent/context", headers=headers, json=context_payload)
+        self.assertEqual(context.status_code, 200, context.text)
+        self.assertEqual([item["memory_id"] for item in context.json()["memories"]], [ordinary_id])
+        self.assertNotIn("PROCEDURE_ONLY_GUIDANCE", context.text)
+        viewer_context = self.client.post("/v1/agent/context", headers=self._viewer_headers(), json=context_payload)
+        self.assertEqual(viewer_context.status_code, 200, viewer_context.text)
+        self.assertNotIn("PROCEDURE_ONLY_GUIDANCE", viewer_context.text)
+        foreign_context = self.client.post("/v1/agent/context", headers=self._viewer_headers(), json={
+            **context_payload, "scope": {**scope, "tenant_id": "tenant-other"},
+        })
+        self.assertEqual(foreign_context.status_code, 403, foreign_context.text)
+        for invalid in ({"max_memories": 0}, {"max_memories": 201}, {"max_characters": 127}, {"max_characters": 100_001}):
+            rejected = self.client.post("/v1/agent/context", headers=headers, json={**context_payload, **invalid})
+            self.assertEqual(rejected.status_code, 422, rejected.text)
+        second = self._sync_repository(repository_id, ledger)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertTrue(second.json()["no_op"], "the read gate must preserve lossless projection attestations")
 
     def test_repository_ledger_sync_is_lossless_idempotent_and_lifecycle_aware(self) -> None:
         repository_id = "repository-canonical-sync"
@@ -904,7 +1017,7 @@ class ProvenaApiTests(unittest.TestCase):
                 "ledger": ledger,
             },
         )
-        self.assertEqual(unauthenticated.status_code, 422)
+        self.assertEqual(unauthenticated.status_code, 401)
 
         header_only_role = self.client.post(
             f"/v1/repositories/{repository_id}/memory-events/sync",
@@ -1816,7 +1929,7 @@ class ProvenaApiTests(unittest.TestCase):
             "entity_keys": ["authenticity"],
         }
         broad_response = self.client.post("/v1/memories", json=broad)
-        broad_id = broad_response.json()["memory"]["memory_id"]
+        self.assertEqual(broad_response.status_code, 200)
 
         refined = {
             "kind": "fact",
@@ -1830,9 +1943,9 @@ class ProvenaApiTests(unittest.TestCase):
             "content": "LinkedIn rewards authentic PM storytelling with evidence and penalties for automation abuse.",
             "tags": ["linkedin", "policy"],
             "entity_keys": ["authenticity"],
-            "supersedes_memory_id": broad_id,
         }
-        self.client.post("/v1/memories", json=refined)
+        refined_response = self.client.post("/v1/memories", json=refined)
+        self.assertEqual(refined_response.status_code, 200)
 
         search_response = self.client.post(
             "/v1/memories/search",
@@ -2017,7 +2130,10 @@ class ProvenaApiTests(unittest.TestCase):
         active_duplicate = self.client.post(
             "/v1/memories",
             json=payload,
-            headers=self._viewer_headers("tenant-acme", "unauthorized-viewer"),
+            headers={
+                **self._viewer_headers("tenant-acme", "unauthorized-viewer"),
+                "X-Provena-Role": "editor",
+            },
         )
         self.assertEqual(active_duplicate.status_code, 404)
         self.assertNotIn(memory_id, active_duplicate.text)
@@ -2451,7 +2567,10 @@ class ProvenaApiTests(unittest.TestCase):
                     {"source_type": "channel", "source_id": "src-private-user"}
                 ],
             },
-            headers=self._viewer_headers(principal_id="pm-1"),
+            headers={
+                **self._viewer_headers(principal_id="pm-1"),
+                "X-Provena-Role": "editor",
+            },
         )
         self.assertEqual(blocked_duplicate.status_code, 404)
         self.assertNotIn(blocked_memory, blocked_duplicate.text)
@@ -3441,6 +3560,60 @@ class ProvenaApiTests(unittest.TestCase):
         )
         self.assertEqual(blocked_get.status_code, 404)
 
+    def test_deterministic_create_retry_honors_connected_source_grants(self) -> None:
+        self._register_connected_fixture(
+            connector_id="conn-deterministic-retry",
+            sources=[
+                {
+                    "source_id": "src-deterministic-retry",
+                    "connector_id": "conn-deterministic-retry",
+                    "tenant_id": "tenant-acme",
+                    "remote_source_id": "C320",
+                    "source_type": "channel",
+                    "display_name": "#deterministic-retry",
+                }
+            ],
+            grants=[
+                {
+                    "grant_id": "grant-deterministic-owner",
+                    "source_id": "src-deterministic-retry",
+                    "connector_id": "conn-deterministic-retry",
+                    "tenant_id": "tenant-acme",
+                    "principal_type": "user",
+                    "principal_id": "pm-2",
+                    "permission_level": "view",
+                    "inherited": False,
+                }
+            ],
+        )
+        payload = {
+            "memory_id": "neverzero-context-source-gated",
+            "kind": "artifact",
+            "scope": {"tenant_id": "tenant-acme", "workspace_id": "ws-growth"},
+            "title": "Deterministic retry source grant",
+            "content": "A retry must not reveal a connected source memory.",
+            "source_references": [
+                {"source_type": "channel", "source_id": "src-deterministic-retry"}
+            ],
+        }
+        created = self.client.post("/v1/memories", json=payload, headers=self._admin_headers())
+        self.assertEqual(created.status_code, 200)
+
+        blocked_retry = self.client.post(
+            "/v1/memories",
+            json=payload,
+            headers={
+                "X-Provena-Tenant-Id": "tenant-acme",
+                "X-Provena-Role": "editor",
+                "X-Provena-Principal-Id": "pm-1",
+            },
+        )
+        self.assertEqual(blocked_retry.status_code, 404)
+        self.assertEqual(
+            blocked_retry.json()["detail"],
+            "memory not found",
+        )
+
     def test_connected_source_mapping_and_grant_joins_stay_scoped(self) -> None:
         self._register_connected_fixture(
             connector_id="conn-retrieval-mapping",
@@ -3533,7 +3706,8 @@ class ProvenaApiTests(unittest.TestCase):
             },
             headers=self._admin_headers(),
         )
-        self.assertEqual(wrong_connector_grant.status_code, 409, wrong_connector_grant.text)
+        self.assertEqual(wrong_connector_grant.status_code, 404)
+        self.assertEqual(wrong_connector_grant.json(), {"detail": "source not found"})
 
         self._register_connected_fixture(
             connector_id="conn-foreign-tenant",
@@ -3567,7 +3741,8 @@ class ProvenaApiTests(unittest.TestCase):
             },
             headers=self._admin_headers("tenant-other"),
         )
-        self.assertEqual(foreign_grant.status_code, 409, foreign_grant.text)
+        self.assertEqual(foreign_grant.status_code, 404)
+        self.assertEqual(foreign_grant.json(), {"detail": "source not found"})
         self.assertEqual(
             self.client.app.state.store.conn.execute(
                 """
@@ -3753,6 +3928,148 @@ class ProvenaApiTests(unittest.TestCase):
         self.assertEqual(released.status_code, 200)
         self.assertFalse(released.json()["held"])
         self.assertEqual(released.json()["status"], "active")
+
+    def test_tenant_admin_cannot_release_another_tenants_legal_hold(self) -> None:
+        placed = self.client.post(
+            "/v1/admin/legal-hold",
+            json={
+                "hold_id": "hold-tenant-bound",
+                "tenant_id": "tenant-acme",
+                "reason": "tenant boundary proof",
+            },
+            headers=self._admin_headers("tenant-acme"),
+        )
+        self.assertEqual(placed.status_code, 200)
+
+        missing_tenant = self.client.delete(
+            "/v1/admin/legal-hold/hold-tenant-bound",
+            headers=self._admin_headers("tenant-other"),
+        )
+        self.assertEqual(missing_tenant.status_code, 403)
+
+        cross_tenant = self.client.delete(
+            "/v1/admin/legal-hold/hold-tenant-bound?tenant_id=tenant-acme",
+            headers=self._admin_headers("tenant-other"),
+        )
+        self.assertEqual(cross_tenant.status_code, 403)
+
+        released = self.client.delete(
+            "/v1/admin/legal-hold/hold-tenant-bound?tenant_id=tenant-acme",
+            headers=self._admin_headers("tenant-acme"),
+        )
+        self.assertEqual(released.status_code, 200)
+
+    def test_integration_child_writes_hide_foreign_parents_and_do_not_reserve_ids(self) -> None:
+        tenant_a = "tenant-parent-api-a"
+        tenant_b = "tenant-parent-api-b"
+        connector_a = "connector-parent-api-a"
+        connector_b = "connector-parent-api-b"
+        for connector_id, tenant_id in (
+            (connector_a, tenant_a),
+            (connector_b, tenant_b),
+        ):
+            created = self.client.post(
+                "/v1/integrations/connectors",
+                json={
+                    "connector_id": connector_id,
+                    "tenant_id": tenant_id,
+                    "provider": "custom",
+                    "display_name": f"{tenant_id} connector",
+                    "auth_type": "api_key",
+                },
+                headers=self._admin_headers(tenant_id),
+            )
+            self.assertEqual(created.status_code, 200, created.text)
+
+        foreign_source = {
+            "source_id": "attacker-api-source",
+            "connector_id": connector_a,
+            "tenant_id": tenant_b,
+            "remote_source_id": "reserved-api-remote",
+            "source_type": "repository",
+            "display_name": "Foreign API source",
+        }
+        foreign_source_response = self.client.post(
+            f"/v1/integrations/connectors/{connector_a}/sources/batch?tenant_id={tenant_b}",
+            json={"sources": [foreign_source]},
+            headers=self._admin_headers(tenant_b),
+        )
+        self.assertEqual(foreign_source_response.status_code, 404)
+        self.assertEqual(foreign_source_response.json(), {"detail": "connector not found"})
+
+        missing_source_response = self.client.post(
+            f"/v1/integrations/connectors/missing-connector/sources/batch?tenant_id={tenant_b}",
+            json={"sources": [foreign_source]},
+            headers=self._admin_headers(tenant_b),
+        )
+        self.assertEqual(missing_source_response.status_code, foreign_source_response.status_code)
+        self.assertEqual(missing_source_response.json(), foreign_source_response.json())
+
+        owner_source = {
+            **foreign_source,
+            "source_id": "owner-api-source",
+            "tenant_id": tenant_a,
+            "display_name": "Owner API source",
+        }
+        owner_source_response = self.client.post(
+            f"/v1/integrations/connectors/{connector_a}/sources/batch?tenant_id={tenant_a}",
+            json={"sources": [owner_source]},
+            headers=self._admin_headers(tenant_a),
+        )
+        self.assertEqual(owner_source_response.status_code, 200, owner_source_response.text)
+        self.assertEqual(owner_source_response.json()[0]["source_id"], "owner-api-source")
+
+        foreign_mapping_response = self.client.post(
+            f"/v1/integrations/connectors/{connector_a}/principal-mappings/batch?tenant_id={tenant_b}",
+            json={
+                "mappings": [
+                    {
+                        "mapping_id": "foreign-api-mapping",
+                        "connector_id": connector_a,
+                        "tenant_id": tenant_b,
+                        "principal_type": "user",
+                        "local_principal_id": "local-user",
+                        "remote_principal_id": "remote-user",
+                    }
+                ]
+            },
+            headers=self._admin_headers(tenant_b),
+        )
+        self.assertEqual(foreign_mapping_response.status_code, 404)
+        self.assertEqual(foreign_mapping_response.json(), {"detail": "connector not found"})
+
+        foreign_job_response = self.client.post(
+            f"/v1/integrations/connectors/{connector_a}/sync-jobs?tenant_id={tenant_b}",
+            json={
+                "job_id": "foreign-api-job",
+                "connector_id": connector_a,
+                "tenant_id": tenant_b,
+                "job_type": "full",
+            },
+            headers=self._admin_headers(tenant_b),
+        )
+        self.assertEqual(foreign_job_response.status_code, 404)
+        self.assertEqual(foreign_job_response.json(), {"detail": "connector not found"})
+
+        foreign_grant_response = self.client.post(
+            f"/v1/integrations/connectors/{connector_b}/permissions/batch?tenant_id={tenant_b}",
+            json={
+                "grants": [
+                    {
+                        "grant_id": "foreign-api-grant",
+                        "source_id": owner_source["source_id"],
+                        "connector_id": connector_b,
+                        "tenant_id": tenant_b,
+                        "principal_type": "user",
+                        "principal_id": "tenant-b-user",
+                        "permission_level": "view",
+                    }
+                ]
+            },
+            headers=self._admin_headers(tenant_b),
+        )
+        self.assertEqual(foreign_grant_response.status_code, 404)
+        self.assertEqual(foreign_grant_response.json(), {"detail": "source not found"})
 
     def test_integration_plane_round_trip_and_coverage(self) -> None:
         headers = self._admin_headers()
@@ -4305,7 +4622,7 @@ class ProvenaApiTests(unittest.TestCase):
             ),
         ]
         for response in hostile_responses:
-            self.assertIn(response.status_code, {403, 409}, response.text)
+            self.assertIn(response.status_code, {403, 404, 409}, response.text)
             self.assertNotIn(owner_tenant, response.text)
 
         self.assertEqual(persistence_state(), state_before_attacks)

@@ -63,10 +63,10 @@ func TestComposeAuthExceptionIsLoopbackOnly(t *testing.T) {
 		t.Fatalf("read docker-compose.yml: %v", err)
 	}
 	compose := string(raw)
-	if !strings.Contains(compose, `127.0.0.1:${PROVENA_MCP_HOST_PORT:-8090}:8090`) {
+	if !strings.Contains(compose, `${PROVENA_MCP_HOST_BIND:-127.0.0.1}:${PROVENA_MCP_HOST_PORT:-8090}:8090`) {
 		t.Fatal("MCP Compose port must remain bound to loopback")
 	}
-	if !strings.Contains(compose, "PROVENA_MCP_REQUIRE_AUTH=false") {
-		t.Fatal("local Compose auth exception must stay explicit")
+	if strings.Contains(compose, "PROVENA_MCP_REQUIRE_AUTH=false") {
+		t.Fatal("Compose must preserve authenticated MCP by default")
 	}
 }

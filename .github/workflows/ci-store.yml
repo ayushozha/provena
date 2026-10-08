@@ -1,0 +1,173 @@
+name: Store
+
+on:
+  pull_request:
+    paths:
+      - "app/**"
+      - "storage/**"
+      - "tests/**"
+      - "intelligence/**"
+      - "control-plane/**"
+      - "orchestration/**"
+      - "sdk/**"
+      - "docker-compose.yml"
+      - "Dockerfile.store"
+      - ".env.example"
+      - "DEPLOYMENT.md"
+      - "README.md"
+      - "scripts/run_e2e.py"
+      - "scripts/verify_installed_wheel.py"
+      - "scripts/export_openapi.py"
+      - "openapi.json"
+      - "pyproject.toml"
+      - "requirements.lock"
+      - "uv.lock"
+      - ".github/workflows/ci-store.yml"
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "storage/**"
+      - "tests/**"
+      - "intelligence/**"
+      - "control-plane/**"
+      - "orchestration/**"
+      - "sdk/**"
+      - "docker-compose.yml"
+      - "Dockerfile.store"
+      - ".env.example"
+      - "DEPLOYMENT.md"
+      - "README.md"
+      - "scripts/run_e2e.py"
+      - "scripts/verify_installed_wheel.py"
+      - "scripts/export_openapi.py"
+      - "openapi.json"
+      - "pyproject.toml"
+      - "requirements.lock"
+      - "uv.lock"
+      - ".github/workflows/ci-store.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  wheel-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Build and install a noneditable wheel outside the checkout
+        run: |
+          python -m pip wheel --no-deps . --wheel-dir "$RUNNER_TEMP/provena-wheelhouse"
+          python -m venv "$RUNNER_TEMP/provena-wheel-env"
+          "$RUNNER_TEMP/provena-wheel-env/bin/python" -m pip install --require-hashes -r requirements.lock
+          "$RUNNER_TEMP/provena-wheel-env/bin/python" -m pip install --no-deps "$RUNNER_TEMP"/provena-wheelhouse/*.whl
+          "$RUNNER_TEMP/provena-wheel-env/bin/python" -I scripts/verify_installed_wheel.py
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PROVENA_ENVIRONMENT: test
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: provena
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d provena"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install store and test dependencies
+        run: python -m pip install -e ".[dev]" pytest
+      - name: Test SQLite store and API
+        run: python -m pytest -m "not postgres"
+      - name: Test real PostgreSQL store
+        run: python -m pytest -m postgres tests/test_postgres_store.py
+        env:
+          PROVENA_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/provena
+      - name: Verify checked-in OpenAPI schema
+        run: |
+          python scripts/export_openapi.py
+          git diff --exit-code -- openapi.json
+
+  intelligence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install intelligence and test dependencies
+        run: python -m pip install -e ./intelligence pytest
+      - name: Test request-scoped store authentication
+        run: python -m pytest intelligence/tests -q
+
+  control-plane:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: control-plane
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+          cache: false
+      - name: Test queue and control plane
+        run: go test ./...
+
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+      - name: Build the shipped Compose services
+        run: docker compose build
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PROVENA_ENVIRONMENT: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Install Python services
+        run: python -m pip install -e ".[dev]" -e ./intelligence pytest
+      - name: Run authenticated polyglot end-to-end verification
+        env:
+          PROVENA_E2E_TMP_DIR: ${{ runner.temp }}/provena-e2e
+        run: python scripts/run_e2e.py
+      - name: Verify end-to-end schema export is deterministic
+        run: git diff --exit-code -- openapi.json

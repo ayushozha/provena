@@ -3,6 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 COPY pyproject.toml /app/pyproject.toml
+COPY requirements.lock /app/requirements.lock
 COPY app /app/app
 COPY storage /app/storage
 
@@ -10,7 +11,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
+    && pip install --no-cache-dir --no-deps .
 
 ENV PYTHONPATH=/app
 

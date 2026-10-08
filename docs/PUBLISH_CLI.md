@@ -92,7 +92,7 @@ git push origin cli-v0.1.0
 ```
 
 The tag starts `.github/workflows/publish-cli.yml`. The workflow tests the
-declared minimum Node 18.14.1 plus Node 22 and Node 24, then publishes once from
+declared minimum Node 22.17.0 plus Node 22 and Node 24, then publishes once from
 Node 24 with provenance. Do not retag or reuse a released version; fix forward
 with the next `0.1.x` patch.
 

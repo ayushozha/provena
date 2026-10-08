@@ -170,7 +170,7 @@ async function exerciseHttpLauncher(executable, prefixArgs, cwd, label) {
     await client.connect(transport);
     assert.deepEqual(
       (await client.listTools()).tools.map((tool) => tool.name).sort(),
-      ["provena_context", "provena_graph_neighbors", "provena_graph_path", "provena_maintenance_context", "provena_maintenance_plan", "provena_refresh", "provena_remember"].sort(),
+      ["provena_context", "provena_graph_neighbors", "provena_graph_path", "provena_maintenance_context", "provena_maintenance_plan", "provena_procedure_learn", "provena_procedure_outcome", "provena_procedure_recall", "provena_refresh", "provena_remember"].sort(),
     );
     const brain = await client.readResource({ uri: "provena://repo/brain" });
     assert.match(brain.contents[0]?.text ?? "", /repo brain/i);

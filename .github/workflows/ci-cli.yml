@@ -13,6 +13,8 @@ on:
       - "intelligence/pyproject.toml"
       - "openapi.json"
       - "pyproject.toml"
+      - "requirements.lock"
+      - "uv.lock"
       - "Dockerfile.store"
       - ".dockerignore"
       - ".github/workflows/ci-cli.yml"
@@ -29,8 +31,11 @@ on:
       - "intelligence/pyproject.toml"
       - "openapi.json"
       - "pyproject.toml"
+      - "requirements.lock"
+      - "uv.lock"
       - "Dockerfile.store"
       - ".dockerignore"
+      - ".github/workflows/ci-cli.yml"
 
 jobs:
   test:
@@ -40,17 +45,18 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        node: ["22.17.0", "24.x"]
     defaults:
       run:
         working-directory: cli
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "20"
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: cli/package-lock.json
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - run: pip install -e ..
@@ -75,8 +81,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -101,7 +107,7 @@ jobs:
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build governed store image
         run: docker build --file Dockerfile.store --tag provena-store:ci .
       - name: Start store and verify health

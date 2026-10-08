@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69", "wheel>=0.43"]
+requires = ["setuptools>=84.0.0,<85"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Publishable Python SDK for integrating with the Provena governed memory plane."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["httpx>=0.27.0,<1.0.0"]
+dependencies = ["httpx>=0.28.1,<1.0.0"]
 keywords = ["provena", "memory-plane", "sdk", "python"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -20,9 +20,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ayushozha/portfolio-generator/tree/main/services/provena"
-Repository = "https://github.com/ayushozha/portfolio-generator"
-Issues = "https://github.com/ayushozha/portfolio-generator/issues"
+Homepage = "https://github.com/ayushozha/provena/tree/main/sdk/python"
+Repository = "https://github.com/ayushozha/provena"
+Issues = "https://github.com/ayushozha/provena/issues"
 
 [project.scripts]
 provena-sdk-smoke = "provena_sdk.smoke:main"

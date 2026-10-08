@@ -14,6 +14,7 @@ import { runHarnessCommand } from "./commands/harness.js";
 import { runIndexCommand } from "./commands/index.js";
 import { runInit } from "./commands/init.js";
 import { runMaintainCommand } from "./commands/maintain.js";
+import { runProcedureCommand } from "./commands/procedure.js";
 import { runMcpCommand } from "./commands/mcp.js";
 import { runRefreshCommand } from "./commands/refresh.js";
 import { runRememberCommand } from "./commands/remember.js";
@@ -38,6 +39,7 @@ const COMMANDS = [
   ["context", "Build a compact cited task-context packet"],
   ["maintain", "List deterministic review proposals or compile one task packet"],
   ["remember", "Append an explicit durable memory to the repo ledger"],
+  ["procedure", "Learn, review, and recall evidence-backed procedures and outcomes"],
   ["checkpoint", "Record a handoff and refresh the brain"],
   ["status", "Show freshness, memory, daemon, and integration health"],
   ["session", "Start an agent session against the current repo brain"],
@@ -114,6 +116,8 @@ function runConfigCommand(args: string[]): number {
 
 async function dispatch(command: string, args: string[]): Promise<number> {
   switch (command) {
+    case "procedure":
+      return runProcedureCommand(args);
     case "init":
       return runInitCommand(args);
     case "refresh":

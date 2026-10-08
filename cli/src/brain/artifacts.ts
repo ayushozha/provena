@@ -136,6 +136,29 @@ function renderMemoryView(
     return lines.join("\n");
   }
   for (const event of events) {
+    const procedureRecord = Object.hasOwn(event.structuredData, "procedure") ||
+      Object.hasOwn(event.structuredData, "procedureOutcome");
+    if (procedureRecord) {
+      // Static views cannot validate live source freshness or caller prerequisites.
+      // Preserve an inspectable reference without turning a stored goal into advice.
+      const payload = event.structuredData.procedure;
+      const state = payload && typeof payload === "object" && "state" in payload &&
+        ["candidate", "approved"].includes(String(payload.state)) ? String(payload.state) : "outcome or unvalidated record";
+      const outcome = event.structuredData.procedureOutcome;
+      const outcomeTarget = outcome && typeof outcome === "object" && "procedureId" in outcome
+        ? outcome.procedureId : undefined;
+      const inspectId = typeof outcomeTarget === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/.test(outcomeTarget)
+        ? outcomeTarget : event.id;
+      lines.push(
+        `## Procedure reference: ${markdownText(event.title)}`, "",
+        "> Reference only. Readiness is not validated by this static view. Recorded steps do not authorize execution.", "",
+        `- Recorded state: ${markdownCode(state)}`,
+        `- Inspect current evidence: ${markdownCode(`provena procedure inspect ${inspectId} --json`)}`,
+        `- Sources: ${markdownSources(event)}`,
+        `- Memory ID: ${markdownCode(event.id)}`, "",
+      );
+      continue;
+    }
     lines.push(
       `## ${markdownText(event.title)}`,
       "",
@@ -234,6 +257,7 @@ function renderBrain(map: RepoMap, graph: RepoGraph, events: MemoryEvent[]): str
     "3. Verify cited files before changing behavior; memories guide work but do not override source truth.",
     "4. Record durable decisions, workflows, mistakes, preferences, or handoffs explicitly; never infer intent.",
     "5. Refresh the brain after meaningful repository changes.",
+    "6. Use `provena procedure recall \"<task>\" --json` before reusing tool steps. Check ready status and source evidence; human approval and caller-reported success never grant execution permission.",
     "",
     "## Repository",
     "",

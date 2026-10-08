@@ -115,6 +115,9 @@ export const MAX_CONTEXT_MEMORY_IDS = 32;
 const MEMORY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
 const MEMORY_IDS_ERROR =
   `memoryIds must contain at most ${MAX_CONTEXT_MEMORY_IDS} valid memory IDs`;
+const QUERY_STOP_WORDS = new Set(
+  "a an the to for of in on with and or is are it this that how what do does can should i me my we our use using please task".split(" "),
+);
 
 function normalized(values: string[] | undefined): Set<string> {
   return new Set(
@@ -142,7 +145,13 @@ function tokens(value: string): Set<string> {
       .toLowerCase()
       .split(/[^a-z0-9_./:@-]+/)
       .map((token) => token.trim())
-      .filter((token) => token.length > 1),
+      .filter((token) => token.length > 1 && !QUERY_STOP_WORDS.has(token))
+      .flatMap((token) => {
+        // Pair common action nouns with their code verbs, e.g. authentication
+        // and authenticate, without treating short words or paths as stems.
+        const stem = /^[a-z]{6,}$/.test(token) ? token.replace(/(?:ion|e)$/, "") : token;
+        return stem.length >= 5 && stem !== token ? [token, stem] : [token];
+      }),
   );
 }
 
@@ -269,13 +278,14 @@ export function buildContextPacket(
   );
   const candidates: ContextItem[] = [];
   const seedIds = new Set<string>();
+  const relevantMemoryIds = new Set<string>();
   const exactTiers = new Map<string, number>();
   const tierKey = (type: ContextItem["type"], id: string): string =>
     `${type}\u0000${id}`;
 
   for (const file of map.files) {
     const path = file.path.toLowerCase();
-    let score = graphScores[file.id] ?? 0;
+    let score = 0;
     if (exactPaths.has(path)) {
       score += 1_000;
       seedIds.add(file.id);
@@ -287,7 +297,8 @@ export function buildContextPacket(
       exactTiers.set(tierKey("file", file.id), 4);
     }
     score += overlap(queryTokens, `${file.path} ${file.kind} ${file.language ?? ""}`) * 45;
-    if (score <= 0 && queryTokens.size > 0) continue;
+    if (score > 0) seedIds.add(file.id);
+    score += graphScores[file.id] ?? 0;
     candidates.push({
       id: file.id,
       type: "file",
@@ -300,7 +311,7 @@ export function buildContextPacket(
 
   for (const symbol of map.symbols) {
     const name = symbol.name.toLowerCase();
-    let score = graphScores[symbol.id] ?? 0;
+    let score = 0;
     if (exactSymbols.has(name) || exactSymbols.has(`${symbol.path}:${name}`)) {
       score += 950;
       seedIds.add(symbol.id);
@@ -312,7 +323,8 @@ export function buildContextPacket(
       exactTiers.set(tierKey("symbol", symbol.id), 3);
     }
     score += overlap(queryTokens, `${symbol.name} ${symbol.kind} ${symbol.path}`) * 55;
-    if (score <= 0 && queryTokens.size > 0) continue;
+    if (score > 0) seedIds.add(symbol.id);
+    score += graphScores[symbol.id] ?? 0;
     candidates.push({
       id: symbol.id,
       type: "symbol",
@@ -325,7 +337,7 @@ export function buildContextPacket(
 
   for (const command of map.commands) {
     const keys = [command.name, command.command].map((value) => value.toLowerCase());
-    let score = graphScores[command.id] ?? 0;
+    let score = 0;
     if (keys.some((value) => exactCommands.has(value))) {
       score += 900;
       seedIds.add(command.id);
@@ -337,7 +349,8 @@ export function buildContextPacket(
       exactTiers.set(tierKey("command", command.id), 2);
     }
     score += overlap(queryTokens, `${command.name} ${command.command} ${command.cwd}`) * 50;
-    if (score <= 0 && queryTokens.size > 0) continue;
+    if (score > 0) seedIds.add(command.id);
+    score += graphScores[command.id] ?? 0;
     candidates.push({
       id: command.id,
       type: "command",
@@ -349,7 +362,7 @@ export function buildContextPacket(
   }
 
   for (const variable of map.environmentVariables ?? []) {
-    let score = graphScores[variable.id] ?? 0;
+    let score = 0;
     if (query && query.toLowerCase() === variable.name.toLowerCase()) {
       score += 825;
       seedIds.add(variable.id);
@@ -358,7 +371,8 @@ export function buildContextPacket(
       queryTokens,
       `${variable.name} ${variable.sources.join(" ")}`,
     ) * 50;
-    if (score <= 0 && queryTokens.size > 0) continue;
+    if (score > 0) seedIds.add(variable.id);
+    score += graphScores[variable.id] ?? 0;
     candidates.push({
       id: variable.id,
       type: "environment",
@@ -371,13 +385,16 @@ export function buildContextPacket(
 
   for (const memory of activeMemoryEventsAt(events, memoryAsOf)) {
     if (!input.includeSensitive && ["confidential", "restricted"].includes(memory.sensitivity)) continue;
+    // Procedure guidance and its outcome claims require the separate recall
+    // path's approval, exact-version evidence, freshness, and prerequisite gates.
+    if (Object.hasOwn(memory.structuredData, "procedure") ||
+        Object.hasOwn(memory.structuredData, "procedureOutcome")) continue;
     // The current repo-map command already carries the same invocation and
     // source citation. Keep the managed event in the durable ledger/history,
     // but do not spend compact packet budget on a duplicate live item.
     if (duplicatesCurrentCommand(memory, map) && !exactMemoryIds.has(memory.id)) continue;
     const graphId = memoryGraphIds.get(memory.id);
-    let score = (graphId ? graphScores[graphId] ?? 0 : 0) +
-      memory.importance * 30 + memory.confidence * 15;
+    let score = 0;
     if (exactMemoryIds.has(memory.id)) {
       score += 1_100;
       exactTiers.set(tierKey("memory", memory.id), 5);
@@ -393,7 +410,12 @@ export function buildContextPacket(
       queryTokens,
       `${memory.title} ${memory.body} ${memory.kind} ${memory.tags.join(" ")} ${memory.triggers.join(" ")} ${memory.appliesTo.join(" ")}`,
     ) * 60;
-    if (score <= 0 && queryTokens.size > 0) continue;
+    if (score > 0) {
+      relevantMemoryIds.add(memory.id);
+      if (graphId) seedIds.add(graphId);
+    }
+    score += (graphId ? graphScores[graphId] ?? 0 : 0) +
+      memory.importance * 30 + memory.confidence * 15;
     candidates.push({
       id: memory.id,
       type: "memory",
@@ -427,7 +449,17 @@ export function buildContextPacket(
     if (graphNeighbors.has(graphId) && !seedIds.has(graphId)) candidate.score += 20;
   }
 
-  candidates.sort(
+  const overview = !query &&
+    exactPaths.size === 0 && exactSymbols.size === 0 &&
+    exactCommands.size === 0 && exactMemoryIds.size === 0;
+  const eligibleCandidates = candidates.filter((candidate) => {
+    const graphId = candidate.type === "memory"
+      ? memoryGraphIds.get(candidate.id) ?? candidate.id
+      : candidate.id;
+    return overview || seedIds.has(graphId) || graphNeighbors.has(graphId) ||
+      (candidate.type === "memory" && relevantMemoryIds.has(candidate.id));
+  });
+  eligibleCandidates.sort(
     (a, b) =>
       (exactTiers.get(tierKey(b.type, b.id)) ?? 0) -
         (exactTiers.get(tierKey(a.type, a.id)) ?? 0) ||
@@ -495,7 +527,7 @@ export function buildContextPacket(
   }
   const packetWith = (selected: ContextItem[], truncated: boolean): ContextPacket =>
     createPacket(selected, truncated || queryTruncated, renderedQuery);
-  for (const candidate of candidates) {
+  for (const candidate of eligibleCandidates) {
     if (items.length >= maxItems) break;
     if (packetWith([...items, candidate], true).budget.usedCharacters <= maxCharacters) {
       items.push(candidate);
@@ -525,7 +557,7 @@ export function buildContextPacket(
     break;
   }
 
-  return packetWith(items, items.length < candidates.length);
+  return packetWith(items, items.length < eligibleCandidates.length);
 }
 
 export function renderContextPacketMarkdown(packet: ContextPacket): string {

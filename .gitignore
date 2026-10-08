@@ -1,5 +1,8 @@
 __pycache__/
+build/
+*.egg-info/
 *.pyc
+.env
 .cache/
 .codex-cache/
 .codex-temp/
@@ -17,6 +20,7 @@ cli/dist/
 cli/node_modules/
 cli/*.tgz
 sdk/typescript/dist/
+sdk/typescript/node_modules/
 sdk/typescript/*.tgz
 sdk/python/.build-tmp/
 sdk/python/build/

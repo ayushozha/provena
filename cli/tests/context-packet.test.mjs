@@ -89,6 +89,78 @@ assert(markdown.includes("package.json"));
 assert(markdown.includes("Memory: current; repository topology: current"));
 assert(!markdown.includes("C:\\"));
 
+// Importance, confidence, and topology are ranking priors, not task evidence.
+const unrelated = buildContextPacket(map, graph, memory, {
+  query: "astronomy blackholes",
+  maxTokens: 3_000,
+});
+assert.deepEqual(unrelated.items, [], "unrelated queries must abstain across every candidate type");
+assert.equal(unrelated.budget.truncated, false);
+assert.deepEqual(buildContextPacket(map, graph, memory, {
+  query: "please explain how to use astronomy blackholes",
+}).items, [], "request boilerplate must not make unrelated workflow advice relevant");
+assert.deepEqual(
+  buildContextPacket(map, graph, memory, { query: "!!!", maxTokens: 3_000 }).items,
+  [],
+  "a nonempty query without searchable tokens is not a bootstrap overview",
+);
+assert.deepEqual(
+  buildContextPacket(map, graph, memory, { paths: ["src/absent.ts"], maxTokens: 3_000 }).items,
+  [],
+  "an unmatched exact selector must not silently retrieve the whole repo",
+);
+
+const direct = buildContextPacket(map, graph, memory, { query: "src/app.ts", graphHops: 0 });
+assert(direct.items.some((item) => item.id === "file-app"));
+assert(!direct.items.some((item) => item.id === "file-util"), "an unseeded dependency needs graph evidence");
+const expanded = buildContextPacket(map, graph, memory, { query: "src/app.ts", graphHops: 1 });
+assert(expanded.items.some((item) => item.id === "file-util"), "relevant code may bring its direct dependency");
+assert(expanded.items.some((item) => item.id === "memory-workflow"), "a cited workflow may follow its relevant source");
+assert(!expanded.items.some((item) => item.id === "cmd:test"), "unrelated central nodes must not pass the graph gate");
+assert(buildContextPacket(map, graph, memory, {}).items.length > 0, "empty-query bootstrap remains available");
+const exactDespiteUnrelatedQuery = buildContextPacket(map, graph, memory, {
+  query: "astronomy blackholes",
+  memoryIds: ["memory-workflow"],
+  graphHops: 0,
+});
+assert.deepEqual(exactDespiteUnrelatedQuery.items.map((item) => item.id), ["memory-workflow"]);
+
+const reservedEvents = [
+  { ...events[0], id: "candidate-procedure", title: "Candidate application guidance", body: "Use unreviewed application guidance.", structuredData: { procedure: { state: "candidate" } } },
+  { ...events[0], id: "stale-approved-procedure", title: "Stale application guidance", body: "Use outdated application guidance.", structuredData: { procedure: { state: "approved" } }, sources: [{ path: "src/app.ts", blob: "sha256:" + "0".repeat(64) }] },
+  { ...events[0], id: "failed-procedure-outcome", kind: "mistake", title: "Failed application guidance", body: "The application goal failed.", structuredData: { procedureOutcome: { outcome: "failure" } } },
+  { ...events[0], id: "old-success-procedure-outcome", kind: "fact", title: "Application procedure success", body: "Historical application success claim.", structuredData: { procedureOutcome: { outcome: "success" } } },
+];
+const reservedMemory = ledgerSnapshot([...events, ...reservedEvents]);
+const reservedGraph = buildRepoGraph(map, reservedMemory);
+for (const query of [
+  { query: "application guidance", paths: ["src/app.ts"] },
+  { memoryIds: reservedEvents.map((event) => event.id) },
+  {},
+]) {
+  const ordinary = buildContextPacket(map, reservedGraph, reservedMemory, query);
+  assert(!ordinary.items.some((item) => reservedEvents.some((event) => event.id === item.id)),
+    "generic context must not bypass procedure gates through query, graph, exact ID, or overview");
+}
+assert(buildContextPacket(map, reservedGraph, reservedMemory, { memoryIds: ["memory-workflow"] })
+  .items.some((item) => item.id === "memory-workflow"), "ordinary source workflows remain available");
+
+const authenticationMap = {
+  ...map,
+  symbols: [{ id: "symbol-authenticate", path: "src/app.ts", name: "authenticate", kind: "function", line: 1, exported: true }],
+};
+authenticationMap.sourceFingerprint = repoMapSourceFingerprint(authenticationMap);
+const authenticationGraph = buildRepoGraph(authenticationMap, memory);
+const authentication = buildContextPacket(authenticationMap, authenticationGraph, memory, {
+  query: "authentication",
+  maxTokens: 256,
+});
+assert(authentication.items.some((item) => item.citations.some((citation) => citation.path === "src/app.ts")),
+  "action nouns must retrieve their cited code verb within a compact budget");
+assert.deepEqual(buildContextPacket(authenticationMap, authenticationGraph, memory, {
+  query: "astronomy blackholes", maxTokens: 256,
+}).items, [], "lexical morphology must preserve unrelated-task abstention");
+
 const clipped = buildContextPacket(map, graph, memory, {
   query: "run test app",
   maxCharacters: 256,

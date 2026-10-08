@@ -10,6 +10,7 @@
 CREATE TABLE IF NOT EXISTS memories (
     memory_id       TEXT PRIMARY KEY,
     fingerprint     TEXT NOT NULL UNIQUE,
+    create_request_digest TEXT,
     kind            TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'active',
     -- Tenant isolation: every row scoped to tenant
@@ -366,6 +367,7 @@ CREATE TABLE IF NOT EXISTS connectors (
 CREATE INDEX IF NOT EXISTS idx_connectors_tenant ON connectors(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_connectors_provider ON connectors(provider);
 CREATE INDEX IF NOT EXISTS idx_connectors_status ON connectors(status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_connectors_id_tenant ON connectors(connector_id, tenant_id);
 
 CREATE TABLE IF NOT EXISTS connector_sources (
     source_id          TEXT PRIMARY KEY,
@@ -383,12 +385,15 @@ CREATE TABLE IF NOT EXISTS connector_sources (
     created_at         TEXT NOT NULL,
     updated_at         TEXT NOT NULL,
     UNIQUE(connector_id, remote_source_id),
-    FOREIGN KEY(connector_id) REFERENCES connectors(connector_id) ON DELETE CASCADE
+    CONSTRAINT fk_connector_sources_connector_tenant
+        FOREIGN KEY(connector_id, tenant_id) REFERENCES connectors(connector_id, tenant_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_connector_sources_connector ON connector_sources(connector_id);
 CREATE INDEX IF NOT EXISTS idx_connector_sources_tenant ON connector_sources(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_connector_sources_status ON connector_sources(status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_connector_sources_id_connector_tenant
+    ON connector_sources(source_id, connector_id, tenant_id);
 
 CREATE TABLE IF NOT EXISTS principal_mappings (
     mapping_id            TEXT PRIMARY KEY,
@@ -403,7 +408,8 @@ CREATE TABLE IF NOT EXISTS principal_mappings (
     created_at            TEXT NOT NULL,
     updated_at            TEXT NOT NULL,
     UNIQUE(connector_id, principal_type, local_principal_id, remote_principal_id),
-    FOREIGN KEY(connector_id) REFERENCES connectors(connector_id) ON DELETE CASCADE
+    CONSTRAINT fk_principal_mappings_connector_tenant
+        FOREIGN KEY(connector_id, tenant_id) REFERENCES connectors(connector_id, tenant_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_principal_mappings_connector ON principal_mappings(connector_id);
@@ -421,8 +427,11 @@ CREATE TABLE IF NOT EXISTS source_permission_grants (
     remote_permission_id  TEXT,
     created_at            TEXT NOT NULL,
     UNIQUE(source_id, principal_type, principal_id, permission_level),
-    FOREIGN KEY(source_id) REFERENCES connector_sources(source_id) ON DELETE CASCADE,
-    FOREIGN KEY(connector_id) REFERENCES connectors(connector_id) ON DELETE CASCADE
+    CONSTRAINT fk_source_permission_grants_source_tenant
+        FOREIGN KEY(source_id, connector_id, tenant_id)
+        REFERENCES connector_sources(source_id, connector_id, tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_source_permission_grants_connector_tenant
+        FOREIGN KEY(connector_id, tenant_id) REFERENCES connectors(connector_id, tenant_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_source_permission_source ON source_permission_grants(source_id);
@@ -441,7 +450,8 @@ CREATE TABLE IF NOT EXISTS sync_jobs (
     started_at         TEXT,
     finished_at        TEXT,
     created_at         TEXT NOT NULL,
-    FOREIGN KEY(connector_id) REFERENCES connectors(connector_id) ON DELETE CASCADE
+    CONSTRAINT fk_sync_jobs_connector_tenant
+        FOREIGN KEY(connector_id, tenant_id) REFERENCES connectors(connector_id, tenant_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_connector ON sync_jobs(connector_id);

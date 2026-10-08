@@ -1,3 +1,3 @@
-module github.com/ayushozha/portfolio-generator/services/provena/sdk/go
+module github.com/ayushozha/provena/sdk/go
 
 go 1.26.0
