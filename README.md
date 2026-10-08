@@ -2,7 +2,7 @@
 
 [![npm release](https://img.shields.io/badge/npm-first%20release%20pending-lightgrey)](./docs/PUBLISH_CLI.md)
 [![CLI CI](https://github.com/ayushozha/provena/actions/workflows/ci-cli.yml/badge.svg)](https://github.com/ayushozha/provena/actions/workflows/ci-cli.yml)
-[![Node.js 18.14+](https://img.shields.io/badge/node-%3E%3D18.14.1-43853d)](./cli/package.json)
+[![Node.js 22.17+](https://img.shields.io/badge/node-%3E%3D22.17.0-43853d)](./cli/package.json)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20%2B%20local%20HTTP-6f42c1)](./docs/REPO_MEMORY_ARCHITECTURE.md#mcp-surface)
 
 **A living, provenance-first repository memory for coding agents.**
@@ -43,6 +43,7 @@ daemon.
 |---|---|
 | One-click repo brain | Implemented and packed-install tested; install from a source-built tarball until the first npm release |
 | Durable memory | Implemented as a validated append-only JSONL event ledger with derived views |
+| Procedural memory | Structured candidate capture, explicit human approval, exact-version caller outcome receipts, source freshness, relevance, abstention, and bounded CLI/MCP recall; automatic trace capture and agent execution benchmarks remain roadmap |
 | Repo graph | Implemented with stable nodes/edges, PageRank, degree, components, neighborhoods, and shortest paths |
 | Agent context | Implemented with exact path/symbol/command ranking, lexical + graph expansion, citations, and hard budgets |
 | Maintenance proposals | Implemented as a manifest-attested deterministic plan plus cited task packets; review-only, with no autonomous execution or apply path |
@@ -117,6 +118,12 @@ npx provena checkpoint --summary "Auth change implemented and tests pass" `
 npx provena harness verify
 ```
 
+For reusable tool sequences, follow the [procedure lifecycle](./docs/PROCEDURAL_MEMORY.md):
+capture a structured episode, review it with `provena procedure inspect`, approve
+the exact version manually, and record a goal-verification receipt. Use
+`provena procedure recall "<task>" --json` before reuse. Success receipts are
+caller attestations to verify; stored steps do not grant tool permissions.
+
 ## The repo-brain contract
 
 Tracked, clone-portable memory:
@@ -158,7 +165,7 @@ Git hooks. Existing conflicting MCP entries and unsupported hooks are preserved
 and reported.
 
 In the current checkout, `npm pack --dry-run --json` reports an archive of
-about 10 MB and about 78 MB unpacked (128 bundled production packages). The
+about 11 MB and about 86 MB unpacked (113 bundled production packages). The
 ignored `.provena/runtime/` footprint is therefore materially larger than the
 tracked brain; exact size changes with the dependency lockfile.
 
@@ -213,6 +220,7 @@ and can supersede earlier events without rewriting history.
 | `provena maintain plan [--limit N]` | Refresh once, then list a bounded view of deterministic review proposals |
 | `provena maintain context <task-id>` | Refresh once, then compile one cited proposal packet under the requested token budget |
 | `provena remember` | Append an explicit typed memory |
+| `provena procedure learn\|approve\|outcome\|recall\|inspect` | Capture, review, attest, and retrieve structured procedures with current evidence |
 | `provena checkpoint` | Record a source-aware handoff |
 | `provena session start` | Refresh, persist local session state, and emit boot context |
 | `provena status` | Report freshness, memories, daemon, and integrations |
@@ -227,7 +235,7 @@ and can supersede earlier events without rewriting history.
 ## MCP surface
 
 The default local stdio server exposes five resources for the brain, map, graph,
-manifest, and public/internal active memories, plus these seven tools:
+manifest, and public/internal active memories, plus these ten tools:
 
 - `provena_context`
 - `provena_refresh`
@@ -236,6 +244,13 @@ manifest, and public/internal active memories, plus these seven tools:
 - `provena_graph_path`
 - `provena_maintenance_plan` (read-only bounded plan view)
 - `provena_maintenance_context` (read-only cited task packet)
+- `provena_procedure_learn` (candidate capture)
+- `provena_procedure_outcome` (caller-reported result)
+- `provena_procedure_recall` (read-only eligibility and freshness checks)
+
+Human procedure approval is an explicit local CLI action. The MCP server does
+not expose an approval tool. See [procedural memory](./docs/PROCEDURAL_MEMORY.md)
+for schemas, budgets, compatibility limits, and evaluation evidence.
 
 The full attested artifact is `.provena/maintenance.plan.json`; the CLI and MCP
 plan listings return bounded view envelopes that reference the canonical plan
@@ -355,6 +370,7 @@ With the root and intelligence Python packages plus `pytest` installed in
 cd cli
 npm ci
 npm test
+node eval/procedure-behavior.mjs
 
 cd ..
 .\.venv\Scripts\python.exe scripts\run_e2e.py
@@ -366,7 +382,35 @@ regressions, and a packed tarball installed into a fresh consumer repository.
 The repository E2E runner adds the Python, Go, Rust, standalone, and polyglot
 contract checks.
 
+The frozen offline procedure fixture passes 13/13 lifecycle and eligibility
+cases, including unrelated-task abstention, source changes, failed outcomes,
+and constrained budgets. These are synthetic receipts, not executed coding-agent
+tasks or competitor measurements. We have not established a universal quality,
+cost, or latency advantage over Memorable, Mem0, Letta, Graphiti, or other systems.
+
 ## Configuration and lifecycle
+
+The default `development` environment explicitly permits the legacy local-only
+no-auth path. Non-local deployments require the tenant-bound service token
+documented in [DEPLOYMENT.md](./DEPLOYMENT.md).
+
+Polyglot deployments keep credentials separated: external API keys stop at the
+gateway; `PROVENA_GATEWAY_SERVICE_TOKEN` authenticates the private gateway
+transport at intelligence, store, and lifecycle ingress; `PROVENA_QUEUE_INGRESS_TOKEN` authenticates queue callers but is
+never used for downstream writes; and each lifecycle process has a distinct
+admin service token bound to one tenant. Copy [.env.example](./.env.example)
+and replace every blank credential through your secret manager before enabling
+production authentication or the queue.
+
+Hosted intelligence search budgets count memory content using a conservative
+four-character token estimate rounded up. They exclude response metadata and
+citations. Portable procedure recall instead bounds its complete serialized JSON;
+neither estimate is a provider tokenizer measurement.
+
+```powershell
+$env:PROVENA_DB_PATH = ".\\data\\provena.db"
+python -m uvicorn app.main:app --reload --port 8092
+```
 
 `.provena/config.json` records the repository UUID, tenant/project identity,
 schema version, optional-store URL/database path, the fixed non-secret
@@ -385,6 +429,61 @@ refresh artifacts. To remove Provena, stop the daemon, remove its managed
 instruction/config/hook blocks, uninstall `@provena/cli`, and delete `.provena/`
 only after preserving any ledger events you still need. Dedicated automated
 `upgrade` and `uninstall` commands are roadmap.
+
+The packaged Compose stack keeps the store's internal port `8000` private and
+publishes host ports `50051`, `8080`, `8081`, `8090`, `8091`, and `8092` on
+`127.0.0.1` by default. Each published address and port is overrideable for an
+operator-managed deployment. Set the matching `*_HOST_BIND` and `*_HOST_PORT`
+environment variables before `docker compose up`, for example:
+
+```powershell
+$env:PROVENA_GATEWAY_HOST_BIND = "127.0.0.1"
+$env:PROVENA_GATEWAY_HOST_PORT = "18080"
+docker compose up --build -d
+```
+
+MCP follows the same loopback-safe default. Expose it beyond the local host only
+when gateway authentication and external network policy are already in place.
+
+### Private NeverZero integration
+
+NeverZero's coordination worker talks directly to the store so deterministic
+memory IDs survive projection. Provena Compose creates the shared bridge
+network and NeverZero joins it as an external network; Provena advertises only the private
+`provena-store:8000` alias on that network. The store still has no host port.
+
+Start the Provena store first to create the network, then start NeverZero's
+worker from the NeverZero checkout:
+
+```powershell
+# In the Provena checkout; configure .env first.
+docker compose up --build -d store
+
+# In the NeverZero checkout; use the same network, token, and tenant in .env.
+docker compose --profile coordination up --build -d coordination-worker
+```
+
+The matching variables are:
+
+- `PROVENA_INTEGRATION_NETWORK=neverzero-provena` in both repositories;
+- Provena `PROVENA_SERVICE_TOKEN` = NeverZero `PROVENA_API_KEY`;
+- Provena `PROVENA_SERVICE_TENANT_ID` = NeverZero `PROVENA_TENANT_ID`;
+- Provena `PROVENA_SERVICE_PRINCIPAL_ID` = NeverZero
+  `PROVENA_SERVICE_PRINCIPAL`;
+- NeverZero `PROVENA_STORE_URL=http://provena-store:8000`.
+
+The single-token variables above are the smallest tenant-dedicated setup. A
+shared private store can instead set `PROVENA_SERVICE_IDENTITIES` to a JSON
+array of `{token_sha256, tenant_id, principal_id, role}` entries. Each
+NeverZero worker keeps its raw token in its secret manager and supplies the
+matching tenant; Provena stores only the token digest in configuration and
+ignores caller-supplied identity headers. Keep the shared network private.
+
+### Export OpenAPI
+
+```powershell
+python .\scripts\export_openapi.py
+```
 
 ## Privacy and security
 

@@ -189,6 +189,10 @@ class TestOpenAIEmbeddingProvider(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self._manager().generate("x")
 
+    def test_remote_provider_requires_an_explicit_model(self) -> None:
+        with self.assertRaisesRegex(ValueError, "PROVENA_INTEL_EMBEDDING_MODEL"):
+            EmbeddingManager(provider="openai", model_id="")
+
 
 class _FakeResp:
     def __init__(self, payload: dict, status: int = 200) -> None:
@@ -253,9 +257,9 @@ class TestLlmExtraction(unittest.TestCase):
             _openai_payload('{"facts":[{"content":"x is a fact here"}]}'),
             capture,
             base_url="http://other.test/v1",
-            model="qwen3",
+            model="configured-other-model",
         )
-        self.assertEqual(capture["json"]["model"], "qwen3")
+        self.assertEqual(capture["json"]["model"], "configured-other-model")
         self.assertTrue(capture["url"].startswith("http://other.test/v1"))
 
     def test_reads_reasoning_field_when_content_empty(self) -> None:
@@ -438,6 +442,7 @@ class TestWriteExtraction(unittest.TestCase):
         self.assertTrue(result.created)
         self.assertGreater(len(posted), 1)
         self.assertTrue(all(item.get("metadata", {}).get("extraction_source") == "add_only" for item in posted))
+        self.assertTrue(all("memory_id" not in item for item in posted))
 
     def test_mocked_llm_extraction(self) -> None:
         extractor = FactExtractor(_router())
@@ -481,6 +486,142 @@ class TestWriteExtraction(unittest.TestCase):
         self.assertEqual(len(posted), 2)
         self.assertEqual(result.memory.get("extraction_count"), 2)
 
+    def test_explicit_id_retry_bypasses_variable_extraction_and_uses_tombstone(self) -> None:
+        request = WriteRequest(
+            memory_id="deterministic-memory",
+            kind="fact",
+            scope={"tenant_id": "tenant-a"},
+            content="Durable retry state belongs to the store.",
+        )
+        posted: list[dict] = []
+
+        class VariableFactExtractor:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def extract(self, content: str, title: str = "") -> list[ExtractedFact]:
+                self.calls += 1
+                if self.calls == 1:
+                    return [
+                        ExtractedFact(content="first extracted fact"),
+                        ExtractedFact(content="second extracted fact"),
+                    ]
+                return [ExtractedFact(content="different retry fact")]
+
+        class DummyResponse:
+            status_code = 200
+            text = ""
+
+            def __init__(self, payload: dict) -> None:
+                self.payload = payload
+
+            def json(self) -> dict:
+                return self.payload
+
+        class DummyClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, **kwargs):
+                if url.endswith("/v1/memories/search"):
+                    return DummyResponse({"results": []})
+                posted.append(kwargs["json"])
+                status = "active" if len(posted) == 1 else "deleted"
+                return DummyResponse(
+                    {
+                        "created": len(posted) == 1,
+                        "memory": {
+                            "memory_id": "deterministic-memory",
+                            "status": status,
+                        },
+                    }
+                )
+
+        extractor = VariableFactExtractor()
+        pipeline = WritePipeline(
+            EmbeddingManager(),
+            ModelRouter(),
+            fact_extractor=extractor,  # type: ignore[arg-type]
+        )
+        with patch("app.write_pipeline.httpx.AsyncClient", return_value=DummyClient()):
+            first = asyncio.run(pipeline.process(request))
+            retry = asyncio.run(pipeline.process(request))
+
+        self.assertTrue(first.created)
+        self.assertFalse(retry.created)
+        self.assertEqual(retry.memory["status"], "deleted")
+        self.assertEqual(extractor.calls, 0)
+        self.assertEqual(
+            [payload.get("memory_id") for payload in posted],
+            ["deterministic-memory", "deterministic-memory"],
+        )
+        self.assertEqual(
+            [payload["content"] for payload in posted],
+            [request.content, request.content],
+        )
+
+    def test_store_assigns_ids_for_content_deduplicated_retries(self) -> None:
+        request = WriteRequest(
+            kind="fact",
+            scope={"tenant_id": "tenant-a"},
+            content="The durable store owns content deduplication.",
+        )
+        posted: list[dict] = []
+
+        class OneFactExtractor:
+            async def extract(self, content: str, title: str = "") -> list[ExtractedFact]:
+                return [ExtractedFact(content=content, title=title)]
+
+        class DummyResponse:
+            status_code = 200
+            text = ""
+
+            def __init__(self, created: bool) -> None:
+                self.created = created
+
+            def json(self) -> dict:
+                return {
+                    "created": self.created,
+                    "memory": {"memory_id": "store-generated-memory", "status": "active"},
+                }
+
+        class DummyClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, **kwargs):
+                if url.endswith("/v1/memories/search"):
+                    class SearchResponse:
+                        status_code = 200
+
+                        @staticmethod
+                        def json():
+                            return {"results": []}
+
+                    return SearchResponse()
+                posted.append(kwargs["json"])
+                return DummyResponse(created=len(posted) == 1)
+
+        pipeline = WritePipeline(
+            EmbeddingManager(),
+            ModelRouter(),
+            fact_extractor=OneFactExtractor(),  # type: ignore[arg-type]
+        )
+        with patch("app.write_pipeline.httpx.AsyncClient", return_value=DummyClient()):
+            first = asyncio.run(pipeline.process(request))
+            retry = asyncio.run(pipeline.process(request))
+
+        self.assertTrue(first.created)
+        self.assertFalse(retry.created)
+        self.assertEqual(len(posted), 2)
+        self.assertTrue(all("memory_id" not in payload for payload in posted))
+
 
 class TestWriteFailures(unittest.TestCase):
     def setUp(self) -> None:
@@ -509,7 +650,7 @@ class TestWriteFailures(unittest.TestCase):
 
         self.assertEqual(error.exception.status_code, 422)
 
-    def test_failed_write_does_not_poison_dedupe_cache(self) -> None:
+    def test_failed_write_retry_reaches_durable_store(self) -> None:
         request = WriteRequest(kind="fact", scope={"tenant_id": "tenant-a"}, content="retryable content")
 
         class FailingClient:

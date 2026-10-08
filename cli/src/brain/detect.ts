@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
+import { readdir, type Dirent } from "node:fs";
 import { readFile, lstat } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
-import fg from "fast-glob";
+import { glob, type GlobOptions } from "tinyglobby";
 import ignore from "ignore";
 import type {
   RepoCommand,
@@ -179,12 +180,12 @@ function isGeneratedPath(path: string): boolean {
 }
 
 async function fallbackCandidates(repoRoot: string): Promise<string[]> {
-  const paths = await fg("**/*", {
+  const paths = await strictGlob("**/*", {
     cwd: repoRoot,
     dot: true,
     followSymbolicLinks: false,
     onlyFiles: true,
-    suppressErrors: false,
+    expandDirectories: false,
     ignore: FALLBACK_IGNORES,
   });
   const matcher = ignore();
@@ -198,6 +199,29 @@ async function fallbackCandidates(repoRoot: string): Promise<string[]> {
     .map(toPosixPath)
     .filter((path) => !matcher.ignores(path))
     .sort(compareText);
+}
+
+// A partial directory walk must never be interpreted as deleted source files.
+// tinyglobby's default walker suppresses filesystem errors; preserve them here.
+async function strictGlob(
+  patterns: string | string[],
+  options: GlobOptions,
+): Promise<string[]> {
+  if ([...([patterns].flat()), ...([options.ignore ?? []].flat())].some((pattern) => pattern.includes("\0"))) {
+    throw new Error("repository patterns cannot contain NUL");
+  }
+  let enumerationError: NodeJS.ErrnoException | null = null;
+  const guardedRead = ((
+    path: string,
+    readOptions: { withFileTypes: true },
+    callback: (error: NodeJS.ErrnoException | null, entries: Dirent[]) => void,
+  ) => readdir(path, readOptions, (error, entries) => {
+    if (error) enumerationError = error;
+    callback(error, entries);
+  })) as typeof readdir;
+  const paths = await glob(patterns, { ...options, fs: { readdir: guardedRead } });
+  if (enumerationError) throw enumerationError;
+  return paths;
 }
 
 async function candidatePaths(repoRoot: string): Promise<string[]> {
@@ -221,14 +245,14 @@ async function configuredCandidatePaths(
 ): Promise<string[]> {
   const candidates = await candidatePaths(repoRoot);
   if (!options.includePatterns && !options.excludePatterns) return candidates;
-  const matches = await fg(
+  const matches = await strictGlob(
     options.includePatterns?.length ? options.includePatterns : ["**/*"],
     {
       cwd: repoRoot,
       dot: true,
       followSymbolicLinks: false,
       onlyFiles: true,
-      suppressErrors: false,
+      expandDirectories: false,
       ignore: options.excludePatterns ?? [],
     },
   );

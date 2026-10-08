@@ -130,12 +130,18 @@ func (ks *KeyStore) Validate(rawToken string) (*AuthContext, bool) {
 			if principalID == "" {
 				principalID = key.KeyID
 			}
+			groups := make([]string, 0, len(key.Groups))
+			for _, group := range key.Groups {
+				if group = strings.TrimSpace(group); group != "" {
+					groups = append(groups, group)
+				}
+			}
 			return &AuthContext{
 				KeyID:       key.KeyID,
 				TenantID:    key.TenantID,
 				Role:        key.Role,
 				PrincipalID: principalID,
-				Groups:      append([]string(nil), key.Groups...),
+				Groups:      groups,
 			}, true
 		}
 	}
@@ -147,6 +153,10 @@ func (ks *KeyStore) Validate(rawToken string) (*AuthContext, bool) {
 func AuthMiddleware(ks *KeyStore, authEnabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if (r.Method == http.MethodGet || r.Method == http.MethodHead) && (r.URL.Path == "/healthz" || r.URL.Path == "/readyz") {
+				next.ServeHTTP(w, r)
+				return
+			}
 			if !authEnabled {
 				ctx := context.WithValue(r.Context(), authContextKey, &AuthContext{
 					KeyID:       "anonymous",
@@ -223,6 +233,15 @@ func WritePermissionMiddleware(next http.Handler) http.Handler {
 		"/v1/agent/context",
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/admin/") {
+			ac, ok := FromContext(r.Context())
+			if !ok || !HasPermission(ac.Role, AdminPerm) {
+				http.Error(w, `{"error":"admin access required"}`, http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
 		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
 			next.ServeHTTP(w, r)
 			return

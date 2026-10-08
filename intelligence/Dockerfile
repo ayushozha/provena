@@ -2,19 +2,16 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+COPY pyproject.toml requirements.lock /app/
 COPY app /app/app
+COPY eval /app/eval
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir \
-    "fastapi>=0.116.0" \
-    "uvicorn>=0.35.0" \
-    "pydantic>=2.11.0" \
-    "pydantic-settings>=2.7.0" \
-    "httpx>=0.27.0" \
-    "numpy>=1.26.0"
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
+    && pip install --no-cache-dir --no-deps .
 
 ENV PYTHONPATH=/app
 

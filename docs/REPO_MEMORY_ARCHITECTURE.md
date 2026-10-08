@@ -105,7 +105,7 @@ legacy whole-folder ignore exists; unknown `.provena/` contents are not exposed
 automatically.
 
 Bundling makes the portable runtime registry-independent but not tiny. The
-current package dry run is about 10 MB compressed and 78 MB unpacked with 128
+current package dry run is about 11 MB compressed and 86 MB unpacked with 113
 production packages; release candidates must record the actual npm pack JSON
 because this footprint changes with the lockfile.
 
@@ -316,11 +316,12 @@ obey effective-time, sensitivity, citation, item, character, and token rules.
 
 Every normal refresh compiles `.provena/maintenance.plan.json` from the same
 committed repo map and exact raw-ledger snapshot used by the graph and manifest.
-The plan detects four review conditions only: an active memory with neither a
+The plan detects five review conditions: an active memory with neither a
 source nor scope, a source absent from a complete current map, a non-dot scope
-absent from a complete current map, and two or more active memories with the
+absent from a complete current map, a source SHA-256 that differs from its current
+mapped file hash, and two or more active memories with the
 same normalized kind, subject type, title, body, and scope. When a scan is
-incomplete, path-absence checks are deferred instead of producing stale-memory
+incomplete, path-absence and source-change checks are deferred instead of producing stale-memory
 advice.
 
 The compiler is linear in active events plus their source/scope references. It
@@ -392,8 +393,11 @@ Tools:
 - `provena_graph_path`
 - `provena_maintenance_plan` (read-only bounded plan view)
 - `provena_maintenance_context` (read-only cited task packet)
+- `provena_procedure_learn` (structured candidate capture)
+- `provena_procedure_outcome` (caller-reported outcome receipt)
+- `provena_procedure_recall` (read-only source-aware eligibility checks)
 
-The surface therefore remains five resources and now has seven tools over both
+The surface therefore remains five resources and now has ten tools over both
 stdio and loopback HTTP. Tools are scoped to the current repository. There is no delete or arbitrary
 command-execution tool. MCP exposes only public/internal active memories;
 confidential/restricted writes are rejected, as are likely credential-like

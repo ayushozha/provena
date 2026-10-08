@@ -29,6 +29,9 @@ const expectedTools = [
   "provena_graph_path",
   "provena_maintenance_context",
   "provena_maintenance_plan",
+  "provena_procedure_learn",
+  "provena_procedure_outcome",
+  "provena_procedure_recall",
   "provena_refresh",
   "provena_remember",
 ].sort();
@@ -652,6 +655,7 @@ try {
     name: "provena_context",
     arguments: {
       query: "HTTP_REPO_A_MARKER",
+      paths: ["src/repo-a-only.ts"],
       maxTokens: 512,
       cwd: repoB,
       repoRoot: repoB,

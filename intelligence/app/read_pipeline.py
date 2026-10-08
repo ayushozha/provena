@@ -38,6 +38,13 @@ def _with_combined(memory: ScoredMemory, combined: float) -> ScoredMemory:
     )
 
 
+def _is_procedure_record(record: dict[str, Any]) -> bool:
+    metadata = record.get("metadata") or {}
+    event = metadata.get("provena_event") if isinstance(metadata, dict) else None
+    structured = event.get("structured_data") if isinstance(event, dict) else None
+    return isinstance(structured, dict) and bool({"procedure", "procedureOutcome"}.intersection(structured))
+
+
 class ReadPipeline:
     """Orchestrates the full read/search path."""
 
@@ -68,8 +75,15 @@ class ReadPipeline:
             request.limit,
             query_embedding=request.query_embedding or None,
             access_headers=access_headers,
+            filters={
+                "kinds": request.kinds,
+                "tags": request.tags,
+                "entity_keys": request.entity_keys,
+                "include_deleted": request.include_deleted,
+                "include_relations": request.include_relations,
+            },
         )
-        ranked = await self._rerank(request.query, candidates)
+        ranked = await self._rerank(request.query, candidates, tier=request.model_tier)
         if ranked and ranked[0].combined < self.min_combined_score:
             return ReadSearchResponse(
                 results=[],
@@ -79,7 +93,7 @@ class ReadPipeline:
                 ),
                 budget_remaining=request.max_tokens,
             )
-        contradictions = await self._detect_contradictions(ranked)
+        contradictions = await self._detect_contradictions(ranked, tier=request.model_tier)
         trimmed, tokens_used = await self._apply_context_budget(ranked, request.max_tokens)
         citations = self._package_citations([self._citation_payload(memory) for memory in trimmed])
 
@@ -141,6 +155,7 @@ class ReadPipeline:
         vector_weight: float = 0.45,
         query_embedding: list[float] | None = None,
         access_headers: dict[str, str] | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> list[ScoredMemory]:
         resolved_embedding = query_embedding or self.embedding_manager.generate(query)
         fts_results = await self._fts_search(
@@ -149,6 +164,7 @@ class ReadPipeline:
             limit,
             resolved_embedding,
             access_headers=access_headers,
+            filters=filters,
         )
         if not fts_results:
             return []
@@ -190,6 +206,7 @@ class ReadPipeline:
         limit: int,
         query_embedding: list[float],
         access_headers: dict[str, str] | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> list[ScoredMemory]:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -200,7 +217,7 @@ class ReadPipeline:
                         "scope": scope,
                         "limit": limit,
                         "query_embedding": query_embedding,
-                        "include_relations": True,
+                        **(filters or {}),
                     },
                     headers=access_headers,
                 )
@@ -210,6 +227,10 @@ class ReadPipeline:
                 results: list[ScoredMemory] = []
                 for item in data.get("results", []):
                     memory = item.get("memory", {})
+                    if _is_procedure_record(memory):
+                        # Procedure eligibility belongs to the source-aware recall
+                        # API; raw store records are retained for explicit inspection.
+                        continue
                     results.append(
                         ScoredMemory(
                             memory_id=memory.get("memory_id", ""),
@@ -217,7 +238,8 @@ class ReadPipeline:
                             title=memory.get("title", ""),
                             memory=memory,
                             reasons=item.get("reasons", []),
-                            related_memories=item.get("related_memories", []),
+                            related_memories=[related for related in item.get("related_memories", [])
+                                              if not _is_procedure_record(related)],
                             fts_score=float(item.get("score", 0.0)),
                             combined=float(item.get("score", 0.0)),
                         )
@@ -253,23 +275,23 @@ class ReadPipeline:
         scored.sort(key=lambda item: item.vector_score, reverse=True)
         return scored[:limit]
 
-    async def _rerank(self, query: str, candidates: list[ScoredMemory]) -> list[ScoredMemory]:
+    async def _rerank(self, query: str, candidates: list[ScoredMemory], tier: ModelTier = ModelTier.BALANCED) -> list[ScoredMemory]:
         """Reorder candidates by relevance to the query. Uses the LLM to score
         relevance when configured; otherwise falls back to term-overlap."""
         if self.llm.enabled and candidates:
-            llm_ranked = await self._llm_rerank(query, candidates)
+            llm_ranked = await self._llm_rerank(query, candidates, tier=tier)
             if llm_ranked is not None:
                 return llm_ranked
         return self._rerank_heuristic(query, candidates)
 
     async def _llm_rerank(
-        self, query: str, candidates: list[ScoredMemory]
+        self, query: str, candidates: list[ScoredMemory], tier: ModelTier = ModelTier.BALANCED
     ) -> list[ScoredMemory] | None:
         # Ask the model to score each candidate 0..1 for relevance to the query.
         items = [{"id": m.memory_id, "content": m.content[:500]} for m in candidates]
         payload = await self.llm.chat_json(
             task="rerank",
-            tier=ModelTier.BALANCED,
+            tier=tier,
             system="You score how relevant each memory is to a search query. Reply with JSON only.",
             user=(
                 f"Query: {query}\n\nMemories (JSON): {json.dumps(items)}\n\n"
@@ -324,25 +346,25 @@ class ReadPipeline:
         return reranked
 
     async def _detect_contradictions(
-        self, memories: list[ScoredMemory]
+        self, memories: list[ScoredMemory], tier: ModelTier = ModelTier.BALANCED
     ) -> list[ContradictionPair]:
         """Find contradicting memory pairs. Uses the LLM to judge semantic
         contradiction when configured; otherwise falls back to the negation
         keyword heuristic."""
         if self.llm.enabled and len(memories) > 1:
-            llm_pairs = await self._llm_detect_contradictions(memories)
+            llm_pairs = await self._llm_detect_contradictions(memories, tier=tier)
             if llm_pairs is not None:
                 return llm_pairs
         return self._detect_contradictions_heuristic(memories)
 
     async def _llm_detect_contradictions(
-        self, memories: list[ScoredMemory]
+        self, memories: list[ScoredMemory], tier: ModelTier = ModelTier.BALANCED
     ) -> list[ContradictionPair] | None:
         items = [{"id": m.memory_id, "content": m.content[:500]} for m in memories]
         valid_ids = {m.memory_id for m in memories}
         payload = await self.llm.chat_json(
             task="classify",
-            tier=ModelTier.BALANCED,
+            tier=tier,
             system="You detect factual contradictions between memories. Reply with JSON only.",
             user=(
                 f"Memories (JSON): {json.dumps(items)}\n\n"
@@ -428,7 +450,7 @@ class ReadPipeline:
         candidates = [
             {
                 "memory_id": memory.memory_id,
-                "token_count": max(1, len(memory.content) // 4),
+                "token_count": max(1, (len(memory.content) + 3) // 4),
                 "score": memory.combined,
                 "importance": float(memory.memory.get("importance", 0.5)),
             }
@@ -449,16 +471,18 @@ class ReadPipeline:
                     data = response.json()
                     selected = set(data.get("selected_memory_ids", []))
                     trimmed = [memory for memory in memories if memory.memory_id in selected]
-                    return trimmed, int(data.get("memory_tokens", 0))
+                    tokens = sum(max(1, (len(memory.content) + 3) // 4) for memory in trimmed)
+                    if tokens <= max_tokens:
+                        return trimmed, tokens
         except Exception:
             pass
 
         result: list[ScoredMemory] = []
         token_count = 0
         for memory in memories:
-            estimated = max(1, len(memory.content) // 4)
+            estimated = max(1, (len(memory.content) + 3) // 4)
             if token_count + estimated > max_tokens:
-                break
+                continue
             result.append(memory)
             token_count += estimated
         return result, token_count

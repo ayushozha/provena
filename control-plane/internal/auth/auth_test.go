@@ -15,6 +15,7 @@ func hashToken(token string) string {
 }
 
 // keyStoreWith builds a KeyStore from the given keys via the env loader.
+
 func keyStoreWith(t *testing.T, keys []APIKey) *KeyStore {
 	t.Helper()
 	raw, err := json.Marshal(keys)
@@ -33,6 +34,7 @@ func keyStoreWith(t *testing.T, keys []APIKey) *KeyStore {
 // populates the AuthContext before WritePermission reads it. If the two are
 // reversed, WritePermission sees no context and silently allows every write --
 // the regression this test guards against.
+
 func chain(ks *KeyStore) http.Handler {
 	final := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -215,5 +217,93 @@ func TestAuthDisabledPreservesLocalIdentityHeaders(t *testing.T) {
 	}
 	if len(got.Groups) != 2 || got.Groups[0] != "local-group" || got.Groups[1] != "developers" {
 		t.Fatalf("groups: got %v, want local-mode headers", got.Groups)
+	}
+}
+
+func TestAdminRoutesRequireAdminPermissionForEveryMethod(t *testing.T) {
+	ks := keyStoreWith(t, []APIKey{
+		{KeyID: "v1", TenantID: "t1", Role: Viewer, HashedKey: hashToken("viewer-token")},
+		{KeyID: "e1", TenantID: "t1", Role: Editor, HashedKey: hashToken("editor-token")},
+		{KeyID: "a1", TenantID: "t1", Role: Admin, HashedKey: hashToken("admin-token")},
+	})
+	h := chain(ks)
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		for _, token := range []string{"viewer-token", "editor-token"} {
+			if rec := doRequest(h, method, "/v1/admin/retention-policies", token); rec.Code != http.StatusForbidden {
+				t.Fatalf("%s admin route with %s: got %d, want 403", method, token, rec.Code)
+			}
+		}
+		if rec := doRequest(h, method, "/v1/admin/retention-policies", "admin-token"); rec.Code != http.StatusOK {
+			t.Fatalf("admin %s: got %d, want 200", method, rec.Code)
+		}
+	}
+}
+
+func TestAuthMiddlewareUsesAPIKeyIdentityMetadata(t *testing.T) {
+	ks := keyStoreWith(t, []APIKey{{
+		KeyID:       "key-a",
+		TenantID:    "tenant-a",
+		Role:        Editor,
+		PrincipalID: "configured-principal",
+		Groups:      []string{" team-a ", "", "team-b"},
+		HashedKey:   hashToken("external-token"),
+	}})
+	var got AuthContext
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ac, ok := FromContext(r.Context())
+		if !ok {
+			t.Fatal("missing auth context")
+		}
+		got = *ac
+		got.Groups = append([]string(nil), ac.Groups...)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/memories/id", nil)
+	req.Header.Set("Authorization", "Bearer external-token")
+	req.Header.Set("X-Provena-Principal-Id", "attacker-principal")
+	req.Header.Set("X-Provena-Groups", "attacker-group")
+	rec := httptest.NewRecorder()
+	AuthMiddleware(ks, true)(next).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if got.PrincipalID != "configured-principal" {
+		t.Fatalf("principal = %q, want configured-principal", got.PrincipalID)
+	}
+	if len(got.Groups) != 2 || got.Groups[0] != "team-a" || got.Groups[1] != "team-b" {
+		t.Fatalf("groups = %#v, want configured metadata", got.Groups)
+	}
+}
+
+func TestDisabledAuthRetainsExplicitLocalIdentityHeaders(t *testing.T) {
+	ks := keyStoreWith(t, nil)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ac, _ := FromContext(r.Context())
+		if ac.PrincipalID != "local-principal" || len(ac.Groups) != 1 || ac.Groups[0] != "local-group" {
+			t.Fatalf("local identity = principal %q groups %#v", ac.PrincipalID, ac.Groups)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/memories/id", nil)
+	req.Header.Set("X-Provena-Principal-Id", "local-principal")
+	req.Header.Set("X-Provena-Groups", "local-group")
+	rec := httptest.NewRecorder()
+	AuthMiddleware(ks, false)(next).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+}
+
+func TestAuthMiddlewareLeavesHealthAndReadinessProbesPublic(t *testing.T) {
+	ks := keyStoreWith(t, []APIKey{
+		{KeyID: "e1", TenantID: "t1", Role: Editor, HashedKey: hashToken("editor-token")},
+	})
+	h := chain(ks)
+
+	for _, path := range []string{"/healthz", "/readyz"} {
+		if rec := doRequest(h, http.MethodGet, path, ""); rec.Code != http.StatusOK {
+			t.Fatalf("GET %s without bearer: got %d, want 200", path, rec.Code)
+		}
 	}
 }

@@ -1,6 +1,6 @@
 # Provena Go SDK
 
-`github.com/ayushozha/portfolio-generator/services/provena/sdk/go` is the
+`github.com/ayushozha/provena/sdk/go` is the
 current Go client module for embedding Provena into another backend service.
 
 ## Audience
@@ -19,9 +19,9 @@ tree directly.
 ## Module path and versioning caveats
 
 - Exact module path:
-  `github.com/ayushozha/portfolio-generator/services/provena/sdk/go`
+  `github.com/ayushozha/provena/sdk/go`
 - Import package name: `provena`
-- The SDK currently lives in a monorepo subdirectory module path. Provena does
+- The SDK currently lives in a repository subdirectory module path. Provena does
   not ship a shorter vanity import path yet.
 - This repository does not currently publish standalone Go SDK semver tags.
   Until that changes, external consumers should either:
@@ -32,14 +32,14 @@ tree directly.
 Published-commit workflow:
 
 ```bash
-go get github.com/ayushozha/portfolio-generator/services/provena/sdk/go@<commit-or-pseudo-version>
+go get github.com/ayushozha/provena/sdk/go@<commit-or-pseudo-version>
 ```
 
 Local checkout workflow:
 
 ```bash
-go mod edit -replace github.com/ayushozha/portfolio-generator/services/provena/sdk/go=/path/to/portfolio-generator/services/provena/sdk/go
-go get github.com/ayushozha/portfolio-generator/services/provena/sdk/go
+go mod edit -replace github.com/ayushozha/provena/sdk/go=/path/to/provena/sdk/go
+go get github.com/ayushozha/provena/sdk/go
 ```
 
 ## Quickstart
@@ -50,7 +50,7 @@ package main
 import (
 	"fmt"
 
-	provena "github.com/ayushozha/portfolio-generator/services/provena/sdk/go"
+	provena "github.com/ayushozha/provena/sdk/go"
 )
 
 func main() {
@@ -85,8 +85,8 @@ The following flow compiles a minimal consumer outside `sdk/go`:
 mkdir provena-go-scratch
 cd provena-go-scratch
 go mod init provena-go-scratch
-go mod edit -replace github.com/ayushozha/portfolio-generator/services/provena/sdk/go=/path/to/portfolio-generator/services/provena/sdk/go
-go get github.com/ayushozha/portfolio-generator/services/provena/sdk/go
+go mod edit -replace github.com/ayushozha/provena/sdk/go=/path/to/provena/sdk/go
+go get github.com/ayushozha/provena/sdk/go
 ```
 
 Then create `main.go`:
@@ -97,7 +97,7 @@ package main
 import (
 	"fmt"
 
-	provena "github.com/ayushozha/portfolio-generator/services/provena/sdk/go"
+	provena "github.com/ayushozha/provena/sdk/go"
 )
 
 func main() {
@@ -121,11 +121,11 @@ from the quickstart above.
 ## Repository smoke check
 
 The repository keeps its Go regression smoke at
-`services/provena/sdk/go/examples/smoke`. It reaches `/healthz`, creates a
+`sdk/go/examples/smoke`. It reaches `/healthz`, creates a
 memory, and verifies search can find that memory again.
 
 ```powershell
-cd services/provena/sdk/go
+cd sdk/go
 $env:PROVENA_BASE_URL = "http://127.0.0.1:8092"
 go run ./examples/smoke
 ```

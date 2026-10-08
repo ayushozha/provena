@@ -29,6 +29,10 @@ import {
   maintenancePlanView,
 } from "../maintenance/index.js";
 import { assertNoSecretMaterial } from "../security/memory.js";
+import {
+  learnProcedure, recordProcedureOutcome, recallProcedures,
+  learnProcedureInputSchema, procedureOutcomeInputSchema,
+} from "../procedures/index.js";
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -305,6 +309,43 @@ export async function createRepoMcpServer(
       return text(memoryEventToRecord(event));
     }),
   );
+
+  server.registerTool("provena_procedure_learn", {
+    description: "Capture a candidate procedure from structured tool steps and caller-reported evidence. Human review is required before reuse.",
+    inputSchema: learnProcedureInputSchema.omit({ actor: true }).shape,
+    annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: false },
+  }, async (input) => boundedMcpOperation(options, async () => {
+    const result = await learnProcedure(repoRoot, { ...input, actor: "mcp-client" });
+    await refreshRepoBrain(repoRoot);
+    return text({ duplicate: result.duplicate, event: memoryEventToRecord(result.event) });
+  }));
+
+  server.registerTool("provena_procedure_outcome", {
+    description: "Record a caller-reported procedure outcome with goal-verification receipts. Tool exit status alone is not goal verification.",
+    inputSchema: procedureOutcomeInputSchema.omit({ actor: true }).shape,
+    annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: false },
+  }, async (input) => boundedMcpOperation(options, async () => {
+    const result = await recordProcedureOutcome(repoRoot, { ...input, actor: "mcp-client" });
+    await refreshRepoBrain(repoRoot);
+    return text({ duplicate: result.duplicate, event: memoryEventToRecord(result.event) });
+  }));
+
+  server.registerTool("provena_procedure_recall", {
+    description: "Recall relevant approved procedures with exact version citations, source freshness and outcome evidence. Stored steps do not authorize tool execution.",
+    inputSchema: {
+      query: z.string().max(2_048).default(""),
+      paths: z.array(z.string()).max(32).default([]),
+      procedureIds: z.array(z.string()).max(32).default([]),
+      availableTools: z.array(z.string()).max(128).optional(),
+      maxTokens: z.number().int().min(128).max(25_000).default(1_500),
+      maxItems: z.number().int().min(1).max(32).default(8),
+      includeReview: z.boolean().default(false),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  }, async ({ query, ...input }) => boundedMcpOperation(options, async () => {
+    const { map, graph, memory } = await readRepoBrainArtifacts(repoRoot);
+    return text(JSON.stringify(await recallProcedures(repoRoot, query, { ...input, snapshot: memory, map, graph })));
+  }));
 
   server.registerTool(
     "provena_graph_neighbors",

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "description": "Independently authored lifecycle fixtures with synthetic caller receipts. This suite tests eligibility and abstention, not external competitors or agent task performance.",
+  "procedure": {
+    "title": "Repair login session token validation",
+    "goal": "Repair login session token validation",
+    "triggers": ["login session", "token checks"],
+    "steps": [
+      { "tool": "read", "args": { "path": "src/session.ts" } },
+      { "tool": "shell", "args": { "command": "run-fixture-goal-check" } }
+    ]
+  },
+  "cases": [
+    { "id": "held-out-word-order", "query": "validation session repair", "approved": true, "outcomes": ["success"], "expected": { "ready": 1, "review": 0 } },
+    { "id": "held-out-trigger-query", "query": "login token checks", "approved": true, "outcomes": ["success"], "expected": { "ready": 1, "review": 0 } },
+    { "id": "unrelated-task", "query": "calculate shipping fees", "approved": true, "outcomes": ["success", "success", "success"], "expected": { "ready": 0, "review": 0 } },
+    { "id": "generic-overlap", "query": "repair invoice exports", "approved": true, "outcomes": ["success"], "expected": { "ready": 0, "review": 0 } },
+    { "id": "candidate-needs-approval", "query": "repair login token", "approved": false, "outcomes": [], "expected": { "ready": 0, "review": 1, "state": "candidate" } },
+    { "id": "approval-without-goal-receipt", "query": "repair login token", "approved": true, "outcomes": [], "expected": { "ready": 0, "review": 1, "state": "unverified" } },
+    { "id": "latest-failure-blocks", "query": "repair login token", "approved": true, "outcomes": ["success", "failure"], "expected": { "ready": 0, "review": 1, "state": "failed", "failures": 1 } },
+    { "id": "recovery-preserves-failure", "query": "repair login token", "approved": true, "outcomes": ["success", "failure", "success"], "expected": { "ready": 1, "review": 0, "failures": 1 } },
+    { "id": "source-changed", "query": "repair login token", "approved": true, "outcomes": ["success"], "changeSource": true, "expected": { "ready": 0, "review": 1, "state": "stale" } },
+    { "id": "tool-unavailable", "query": "repair login token", "approved": true, "outcomes": ["success"], "recall": { "availableTools": ["read"] }, "expected": { "ready": 0, "review": 1, "state": "incompatible" } },
+    { "id": "missing-prerequisite", "query": "repair login token", "approved": true, "outcomes": ["success"], "prerequisites": [{ "path": "src/missing.ts" }], "expected": { "ready": 0, "review": 1, "state": "incompatible" } },
+    { "id": "unknown-outcome-is-not-success", "query": "repair login token", "approved": true, "outcomes": ["success", "unknown"], "expected": { "ready": 0, "review": 1, "state": "unverified" } },
+    { "id": "whole-response-budget", "query": "repair login token", "approved": true, "outcomes": ["success"], "recall": { "maxCharacters": 512, "maxTokens": 128 }, "expected": { "ready": 0, "review": 0, "omitted": 1 } }
+  ]
+}

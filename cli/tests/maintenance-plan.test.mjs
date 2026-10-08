@@ -299,6 +299,37 @@ try {
     plan.summary.issueKinds["exact-content-overlap"].total,
   );
 
+  const sourceHash = map.files.find((file) => file.path === "src/index.ts")?.sha256;
+  assert.match(sourceHash, /^[a-f0-9]{64}$/u);
+  const sourceEvents = [
+    ["maint-source-changed", "0".repeat(64)],
+    ["maint-source-current", sourceHash],
+    ["maint-source-tagged-changed", "sha256-lf:" + "0".repeat(64)],
+    ["maint-source-tagged-current", "sha256-lf:" + sourceHash],
+    ["maint-source-raw-bytes", "sha256:" + "0".repeat(64)],
+    ["maint-source-opaque", "1".repeat(40)],
+  ].map(([id, blob]) => prepareMemoryEvent(root, memoryInput(id, {
+    appliesTo: ["src/index.ts"],
+    sources: [{ path: "src/index.ts", startLine: 1, blob }],
+  })));
+  const sourceMemory = extendMemoryLedgerSnapshot(root, emptyMemory(), sourceEvents);
+  const sourcePlan = compileMaintenancePlanWithDiagnostics(map, sourceMemory).plan;
+  assert.deepEqual(issueFor(sourcePlan, "source-changed", "maint-source-changed")?.paths, [
+    "src/index.ts",
+  ]);
+  assert.deepEqual(issueFor(sourcePlan, "source-changed", "maint-source-tagged-changed")?.paths, [
+    "src/index.ts",
+  ]);
+  assert.equal(sourcePlan.summary.issueKinds["source-changed"].total, 2);
+  assert.equal(issueFor(sourcePlan, "source-changed", "maint-source-current"), undefined);
+  assert.equal(issueFor(sourcePlan, "source-changed", "maint-source-tagged-current"), undefined);
+  assert.equal(issueFor(sourcePlan, "source-changed", "maint-source-raw-bytes"), undefined);
+  assert.equal(issueFor(sourcePlan, "source-changed", "maint-source-opaque"), undefined);
+  const deferredSourcePlan = compileMaintenancePlanWithDiagnostics(incompleteMap, sourceMemory).plan;
+  assert.equal(deferredSourcePlan.summary.issueKinds["source-changed"].total, 0);
+  assert.equal(deferredSourcePlan.summary.pathChecksDeferred, deferredSourcePlan.summary.pathChecksTotal);
+  assert.equal((await readMemoryLedgerSnapshot(root)).rawLedger, ledgerBeforeReadOnlyOperations);
+
   const capEvents = Array.from({ length: 300 }, (_, index) =>
     prepareMemoryEvent(root, memoryInput(`cap-${String(index).padStart(3, "0")}`, {
       title: `Bounded proposal ${index}`,

@@ -571,6 +571,14 @@ class HealthResponse(BaseModel):
     status: str
 
 
+class TenantIntegrityStatus(BaseModel):
+    status: str
+    ready: bool
+    backend: str
+    constraints_validated: bool
+    issues: dict[str, int] = Field(default_factory=dict)
+
+
 class ConnectorProvider(str, Enum):
     # Membership here only validates the provider field on connector records;
     # it does NOT imply a shipped first-party sync worker for that provider.
@@ -900,8 +908,8 @@ class AgentContextRequest(BaseModel):
     memory_layers: list[MemoryLayer] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     entity_keys: list[str] = Field(default_factory=list)
-    max_memories: int = 10
-    max_characters: int = 4000
+    max_memories: int = Field(default=10, ge=1, le=200)
+    max_characters: int = Field(default=4000, ge=128, le=100_000)
     include_citations: bool = True
 
 

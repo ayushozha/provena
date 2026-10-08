@@ -6,8 +6,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -47,32 +45,14 @@ func main() {
 	maxDepth := envInt("PROVENA_QUEUE_MAX_DEPTH", 1000)
 	workers := envInt("PROVENA_QUEUE_WORKERS", 4)
 	pipelineURL := env("PROVENA_PIPELINE_URL", "http://localhost:8083")
-
-	// Process function: batch-writes to pipeline
-	client := &http.Client{Timeout: 30 * time.Second}
-	processFn := func(ctx context.Context, batch []queue.WriteItem) error {
-		payload, err := json.Marshal(batch)
-		if err != nil {
-			return fmt.Errorf("marshal batch: %w", err)
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, pipelineURL+"/v1/batch-write", nil)
-		if err != nil {
-			return fmt.Errorf("create request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Body = readCloser(payload)
-		req.ContentLength = int64(len(payload))
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return fmt.Errorf("pipeline request: %w", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode >= 400 {
-			return fmt.Errorf("pipeline returned %d", resp.StatusCode)
-		}
-		return nil
+	serviceAuth, err := loadQueueServiceAuth(os.Getenv)
+	if err != nil {
+		logger.Error("invalid queue service identity configuration", "error", err)
+		os.Exit(1)
 	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	processFn := newPipelineProcessFn(client, pipelineURL, serviceAuth)
 
 	wq := queue.NewWriteQueue(maxDepth, workers, 10, processFn, logger)
 
@@ -96,25 +76,7 @@ func main() {
 	})
 
 	// Enqueue endpoint
-	mux.HandleFunc("POST /enqueue", func(w http.ResponseWriter, r *http.Request) {
-		var item queue.WriteItem
-		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
-			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
-			return
-		}
-		if item.CreatedAt.IsZero() {
-			item.CreatedAt = time.Now()
-		}
-		if err := wq.Enqueue(item); err != nil {
-			observability.QueueDepth.Set(int64(wq.Depth()))
-			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusTooManyRequests)
-			return
-		}
-		observability.QueueDepth.Set(int64(wq.Depth()))
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		w.Write([]byte(`{"status":"accepted"}`))
-	})
+	mux.HandleFunc("POST /enqueue", newEnqueueHandler(wq, serviceAuth))
 
 	srv := &http.Server{
 		Addr:         listenAddr,
@@ -137,35 +99,9 @@ func main() {
 		srv.Shutdown(shutdownCtx)
 	}()
 
-	logger.Info("queue consumer starting", "addr", listenAddr, "max_depth", maxDepth, "workers", workers)
+	logger.Info("queue consumer starting", "addr", listenAddr, "max_depth", maxDepth, "workers", workers, "service_auth_enabled", serviceAuth.enabled)
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		logger.Error("queue consumer failed", "error", err)
 		os.Exit(1)
 	}
-}
-
-// readCloser wraps a byte slice as an io.ReadCloser.
-type readCloserImpl struct {
-	data   []byte
-	offset int
-}
-
-func readCloser(data []byte) *readCloserImpl {
-	return &readCloserImpl{data: data}
-}
-
-func (r *readCloserImpl) Read(p []byte) (int, error) {
-	if r.offset >= len(r.data) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.data[r.offset:])
-	r.offset += n
-	if r.offset >= len(r.data) {
-		return n, io.EOF
-	}
-	return n, nil
-}
-
-func (r *readCloserImpl) Close() error {
-	return nil
 }

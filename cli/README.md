@@ -1,7 +1,7 @@
 # @provena/cli
 
 [![npm release](https://img.shields.io/badge/npm-first%20release%20pending-lightgrey)](../docs/PUBLISH_CLI.md)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18.14.1-43853d)](./package.json)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D22.17.0-43853d)](./package.json)
 [![CLI CI](https://github.com/ayushozha/provena/actions/workflows/ci-cli.yml/badge.svg)](https://github.com/ayushozha/provena/actions/workflows/ci-cli.yml)
 
 Install a living, cited repository brain for coding agents. The portable path
@@ -26,8 +26,8 @@ npm install --save-dev $ProvenaTarball
 npx provena init
 ```
 
-The current dry-run package is about 10 MB compressed and 78 MB unpacked with
-128 bundled production packages. Treat `npm pack --dry-run --json` as the
+The current dry-run package is about 11 MB compressed and 86 MB unpacked with
+113 bundled production packages. Treat `npm pack --dry-run --json` as the
 authoritative footprint for a release candidate.
 
 After the first public release:
@@ -106,9 +106,9 @@ fixed-cadence daemon.
 
 The same refresh generation compiles `.provena/maintenance.plan.json` from the
 committed repo map and canonical active ledger heads. It proposes bounded review
-tasks for memories with no evidence/scope, source or scope paths absent from a
+tasks for memories with no evidence/scope, changed source SHA-256 hashes, source or scope paths absent from a
 complete current map, and exact normalized active-memory overlaps. Incomplete
-scans defer path-absence advice. The compiler performs no model call, network
+scans defer path-absence and source-change advice. The compiler performs no model call, network
 request, database query, pairwise semantic comparison, or filesystem rescan.
 
 `maintain plan` defaults to 32 returned tasks and emits a bounded view envelope;
@@ -133,6 +133,7 @@ remain roadmap.
 | `maintain plan [--limit N] [--json]` | List a bounded view of deterministic review proposals |
 | `maintain context <task-id> [--max-tokens N] [--json]` | Compile one cited proposal packet |
 | `remember` | Append a typed explicit memory event |
+| `procedure learn\|approve\|outcome\|recall\|inspect` | Capture, review, attest, and retrieve structured tool sequences |
 | `checkpoint` | Append a handoff with current Git state |
 | `session start` | Refresh and emit boot context for an agent session |
 | `status` | Show freshness and integration health |
@@ -205,9 +206,12 @@ entries are preserved and reported instead of overwritten.
 
 `init` writes project configs for Claude-compatible `.mcp.json`, Cursor, Codex,
 and VS Code. Those managed configs stay on stdio. The stdio server provides
-five brain/map/graph/manifest/memory resources and seven tools: context,
+five brain/map/graph/manifest/memory resources and ten tools: context,
 refresh, remember, graph-neighborhood, graph-path, read-only maintenance-plan,
-and read-only maintenance-context. Loopback HTTP exposes the same surface.
+read-only maintenance-context, procedure-learn, procedure-outcome, and read-only
+procedure-recall. Loopback HTTP exposes the same surface. Human procedure
+approval is available through the CLI only. See the
+[procedure guide](../docs/PROCEDURAL_MEMORY.md) for payloads and limitations.
 
 For a local client that requires a Streamable HTTP URL, run:
 

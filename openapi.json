@@ -24,6 +24,34 @@
         }
       }
     },
+    "/readyz": {
+      "get": {
+        "summary": "Readyz",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantIntegrityStatus"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Store not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantIntegrityStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/memories": {
       "post": {
         "summary": "Create Memory",
@@ -59,7 +87,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/repositories/{repository_id}/memory-events/sync": {
@@ -68,12 +101,7 @@
         "operationId": "sync_repository_memory_events_v1_repositories__repository_id__memory_events_sync_post",
         "security": [
           {
-            "ProvenaTenant": [],
-            "ProvenaPrincipal": []
-          },
-          {
-            "ProvenaTenant": [],
-            "ProvenaKey": []
+            "ProvenaServiceBearer": []
           }
         ],
         "parameters": [
@@ -89,14 +117,21 @@
           {
             "name": "X-Provena-Role",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
-              "enum": [
-                "editor",
-                "admin",
-                "superadmin"
+              "anyOf": [
+                {
+                  "enum": [
+                    "editor",
+                    "admin",
+                    "superadmin"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "type": "string",
               "description": "Write role: editor, admin, or superadmin.",
               "title": "X-Provena-Role"
             },
@@ -182,7 +217,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       },
       "delete": {
         "summary": "Delete Memory",
@@ -229,7 +269,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       },
       "put": {
         "summary": "Update Memory",
@@ -276,7 +321,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/memories/search": {
@@ -314,7 +364,55 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/agent/context": {
+      "post": {
+        "summary": "Agent Context",
+        "operationId": "agent_context_v1_agent_context_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentContextRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentContextResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/memories/relations": {
@@ -345,7 +443,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/memories/{memory_id}/history": {
@@ -400,7 +503,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/memories/{memory_id}/feedback": {
@@ -449,7 +557,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       },
       "get": {
         "summary": "List Memory Feedback",
@@ -502,7 +615,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/admin/erase": {
@@ -540,7 +658,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/project-snapshots": {
@@ -578,7 +701,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/project-snapshots/latest": {
@@ -626,7 +754,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/integrations/connectors": {
@@ -664,7 +797,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       },
       "get": {
         "summary": "List Connectors",
@@ -721,7 +859,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/integrations/connectors/{connector_id}": {
@@ -769,7 +912,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/integrations/connectors/{connector_id}/sources/batch": {
@@ -831,7 +979,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/integrations/connectors/{connector_id}/sources": {
@@ -883,7 +1036,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/integrations/connectors/{connector_id}/principal-mappings/batch": {
@@ -945,7 +1103,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/integrations/connectors/{connector_id}/principal-mappings": {
@@ -997,7 +1160,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/integrations/connectors/{connector_id}/permissions/batch": {
@@ -1059,7 +1227,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/integrations/connectors/{connector_id}/permissions": {
@@ -1127,7 +1300,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/integrations/connectors/{connector_id}/sync-jobs": {
@@ -1185,7 +1363,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       },
       "get": {
         "summary": "List Sync Jobs",
@@ -1235,7 +1418,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/integrations/coverage": {
@@ -1274,7 +1462,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/admin/retention-policies": {
@@ -1312,7 +1505,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       },
       "get": {
         "summary": "List Retention Policies",
@@ -1360,7 +1558,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/admin/legal-hold": {
@@ -1398,7 +1601,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/admin/legal-hold/{hold_id}": {
@@ -1418,9 +1626,16 @@
           {
             "name": "tenant_id",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Tenant Id"
             }
           }
@@ -1450,7 +1665,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/admin/rtbf": {
@@ -1488,7 +1708,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     },
     "/v1/admin/retention/enforce": {
@@ -1526,7 +1751,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "ProvenaServiceBearer": []
+          }
+        ]
       }
     }
   },
@@ -1567,6 +1797,173 @@
           "admin"
         ],
         "title": "ACLPermission"
+      },
+      "AgentContextMemory": {
+        "properties": {
+          "memory_id": {
+            "type": "string",
+            "title": "Memory Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MemoryKind"
+          },
+          "memory_layer": {
+            "$ref": "#/components/schemas/MemoryLayer"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons"
+          },
+          "citations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Citations"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "memory_id",
+          "kind",
+          "memory_layer",
+          "content",
+          "score",
+          "updated_at"
+        ],
+        "title": "AgentContextMemory"
+      },
+      "AgentContextRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ScopeEnvelope"
+          },
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryKind"
+            },
+            "type": "array",
+            "title": "Kinds"
+          },
+          "memory_layers": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryLayer"
+            },
+            "type": "array",
+            "title": "Memory Layers"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "entity_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Entity Keys"
+          },
+          "max_memories": {
+            "type": "integer",
+            "maximum": 200.0,
+            "minimum": 1.0,
+            "title": "Max Memories",
+            "default": 10
+          },
+          "max_characters": {
+            "type": "integer",
+            "maximum": 100000.0,
+            "minimum": 128.0,
+            "title": "Max Characters",
+            "default": 4000
+          },
+          "include_citations": {
+            "type": "boolean",
+            "title": "Include Citations",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "scope"
+        ],
+        "title": "AgentContextRequest"
+      },
+      "AgentContextResponse": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ScopeEnvelope"
+          },
+          "context": {
+            "type": "string",
+            "title": "Context"
+          },
+          "token_estimate": {
+            "type": "integer",
+            "title": "Token Estimate",
+            "default": 0
+          },
+          "memories": {
+            "items": {
+              "$ref": "#/components/schemas/AgentContextMemory"
+            },
+            "type": "array",
+            "title": "Memories"
+          },
+          "citations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Citations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "scope",
+          "context"
+        ],
+        "title": "AgentContextResponse"
       },
       "ConnectorAuthType": {
         "type": "string",
@@ -3964,6 +4361,41 @@
         ],
         "title": "SyncMode"
       },
+      "TenantIntegrityStatus": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "backend": {
+            "type": "string",
+            "title": "Backend"
+          },
+          "constraints_validated": {
+            "type": "boolean",
+            "title": "Constraints Validated"
+          },
+          "issues": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Issues"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "ready",
+          "backend",
+          "constraints_validated"
+        ],
+        "title": "TenantIntegrityStatus"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -4023,6 +4455,11 @@
         "description": "Authenticated service-key identity. Required unless X-Provena-Principal-Id is sent.",
         "in": "header",
         "name": "X-Provena-Key-Id"
+      },
+      "ProvenaServiceBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Tenant-bound Provena service token."
       }
     }
   }

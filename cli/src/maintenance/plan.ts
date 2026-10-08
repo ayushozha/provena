@@ -140,6 +140,7 @@ function orderedCandidates(candidates: readonly IssueCandidate[]): IssueCandidat
     "exact-content-overlap",
     "scope-not-in-map",
     "source-not-in-map",
+    "source-changed",
   ];
   const ordered: IssueCandidate[] = [];
   for (const kind of kindOrder) {
@@ -273,7 +274,8 @@ export function compileMaintenancePlanWithDiagnostics(
     overlapKeyVisits: 0,
   };
   const active = activeMemoryEvents(memory.events);
-  const filePaths = new Set(map.files.map((file) => normalizedPath(file.path)));
+  const files = new Map(map.files.map((file) => [normalizedPath(file.path), file]));
+  const filePaths = new Set(files.keys());
   const scopePaths = new Set([
     ".",
     ...filePaths,
@@ -293,18 +295,37 @@ export function compileMaintenancePlanWithDiagnostics(
     }
 
     const missingSources: string[] = [];
+    const changedSources: string[] = [];
     for (const source of event.sources) {
       diagnostics.sourceVisits += 1;
       pathChecksTotal += 1;
       const path = normalizedPath(source.path);
       if (!map.scan.complete) pathChecksDeferred += 1;
       else if (!filePaths.has(path)) missingSources.push(path);
+      else {
+        const currentHash = files.get(path)?.sha256;
+        const sourceHash = source.blob?.replace(/^sha256-lf:/, "");
+        // The map hashes canonical UTF-8 text with LF line endings. Raw-byte
+        // SHA-256, Git object IDs, and opaque references are different formats.
+        if (
+          sourceHash && HASH_PATTERN.test(sourceHash) &&
+          currentHash && HASH_PATTERN.test(currentHash) &&
+          sourceHash !== currentHash
+        ) changedSources.push(path);
+      }
     }
     if (missingSources.length > 0) {
       candidates.push({
         kind: "source-not-in-map",
         memoryIds: [event.id],
         paths: uniqueSorted(missingSources),
+      });
+    }
+    if (changedSources.length > 0) {
+      candidates.push({
+        kind: "source-changed",
+        memoryIds: [event.id],
+        paths: uniqueSorted(changedSources),
       });
     }
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	provena "github.com/ayushozha/portfolio-generator/services/provena/sdk/go"
+	provena "github.com/ayushozha/provena/sdk/go"
 )
 
 func main() {

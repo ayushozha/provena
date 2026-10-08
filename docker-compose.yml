@@ -10,12 +10,12 @@ services:
     # Internal only: loopback-bound for local dev; not reachable from other hosts.
     # All external data-plane traffic must go through the gateway.
     ports:
-      - "127.0.0.1:${PROVENA_ORCHESTRATION_HOST_PORT:-50051}:50051"
+      - "${PROVENA_ORCHESTRATION_HOST_BIND:-127.0.0.1}:${PROVENA_ORCHESTRATION_HOST_PORT:-50051}:50051"
     environment:
       - RUST_LOG=info
     healthcheck:
-      # Internal HTTP service; use a dependency-light TCP readiness check.
-      test: ["CMD", "sh", "-c", "nc -z localhost 50051 || exit 1"]
+      # Axum HTTP service; verify the application route, not only the TCP port.
+      test: ["CMD", "curl", "-f", "http://localhost:50051/healthz"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -33,17 +33,19 @@ services:
     ports:
       # Local dev only: binds to localhost. For production, enable auth
       # (PROVENA_AUTH_ENABLED=true) and place the gateway behind a reverse proxy.
-      - "127.0.0.1:${PROVENA_GATEWAY_HOST_PORT:-8080}:8080"
+      - "${PROVENA_GATEWAY_HOST_BIND:-127.0.0.1}:${PROVENA_GATEWAY_HOST_PORT:-8080}:8080"
     environment:
       - PROVENA_LISTEN_ADDR=:8080
       - PROVENA_ORCHESTRATION_URL=http://orchestration:50051
       - PROVENA_INTELLIGENCE_URL=http://intelligence:8081
       - PROVENA_STORE_URL=http://store:8000
       - PROVENA_LIFECYCLE_URL=http://lifecycle:8092
+      - PROVENA_GATEWAY_SERVICE_TOKEN=${PROVENA_GATEWAY_SERVICE_TOKEN:-}
       # Local dev default. Production MUST set PROVENA_AUTH_ENABLED=true and
       # provision PROVENA_API_KEYS; the gateway is the only host-published
       # data-plane entry, so this toggle governs all external access.
-      - PROVENA_AUTH_ENABLED=false
+      - PROVENA_AUTH_ENABLED=${PROVENA_AUTH_ENABLED:-false}
+      - PROVENA_API_KEYS=${PROVENA_API_KEYS:-[]}
     depends_on:
       orchestration:
         condition: service_healthy
@@ -54,7 +56,7 @@ services:
       lifecycle:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/readyz"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -70,13 +72,12 @@ services:
       args:
         CMD: mcp
     ports:
-      - "127.0.0.1:${PROVENA_MCP_HOST_PORT:-8090}:8090"
+      # MCP is loopback-only by default. Set PROVENA_MCP_HOST_BIND explicitly
+      # only when an authenticated gateway and network policy protect it.
+      - "${PROVENA_MCP_HOST_BIND:-127.0.0.1}:${PROVENA_MCP_HOST_PORT:-8090}:8090"
     environment:
       - PROVENA_MCP_LISTEN_ADDR=:8090
       - PROVENA_GATEWAY_URL=http://gateway:8080
-      # Local-only Compose pairs this with a loopback host binding. Deployed
-      # MCP endpoints should omit this override and require caller Bearer auth.
-      - PROVENA_MCP_REQUIRE_AUTH=false
     depends_on:
       gateway:
         condition: service_healthy
@@ -92,12 +93,22 @@ services:
       args:
         CMD: queue
     ports:
-      - "127.0.0.1:${PROVENA_QUEUE_HOST_PORT:-8091}:8091"
+      - "${PROVENA_QUEUE_HOST_BIND:-127.0.0.1}:${PROVENA_QUEUE_HOST_PORT:-8091}:8091"
     environment:
       - PROVENA_QUEUE_LISTEN_ADDR=:8091
       - PROVENA_PIPELINE_URL=http://intelligence:8081
       - PROVENA_QUEUE_MAX_DEPTH=1000
       - PROVENA_QUEUE_WORKERS=4
+      - PROVENA_QUEUE_INGRESS_TOKEN=${PROVENA_QUEUE_INGRESS_TOKEN:-}
+      # The queue shares the store's one-tenant service identity contract.
+      # Outside explicit local bypass, all token/tenant/principal values are
+      # required before the worker starts and are never written into queue data.
+      - PROVENA_ENVIRONMENT=${PROVENA_ENVIRONMENT:-development}
+      - PROVENA_ALLOW_UNAUTHENTICATED_LOCAL=${PROVENA_ALLOW_UNAUTHENTICATED_LOCAL:-true}
+      - PROVENA_SERVICE_TOKEN=${PROVENA_SERVICE_TOKEN:-}
+      - PROVENA_SERVICE_TENANT_ID=${PROVENA_SERVICE_TENANT_ID:-}
+      - PROVENA_SERVICE_PRINCIPAL_ID=${PROVENA_SERVICE_PRINCIPAL_ID:-}
+      - PROVENA_SERVICE_ROLE=${PROVENA_SERVICE_ROLE:-editor}
     depends_on:
       intelligence:
         condition: service_healthy
@@ -118,10 +129,19 @@ services:
       args:
         CMD: lifecycle
     ports:
-      - "127.0.0.1:${PROVENA_LIFECYCLE_HOST_PORT:-8092}:8092"
+      - "${PROVENA_LIFECYCLE_HOST_BIND:-127.0.0.1}:${PROVENA_LIFECYCLE_HOST_PORT:-8092}:8092"
     environment:
       - PROVENA_LIFECYCLE_LISTEN_ADDR=:8092
       - PROVENA_STORE_URL=http://store:8000
+      - PROVENA_ENVIRONMENT=${PROVENA_ENVIRONMENT:-development}
+      - PROVENA_ALLOW_UNAUTHENTICATED_LOCAL=${PROVENA_ALLOW_UNAUTHENTICATED_LOCAL:-true}
+      - PROVENA_GATEWAY_SERVICE_TOKEN=${PROVENA_GATEWAY_SERVICE_TOKEN:-}
+      - PROVENA_LIFECYCLE_SERVICE_TOKEN=${PROVENA_LIFECYCLE_SERVICE_TOKEN:-}
+      - PROVENA_LIFECYCLE_TENANT_ID=${PROVENA_LIFECYCLE_TENANT_ID:-}
+      - PROVENA_LIFECYCLE_PRINCIPAL_ID=${PROVENA_LIFECYCLE_PRINCIPAL_ID:-provena-lifecycle}
+    depends_on:
+      store:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8092/healthz"]
       interval: 10s
@@ -137,13 +157,30 @@ services:
       context: ./intelligence
       dockerfile: Dockerfile
     ports:
-      - "127.0.0.1:${PROVENA_INTELLIGENCE_HOST_PORT:-8081}:8081"
+      - "${PROVENA_INTELLIGENCE_HOST_BIND:-127.0.0.1}:${PROVENA_INTELLIGENCE_HOST_PORT:-8081}:8081"
     environment:
-      - PROVENA_INTEL_LISTEN_PORT=8081
-      - PROVENA_INTEL_PIPELINE_URL=http://store:8000
-      - PROVENA_INTEL_ORCHESTRATION_URL=http://orchestration:50051
-      - PROVENA_INTEL_EMBEDDING_PROVIDER=local
-      - PROVENA_INTEL_EMBEDDING_DIMENSIONS=768
+      PROVENA_INTEL_LISTEN_PORT: "8081"
+      PROVENA_INTEL_PIPELINE_URL: http://store:8000
+      PROVENA_INTEL_ORCHESTRATION_URL: http://orchestration:50051
+      PROVENA_INTEL_ENVIRONMENT: ${PROVENA_ENVIRONMENT:-development}
+      PROVENA_INTEL_ALLOW_UNAUTHENTICATED_LOCAL: ${PROVENA_ALLOW_UNAUTHENTICATED_LOCAL:-true}
+      PROVENA_INTEL_GATEWAY_SERVICE_TOKEN: ${PROVENA_GATEWAY_SERVICE_TOKEN:-}
+      PROVENA_INTEL_SERVICE_TOKEN: ${PROVENA_SERVICE_TOKEN:-}
+      PROVENA_INTEL_SERVICE_TENANT_ID: ${PROVENA_SERVICE_TENANT_ID:-}
+      PROVENA_INTEL_SERVICE_PRINCIPAL_ID: ${PROVENA_SERVICE_PRINCIPAL_ID:-}
+      PROVENA_INTEL_SERVICE_ROLE: ${PROVENA_SERVICE_ROLE:-editor}
+      PROVENA_INTEL_EMBEDDING_PROVIDER: ${PROVENA_INTEL_EMBEDDING_PROVIDER:-local}
+      PROVENA_INTEL_EMBEDDING_MODEL: ${PROVENA_INTEL_EMBEDDING_MODEL:-}
+      PROVENA_INTEL_EMBEDDING_BASE_URL: ${PROVENA_INTEL_EMBEDDING_BASE_URL:-http://host.docker.internal:11434/v1}
+      PROVENA_INTEL_EMBEDDING_API_KEY: ${PROVENA_INTEL_EMBEDDING_API_KEY:-}
+      PROVENA_INTEL_EMBEDDING_DIMENSIONS: ${PROVENA_INTEL_EMBEDDING_DIMENSIONS:-768}
+      PROVENA_INTEL_LLM_MODEL: ${PROVENA_INTEL_LLM_MODEL:-}
+      PROVENA_INTEL_LLM_BASE_URL: ${PROVENA_INTEL_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      PROVENA_INTEL_LLM_API_KEY: ${PROVENA_INTEL_LLM_API_KEY:-}
+      PROVENA_INTEL_LLM_PROVIDERS: ${PROVENA_INTEL_LLM_PROVIDERS:-}
+      PROVENA_INTEL_MODEL_ROUTER_DEFAULT_TIER: ${PROVENA_INTEL_MODEL_ROUTER_DEFAULT_TIER:-balanced}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       store:
         condition: service_healthy
@@ -163,14 +200,30 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.store
-    ports:
-      - "127.0.0.1:${PROVENA_STORE_HOST_PORT:-8000}:8000"
+    # The store is intentionally network-private. Host traffic enters through
+    # the gateway; direct deployments must enable the store service token.
+    expose:
+      - "8000"
     environment:
-      - PROVENA_DB_PATH=/data/provena.db
+      PROVENA_DB_PATH: ${PROVENA_DB_PATH:-/data/provena.db}
+      PROVENA_DATABASE_URL: ${PROVENA_DATABASE_URL:-}
+      PROVENA_ENVIRONMENT: ${PROVENA_ENVIRONMENT:-development}
+      PROVENA_ALLOW_UNAUTHENTICATED_LOCAL: ${PROVENA_ALLOW_UNAUTHENTICATED_LOCAL:-true}
+      PROVENA_SERVICE_TOKEN: ${PROVENA_SERVICE_TOKEN:-}
+      PROVENA_SERVICE_TENANT_ID: ${PROVENA_SERVICE_TENANT_ID:-}
+      PROVENA_SERVICE_PRINCIPAL_ID: ${PROVENA_SERVICE_PRINCIPAL_ID:-provena-service}
+      PROVENA_SERVICE_ROLE: ${PROVENA_SERVICE_ROLE:-editor}
+      PROVENA_SERVICE_IDENTITIES: ${PROVENA_SERVICE_IDENTITIES:-[]}
+      PROVENA_GATEWAY_SERVICE_TOKEN: ${PROVENA_GATEWAY_SERVICE_TOKEN:-}
     volumes:
       - provena-data:/data
+    networks:
+      default:
+      neverzero-provena:
+        aliases:
+          - provena-store
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/readyz"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -178,3 +231,8 @@ services:
 
 volumes:
   provena-data:
+
+networks:
+  neverzero-provena:
+    name: ${PROVENA_INTEGRATION_NETWORK:-neverzero-provena}
+    driver: bridge

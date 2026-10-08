@@ -91,6 +91,12 @@ from app.models import (
 
 
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "storage" / "migrations" / "001_initial.sql"
+SQLITE_TENANT_INTEGRITY_MIGRATION_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "storage"
+    / "migrations"
+    / "002_tenant_integrity_sqlite.sql"
+)
 READABLE_PERMISSION_LEVELS = frozenset(level.value for level in PermissionLevel)
 COMMENTABLE_PERMISSION_LEVELS = frozenset(
     level.value for level in (PermissionLevel.COMMENT, PermissionLevel.EDIT, PermissionLevel.OWNER)
@@ -120,6 +126,96 @@ class RepositoryEventConflictError(ValueError):
 
 class TenantOwnershipConflictError(ValueError):
     """Raised when a globally unique resource id crosses a tenant boundary."""
+
+IDENTITY_FINGERPRINT_PREFIX = "identity:"
+TENANT_OWNED_ID_COLUMNS = {
+    "connectors": "connector_id",
+    "connector_sources": "source_id",
+    "entity_registry": "entity_id",
+    "legal_holds": "hold_id",
+    "principal_mappings": "mapping_id",
+    "retention_policies": "policy_id",
+    "source_permission_grants": "grant_id",
+    "sync_jobs": "job_id",
+}
+TENANT_INTEGRITY_AUDIT_QUERIES = {
+    "connector_sources": """
+        SELECT COUNT(*) AS count
+        FROM connector_sources AS child
+        LEFT JOIN connectors AS parent
+          ON parent.connector_id = child.connector_id
+         AND parent.tenant_id = child.tenant_id
+        WHERE parent.connector_id IS NULL
+    """,
+    "principal_mappings": """
+        SELECT COUNT(*) AS count
+        FROM principal_mappings AS child
+        LEFT JOIN connectors AS parent
+          ON parent.connector_id = child.connector_id
+         AND parent.tenant_id = child.tenant_id
+        WHERE parent.connector_id IS NULL
+    """,
+    "source_permission_grants": """
+        SELECT COUNT(*) AS count
+        FROM source_permission_grants AS child
+        LEFT JOIN connector_sources AS source
+          ON source.source_id = child.source_id
+         AND source.connector_id = child.connector_id
+         AND source.tenant_id = child.tenant_id
+        LEFT JOIN connectors AS connector
+          ON connector.connector_id = child.connector_id
+         AND connector.tenant_id = child.tenant_id
+        WHERE source.source_id IS NULL OR connector.connector_id IS NULL
+    """,
+    "sync_jobs": """
+        SELECT COUNT(*) AS count
+        FROM sync_jobs AS child
+        LEFT JOIN connectors AS parent
+          ON parent.connector_id = child.connector_id
+         AND parent.tenant_id = child.tenant_id
+        WHERE parent.connector_id IS NULL
+    """,
+}
+SQLITE_EXPECTED_TENANT_FOREIGN_KEYS = {
+    "connector_sources": {
+        ("connectors", frozenset({("connector_id", "connector_id"), ("tenant_id", "tenant_id")})),
+    },
+    "principal_mappings": {
+        ("connectors", frozenset({("connector_id", "connector_id"), ("tenant_id", "tenant_id")})),
+    },
+    "source_permission_grants": {
+        (
+            "connector_sources",
+            frozenset(
+                {
+                    ("source_id", "source_id"),
+                    ("connector_id", "connector_id"),
+                    ("tenant_id", "tenant_id"),
+                }
+            ),
+        ),
+        ("connectors", frozenset({("connector_id", "connector_id"), ("tenant_id", "tenant_id")})),
+    },
+    "sync_jobs": {
+        ("connectors", frozenset({("connector_id", "connector_id"), ("tenant_id", "tenant_id")})),
+    },
+}
+
+
+class TenantOwnershipError(TenantOwnershipConflictError):
+    """Raised when a caller-controlled identifier belongs to another tenant."""
+
+
+class TenantIntegrityError(RuntimeError):
+    """Raised when a legacy schema contains tenant-parent integrity violations."""
+
+
+class TenantParentNotFoundError(ValueError):
+    """Raised when a tenant-scoped integration parent is absent or inaccessible."""
+
+    def __init__(self, resource: str) -> None:
+        self.resource = resource
+        super().__init__(f"{resource} not found")
 
 
 @dataclass(slots=True)
@@ -161,19 +257,39 @@ class ProvenaStore:
         path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA foreign_keys = ON")
-        self.hot_cache = hot_cache or InMemoryHotCache(ttl_seconds=300)
-        self.vector_dimensions = vector_dimensions
-        self._ensure_schema()
-        self._ensure_compatibility()
-        # Optional KNN fast path; falls back to a linear cosine scan if the
-        # sqlite-vec extension can't be loaded in this environment.
-        self.vec_enabled = False
-        self._init_vector_index()
+        try:
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA foreign_keys = ON")
+            self.hot_cache = hot_cache or InMemoryHotCache(ttl_seconds=300)
+            self.vector_dimensions = vector_dimensions
+            self._ensure_schema()
+            self._ensure_compatibility()
+            self._ensure_tenant_integrity()
+            # Optional KNN fast path; falls back to a linear cosine scan if the
+            # sqlite-vec extension can't be loaded in this environment.
+            self.vec_enabled = False
+            self._init_vector_index()
+        except Exception:
+            self.conn.close()
+            raise
 
     def close(self) -> None:
         self.conn.close()
+
+    def tenant_integrity_status(self) -> dict[str, Any]:
+        issues = dict(getattr(self, "_tenant_integrity_issues", {}))
+        ready = not any(issues.values()) and bool(
+            getattr(self, "_tenant_integrity_constraints_validated", False)
+        )
+        return {
+            "status": "ready" if ready else "blocked",
+            "ready": ready,
+            "backend": getattr(self, "_tenant_integrity_backend", "sqlite"),
+            "constraints_validated": bool(
+                getattr(self, "_tenant_integrity_constraints_validated", False)
+            ),
+            "issues": issues,
+        }
 
     # ------------------------------------------------------------------
     # Vector index (sqlite-vec) — optional KNN fast path
@@ -270,12 +386,14 @@ class ProvenaStore:
             and access.tenant_id not in {None, payload.scope.tenant_id}
         ):
             raise ValueError("memory scope tenant does not match access tenant")
+        create_request_digest = self._create_request_digest(payload) if payload.memory_id else None
         fingerprint = self._fingerprint(
             payload.scope,
             payload.kind.value,
             payload.title,
             payload.content,
             payload.metadata,
+            identity=payload.memory_id,
         )
         now = self._iso_now()
         memory_id = payload.memory_id or str(uuid.uuid4())
@@ -302,57 +420,32 @@ class ProvenaStore:
             source_permission_levels=EDITABLE_PERMISSION_LEVELS,
             allowed_roles=MEMORY_WRITE_ROLES,
         )
-        existing = self.conn.execute(
-            "SELECT * FROM memories WHERE fingerprint = ?",
-            (fingerprint,),
-        ).fetchone()
-        if existing:
-            old_record = self._row_to_record(existing)
-            if not self._can_read_memory(old_record, access):
-                raise ValueError("memory not found")
-            if not source_write_allowed:
-                raise ValueError("connected source write access denied")
-            if existing["status"] == MemoryStatus.DELETED.value:
-                raise ValueError(
-                    "memory fingerprint is tombstoned; deleted memories require an explicit restore workflow"
-                )
-            record = self.get_memory(
-                existing["memory_id"],
-                access=access,
-                enforce_source_grants=True,
-            )
-            if record is None:
-                raise ValueError("memory not found")
-            # A retry after an invalidation backend failure must still advance
-            # the generation even when the durable write deduplicates.
-            self._invalidate_tenant_cache(payload.scope.tenant_id)
-            return MemoryWriteResult(created=False, memory=record)
-
+        existing = self._existing_create_result(payload, fingerprint, create_request_digest, access)
         if not source_write_allowed:
             raise ValueError("connected source write access denied")
-        if payload.supersedes_memory_id:
-            self._validate_supersession_target(
-                payload.supersedes_memory_id,
-                memory_id,
-                payload.scope.tenant_id,
-                access,
-            )
+        if existing is not None:
+            self._invalidate_tenant_cache(payload.scope.tenant_id)
+            return existing
+        record: MemoryRecord | None = None
 
         with self.conn:
-            self.conn.execute(
+            self._begin_immediate_write()
+            cursor = self.conn.execute(
                 """
                 INSERT INTO memories (
-                    memory_id, fingerprint, kind, status, tenant_id, workspace_id,
+                    memory_id, fingerprint, create_request_digest, kind, status, tenant_id, workspace_id,
                     project_id, user_id, agent_id, session_id, title, content, summary,
                     entity_keys_json, tags_json, metadata_json, importance, confidence,
                     strength, valid_from, valid_to, expires_at, created_at, updated_at,
                     memory_layer,
                     embedding_model, embedding_json, acl_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT DO NOTHING
                 """,
                 (
                     memory_id,
                     fingerprint,
+                    create_request_digest,
                     payload.kind.value,
                     MemoryStatus.ACTIVE.value,
                     payload.scope.tenant_id,
@@ -381,42 +474,84 @@ class ProvenaStore:
                     self._to_json([entry.model_dump() for entry in acl]),
                 ),
             )
-            self._replace_trigger_phrases(memory_id, payload.scope.tenant_id, payload.trigger_phrases)
-            for source in payload.source_references:
-                self._insert_source(memory_id, source)
-            if payload.supersedes_memory_id:
-                self.conn.execute(
-                    "UPDATE memories SET status = ?, updated_at = ? WHERE memory_id = ? AND tenant_id = ?",
-                    (
-                        MemoryStatus.SUPERSEDED.value,
-                        now,
+            inserted = cursor.rowcount == 1
+            if inserted:
+                if payload.supersedes_memory_id:
+                    self._validate_supersession(
+                        source_memory_id=memory_id,
+                        source_scope=payload.scope,
+                        source_status=MemoryStatus.ACTIVE,
+                        target_memory_id=payload.supersedes_memory_id,
+                        access=access,
+                    )
+                self._replace_trigger_phrases(memory_id, payload.scope.tenant_id, payload.trigger_phrases)
+                for source in payload.source_references:
+                    self._insert_source(memory_id, source)
+                if payload.supersedes_memory_id:
+                    target_update = self.conn.execute(
+                        """
+                        UPDATE memories
+                        SET status = ?, updated_at = ?
+                        WHERE memory_id = ? AND tenant_id = ? AND status = ? AND held = 0
+                        """,
+                        (
+                            MemoryStatus.SUPERSEDED.value,
+                            now,
+                            payload.supersedes_memory_id,
+                            payload.scope.tenant_id,
+                            MemoryStatus.ACTIVE.value,
+                        ),
+                    )
+                    if target_update.rowcount != 1:
+                        raise ValueError("supersession target must remain active")
+                    self._insert_relation(
                         payload.supersedes_memory_id,
-                        payload.scope.tenant_id,
-                    ),
-                )
-                self._insert_relation(
-                    payload.supersedes_memory_id,
+                        memory_id,
+                        RelationKind.SUPERSEDES.value,
+                        payload.scope,
+                    )
+                self._index_memory(
                     memory_id,
-                    RelationKind.SUPERSEDES.value,
-                    payload.scope,
+                    payload.title,
+                    payload.summary,
+                    payload.content,
+                    payload.tags,
+                    payload.entity_keys,
                 )
-            self._index_memory(memory_id, payload.title, payload.summary, payload.content, payload.tags, payload.entity_keys)
-            self._insert_audit("memory_created", memory_id, payload.scope.tenant_id, {"kind": payload.kind.value})
-            self._refresh_hold_state([memory_id])
-            row = self.conn.execute("SELECT * FROM memories WHERE memory_id = ?", (memory_id,)).fetchone()
-            if row is None:
-                raise RuntimeError("created memory disappeared before transaction commit")
-            record = self._row_to_record(row)
-            self._insert_history(
-                memory_id,
-                record.scope.tenant_id,
-                MemoryHistoryEventType.ADD,
-                old_memory={},
-                new_memory=record.model_dump(mode="json"),
-                details={"kind": payload.kind.value, "memory_layer": memory_layer.value},
-                actor_id=access.principal_id if access else None,
-            )
-            self._vec_upsert(memory_id, record.embedding)
+                self._insert_audit(
+                    "memory_created",
+                    memory_id,
+                    payload.scope.tenant_id,
+                    {"kind": payload.kind.value},
+                )
+                self._refresh_hold_state([memory_id])
+                row = self.conn.execute(
+                    "SELECT * FROM memories WHERE memory_id = ?",
+                    (memory_id,),
+                ).fetchone()
+                if row is None:  # pragma: no cover - guarded by the insert above
+                    raise RuntimeError("created memory disappeared before commit")
+                record = self._row_to_record(row)
+                self._insert_history(
+                    memory_id,
+                    record.scope.tenant_id,
+                    MemoryHistoryEventType.ADD,
+                    old_memory={},
+                    new_memory=record.model_dump(mode="json"),
+                    details={"kind": payload.kind.value, "memory_layer": memory_layer.value},
+                    actor_id=access.principal_id if access else None,
+                )
+                self._vec_upsert(memory_id, record.embedding)
+
+        if not inserted:
+            existing = self._existing_create_result(payload, fingerprint, create_request_digest, access)
+            if existing is not None:
+                self._invalidate_tenant_cache(payload.scope.tenant_id)
+                return existing
+            raise ValueError("duplicate memory identity")
+
+        if record is None:
+            raise RuntimeError("created memory did not produce a committed record")
         self._invalidate_tenant_cache(payload.scope.tenant_id)
         return MemoryWriteResult(created=True, memory=record)
 
@@ -1343,13 +1478,6 @@ class ProvenaStore:
         updates = payload.model_dump(exclude_unset=True)
         if not updates:
             return MemoryWriteResult(created=False, memory=existing)
-        if payload.supersedes_memory_id:
-            self._validate_supersession_target(
-                payload.supersedes_memory_id,
-                memory_id,
-                existing.scope.tenant_id,
-                access,
-            )
 
         next_kind = payload.kind or existing.kind
         next_layer = payload.memory_layer or existing.memory_layer
@@ -1424,20 +1552,34 @@ class ProvenaStore:
                 allowed_roles=MEMORY_WRITE_ROLES,
             ):
                 raise ValueError("memory not found")
-        next_fingerprint = self._fingerprint(
-            existing.scope,
-            next_kind.value,
-            next_title,
-            next_content,
-            next_metadata,
+        next_fingerprint = (
+            existing.fingerprint
+            if existing.fingerprint.startswith(IDENTITY_FINGERPRINT_PREFIX)
+            else self._fingerprint(
+                existing.scope,
+                next_kind.value,
+                next_title,
+                next_content,
+                next_metadata,
+            )
         )
         old_snapshot = existing.model_dump(mode="json")
         now = self._iso_now()
 
         try:
             with self.conn:
-                self.conn.execute(
-                    """
+                self._begin_immediate_write()
+                if payload.supersedes_memory_id:
+                    self._validate_supersession(
+                        source_memory_id=memory_id,
+                        source_scope=existing.scope,
+                        source_status=existing.status,
+                        target_memory_id=payload.supersedes_memory_id,
+                        access=access,
+                    )
+                source_status_clause = " AND status = ?" if payload.supersedes_memory_id else ""
+                source_update = self.conn.execute(
+                    f"""
                     UPDATE memories
                     SET fingerprint = ?,
                         kind = ?,
@@ -1458,7 +1600,7 @@ class ProvenaStore:
                         embedding_model = ?,
                         embedding_json = ?,
                         acl_json = ?
-                    WHERE memory_id = ?
+                    WHERE memory_id = ?{source_status_clause}
                     """,
                     (
                         next_fingerprint,
@@ -1481,8 +1623,15 @@ class ProvenaStore:
                         self._to_json(next_embedding),
                         self._to_json([entry.model_dump() for entry in next_acl]),
                         memory_id,
+                        *(
+                            (MemoryStatus.ACTIVE.value,)
+                            if payload.supersedes_memory_id
+                            else ()
+                        ),
                     ),
                 )
+                if payload.supersedes_memory_id and source_update.rowcount != 1:
+                    raise ValueError("supersession source must remain active")
                 if payload.source_references is not None:
                     self.conn.execute("DELETE FROM memory_sources WHERE memory_id = ?", (memory_id,))
                     for source in next_sources:
@@ -1490,15 +1639,22 @@ class ProvenaStore:
                 if payload.trigger_phrases is not None:
                     self._replace_trigger_phrases(memory_id, existing.scope.tenant_id, next_triggers)
                 if payload.supersedes_memory_id:
-                    self.conn.execute(
-                        "UPDATE memories SET status = ?, updated_at = ? WHERE memory_id = ? AND tenant_id = ?",
+                    target_update = self.conn.execute(
+                        """
+                        UPDATE memories
+                        SET status = ?, updated_at = ?
+                        WHERE memory_id = ? AND tenant_id = ? AND status = ? AND held = 0
+                        """,
                         (
                             MemoryStatus.SUPERSEDED.value,
                             now,
                             payload.supersedes_memory_id,
                             existing.scope.tenant_id,
+                            MemoryStatus.ACTIVE.value,
                         ),
                     )
+                    if target_update.rowcount != 1:
+                        raise ValueError("supersession target must remain active")
                     self._insert_relation(
                         payload.supersedes_memory_id,
                         memory_id,
@@ -1780,7 +1936,9 @@ class ProvenaStore:
             )
             if evaluation.rejection_reasons:
                 continue
-            related = self._related_memories(record.memory_id, access) if payload.include_relations else []
+            related = self._related_memories(
+                record.memory_id, access, include_procedures=False,
+            ) if payload.include_relations else []
             results.append(
                 SearchResult(
                     memory=record,
@@ -2371,33 +2529,90 @@ class ProvenaStore:
             )
         old_snapshot = record.model_dump(mode="json")
 
+        blocked_by_hold = False
+        deleted = False
         with self.conn:
-            if hard_delete:
-                self._purge_memory_indexes([memory_id])
-                self._delete_memory_rows([memory_id])
-            else:
-                self.conn.execute(
-                    "UPDATE memories SET status = ?, updated_at = ? WHERE memory_id = ?",
-                    (MemoryStatus.DELETED.value, self._iso_now(), memory_id),
-                )
-            self._insert_audit("memory_deleted", memory_id, record.scope.tenant_id, {"hard_delete": hard_delete})
-            # A hard delete removes the memory row, which cascades away its
-            # history; recording a DELETE event here would reference a row that
-            # no longer exists (FK violation) and be wiped anyway. The audit_log
-            # (no FK) is the durable record of a hard delete. Soft deletes keep
-            # the row, so their history event is retained.
-            if not hard_delete:
-                self._insert_history(
-                    memory_id,
-                    record.scope.tenant_id,
-                    MemoryHistoryEventType.DELETE,
-                    old_memory=old_snapshot,
-                    new_memory={**old_snapshot, "status": MemoryStatus.DELETED.value},
-                    details={"hard_delete": hard_delete},
-                    actor_id=access.principal_id if access else None,
-                )
-        self._purge_tenant_cache(record.scope.tenant_id)
-        return DeleteResponse(memory_id=memory_id, deleted=True, hard_delete=hard_delete)
+            self._begin_immediate_write()
+            self._refresh_hold_state([memory_id])
+            current_row = self.conn.execute(
+                "SELECT * FROM memories WHERE memory_id = ?",
+                (memory_id,),
+            ).fetchone()
+            if current_row is not None:
+                current = self._row_to_record(current_row)
+                old_snapshot = current.model_dump(mode="json")
+                if hard_delete:
+                    deleted = bool(self._delete_unheld_memory_ids([memory_id]))
+                    blocked_by_hold = not deleted and current.held
+                    if deleted:
+                        self._vec_delete(memory_id)
+                elif current.held:
+                    self.conn.execute(
+                        """
+                        UPDATE memories
+                        SET status = ?, pre_hold_status = ?, updated_at = ?
+                        WHERE memory_id = ? AND held = 1
+                        """,
+                        (
+                            MemoryStatus.HELD.value,
+                            MemoryStatus.DELETED.value,
+                            self._iso_now(),
+                            memory_id,
+                        ),
+                    )
+                    deleted = True
+                else:
+                    self.conn.execute(
+                        """
+                        UPDATE memories
+                        SET status = ?, updated_at = ?
+                        WHERE memory_id = ? AND held = 0
+                        """,
+                        (MemoryStatus.DELETED.value, self._iso_now(), memory_id),
+                    )
+                    deleted = True
+                if deleted:
+                    self._insert_audit(
+                        "memory_deleted",
+                        memory_id,
+                        current.scope.tenant_id,
+                        {"hard_delete": hard_delete},
+                    )
+                    # A hard delete removes the memory row, which cascades away
+                    # its history. The audit log has no memory foreign key and
+                    # remains the durable record of that deletion.
+                    if not hard_delete:
+                        self._insert_history(
+                            memory_id,
+                            current.scope.tenant_id,
+                            MemoryHistoryEventType.DELETE,
+                            old_memory=old_snapshot,
+                            new_memory={
+                                **old_snapshot,
+                                "status": (
+                                    MemoryStatus.HELD.value
+                                    if current.held
+                                    else MemoryStatus.DELETED.value
+                                ),
+                            },
+                            details={
+                                "hard_delete": hard_delete,
+                                "status_after_hold_release": (
+                                    MemoryStatus.DELETED.value if current.held else None
+                                ),
+                            },
+                            actor_id=access.principal_id if access else None,
+                        )
+
+        if blocked_by_hold:
+            raise ValueError("memory is under legal hold")
+        if deleted:
+            self._purge_tenant_cache(record.scope.tenant_id)
+        return DeleteResponse(
+            memory_id=memory_id,
+            deleted=deleted,
+            hard_delete=hard_delete,
+        )
 
     def erase_scope(
         self,
@@ -2419,34 +2634,45 @@ class ProvenaStore:
             ).fetchall()
         ]
         if access is not None:
-            ids = [
-                memory_id
-                for memory_id in ids
-                if (record := self.get_memory(memory_id, access=access)) is not None
-                and self._can_access(record, access, ACLPermission.DELETE)
-            ]
+            with self.conn:
+                ids = [
+                    memory_id
+                    for memory_id in ids
+                    if (record := self.get_memory(memory_id, access=access)) is not None
+                    and self._can_access(record, access, ACLPermission.DELETE)
+                ]
         if not ids:
             self._purge_tenant_cache(payload.tenant_id)
             return EraseResponse(deleted_memories=0, deleted_sources=0, deleted_relations=0)
 
-        placeholders = ", ".join("?" for _ in ids)
-        source_count = self.conn.execute(
-            f"SELECT COUNT(*) AS count FROM memory_sources WHERE memory_id IN ({placeholders})",
-            ids,
-        ).fetchone()["count"]
-        relation_count = self.conn.execute(
-            f"SELECT COUNT(*) AS count FROM memory_relations WHERE from_memory_id IN ({placeholders}) OR to_memory_id IN ({placeholders})",
-            (*ids, *ids),
-        ).fetchone()["count"]
-
         with self.conn:
-            self._record_repository_event_erasures(ids, "admin_erase")
-            self._purge_memory_indexes(ids)
-            self._delete_memory_rows(ids)
-            self._insert_audit("scope_erased", None, payload.tenant_id, {"memory_ids": ids})
+            self._begin_immediate_write()
+            self._refresh_hold_state(ids)
+            placeholders = ", ".join("?" for _ in ids)
+            deletable = [
+                row["memory_id"]
+                for row in self.conn.execute(
+                    f"SELECT memory_id FROM memories WHERE memory_id IN ({placeholders}) AND held = 0",
+                    ids,
+                ).fetchall()
+            ]
+            if not deletable:
+                return EraseResponse(deleted_memories=0, deleted_sources=0, deleted_relations=0)
+
+            deletable_placeholders = ", ".join("?" for _ in deletable)
+            source_count = self.conn.execute(
+                f"SELECT COUNT(*) AS count FROM memory_sources WHERE memory_id IN ({deletable_placeholders})",
+                deletable,
+            ).fetchone()["count"]
+            relation_count = self.conn.execute(
+                f"SELECT COUNT(*) AS count FROM memory_relations WHERE from_memory_id IN ({deletable_placeholders}) OR to_memory_id IN ({deletable_placeholders})",
+                (*deletable, *deletable),
+            ).fetchone()["count"]
+            deleted_ids = self._delete_unheld_memory_ids(deletable, reason="admin_erase")
+            self._insert_audit("scope_erased", None, payload.tenant_id, {"memory_ids": deleted_ids})
         self._purge_tenant_cache(payload.tenant_id)
         return EraseResponse(
-            deleted_memories=len(ids),
+            deleted_memories=len(deleted_ids),
             deleted_sources=source_count,
             deleted_relations=relation_count,
         )
@@ -2515,6 +2741,12 @@ class ProvenaStore:
         created_at = self._to_iso(connector.created_at) or now
         updated_at = self._to_iso(connector.updated_at) or now
         with self.conn:
+            self._begin_immediate_write()
+            self._ensure_tenant_owned_id(
+                "connectors",
+                connector.connector_id,
+                connector.tenant_id,
+            )
             cursor = self.conn.execute(
                 """
                 INSERT INTO connectors (
@@ -2610,10 +2842,18 @@ class ProvenaStore:
         )
         for source in batch.sources:
             if source.connector_id != connector_id or source.tenant_id != tenant_id:
-                raise TenantOwnershipConflictError("resource write conflict")
+                raise TenantOwnershipError("resource write conflict")
             self._assert_tenant_owned_id("connector_source", source.source_id, tenant_id)
         now = self._iso_now()
         with self.conn:
+            self._begin_immediate_write()
+            self._require_tenant_connector(connector_id, tenant_id)
+            for source in batch.sources:
+                self._ensure_tenant_owned_id(
+                    "connector_sources",
+                    source.source_id,
+                    tenant_id,
+                )
             for source in batch.sources:
                 cursor = self.conn.execute(
                     """
@@ -2682,7 +2922,7 @@ class ProvenaStore:
         )
         for mapping in batch.mappings:
             if mapping.connector_id != connector_id or mapping.tenant_id != tenant_id:
-                raise TenantOwnershipConflictError("resource write conflict")
+                raise TenantOwnershipError("resource write conflict")
             self._assert_tenant_owned_id(
                 "principal_mapping",
                 mapping.mapping_id,
@@ -2690,6 +2930,14 @@ class ProvenaStore:
             )
         now = self._iso_now()
         with self.conn:
+            self._begin_immediate_write()
+            self._require_tenant_connector(connector_id, tenant_id)
+            for mapping in batch.mappings:
+                self._ensure_tenant_owned_id(
+                    "principal_mappings",
+                    mapping.mapping_id,
+                    tenant_id,
+                )
             for mapping in batch.mappings:
                 cursor = self.conn.execute(
                     """
@@ -2757,7 +3005,7 @@ class ProvenaStore:
         )
         for grant in batch.grants:
             if grant.connector_id != connector_id or grant.tenant_id != tenant_id:
-                raise TenantOwnershipConflictError("resource write conflict")
+                raise TenantOwnershipError("resource write conflict")
             self._assert_tenant_owned_id(
                 "source_permission_grant",
                 grant.grant_id,
@@ -2774,9 +3022,22 @@ class ProvenaStore:
                 (grant.source_id, tenant_id),
             ).fetchone()
             if source is None or source["connector_id"] != connector_id:
-                raise TenantOwnershipConflictError("resource write conflict")
+                raise TenantParentNotFoundError("source")
         now = self._iso_now()
         with self.conn:
+            self._begin_immediate_write()
+            self._require_tenant_connector(connector_id, tenant_id)
+            for grant in batch.grants:
+                self._require_tenant_connector_source(
+                    grant.source_id,
+                    connector_id,
+                    tenant_id,
+                )
+                self._ensure_tenant_owned_id(
+                    "source_permission_grants",
+                    grant.grant_id,
+                    tenant_id,
+                )
             for grant in batch.grants:
                 cursor = self.conn.execute(
                     """
@@ -2843,16 +3104,12 @@ class ProvenaStore:
         return [self._row_to_source_permission_grant(row) for row in rows]
 
     def save_sync_job(self, connector_id: str, tenant_id: str, job: SyncJob) -> SyncJob:
-        self._assert_tenant_owned_id(
-            "connector",
-            connector_id,
-            tenant_id,
-            require_exists=True,
-        )
         if job.connector_id != connector_id or job.tenant_id != tenant_id:
-            raise TenantOwnershipConflictError("resource write conflict")
-        self._assert_tenant_owned_id("sync_job", job.job_id, tenant_id)
+            raise TenantOwnershipError("resource write conflict")
         with self.conn:
+            self._begin_immediate_write()
+            self._require_tenant_connector(connector_id, tenant_id)
+            self._ensure_tenant_owned_id("sync_jobs", job.job_id, tenant_id)
             cursor = self.conn.execute(
                 """
                 INSERT INTO sync_jobs (
@@ -2996,12 +3253,13 @@ class ProvenaStore:
         )
 
     def save_retention_policy(self, policy: RetentionPolicy) -> RetentionPolicy:
-        self._assert_tenant_owned_id(
-            "retention_policy",
-            policy.policy_id,
-            policy.tenant_id,
-        )
         with self.conn:
+            self._begin_immediate_write()
+            self._ensure_tenant_owned_id(
+                "retention_policies",
+                policy.policy_id,
+                policy.tenant_id,
+            )
             cursor = self.conn.execute(
                 """
                 INSERT INTO retention_policies (
@@ -3050,9 +3308,15 @@ class ProvenaStore:
         ]
 
     def place_legal_hold(self, hold: LegalHold) -> LegalHold:
-        self._assert_tenant_owned_id("legal_hold", hold.hold_id, hold.tenant_id)
-        resolved_ids = self._resolve_legal_hold_targets(hold.tenant_id, hold.memory_ids, hold.scope)
         with self.conn:
+            self._begin_immediate_write()
+            existing_hold = self._ensure_tenant_owned_id(
+                "legal_holds",
+                hold.hold_id,
+                hold.tenant_id,
+            )
+            previous_ids = self._hold_targets_from_row(existing_hold) if existing_hold else []
+            resolved_ids = self._resolve_legal_hold_targets(hold.tenant_id, hold.memory_ids, hold.scope)
             cursor = self.conn.execute(
                 """
                 INSERT INTO legal_holds (
@@ -3078,86 +3342,95 @@ class ProvenaStore:
                 ),
             )
             self._require_tenant_owned_upsert(cursor)
-            self._refresh_hold_state(resolved_ids)
+            self._refresh_hold_state([*previous_ids, *resolved_ids])
         return hold.model_copy(update={"memory_ids": resolved_ids})
 
     def release_legal_hold(self, hold_id: str, tenant_id: str | None = None) -> bool:
-        row = self.conn.execute(
-            "SELECT * FROM legal_holds WHERE hold_id = ?",
-            (hold_id,),
-        ).fetchone()
-        if row is None:
-            return False
-        if tenant_id and row["tenant_id"] != tenant_id:
-            return False
-        memory_ids = self._hold_targets_from_row(row)
         with self.conn:
+            self._begin_immediate_write()
+            row = self.conn.execute(
+                "SELECT * FROM legal_holds WHERE hold_id = ?",
+                (hold_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if tenant_id and row["tenant_id"] != tenant_id:
+                return False
+            memory_ids = self._hold_targets_from_row(row)
             self.conn.execute("DELETE FROM legal_holds WHERE hold_id = ?", (hold_id,))
             self._refresh_hold_state(memory_ids)
         return True
 
     def rtbf(self, payload: RTBFRequest) -> RTBFResponse:
-        self._refresh_hold_state(
-            [
+        with self.conn:
+            self._begin_immediate_write()
+            memory_ids = [
                 row["memory_id"]
                 for row in self.conn.execute(
                     "SELECT memory_id FROM memories WHERE tenant_id = ?",
                     (payload.tenant_id,),
                 ).fetchall()
             ]
-        )
-        rows = self.conn.execute(
-            "SELECT memory_id, held FROM memories WHERE tenant_id = ?",
-            (payload.tenant_id,),
-        ).fetchall()
-        held = [row["memory_id"] for row in rows if int(row["held"]) == 1]
-        deletable = [row["memory_id"] for row in rows if int(row["held"]) == 0]
-        if deletable:
-            with self.conn:
-                self._record_repository_event_erasures(deletable, "right_to_be_forgotten")
-                self._purge_memory_indexes(deletable)
-                self._delete_memory_rows(deletable)
+            self._refresh_hold_state(memory_ids)
+            rows = self.conn.execute(
+                "SELECT memory_id, held FROM memories WHERE tenant_id = ?",
+                (payload.tenant_id,),
+            ).fetchall()
+            held = [row["memory_id"] for row in rows if int(row["held"]) == 1]
+            deleted_ids = self._delete_unheld_memory_ids(
+                [row["memory_id"] for row in rows if int(row["held"]) == 0],
+                reason="right_to_be_forgotten",
+            )
         self._purge_tenant_cache(payload.tenant_id)
-        return RTBFResponse(deleted_memories=len(deletable), held_memories=held)
+        return RTBFResponse(deleted_memories=len(deleted_ids), held_memories=held)
 
     def enforce_retention(self, tenant_id: str | None = None) -> RetentionEnforcementResponse:
         now = datetime.now(UTC)
         expired: list[str] = []
-        tenant_rows = self.conn.execute(
-            "SELECT memory_id FROM memories WHERE (? IS NULL OR tenant_id = ?)",
-            (tenant_id, tenant_id),
-        ).fetchall()
-        self._refresh_hold_state([row["memory_id"] for row in tenant_rows])
         for policy in self.list_retention_policies(tenant_id):
             cutoff = now - timedelta(days=policy.max_age_days)
-            rows = self.conn.execute(
-                """
-                SELECT memory_id, held FROM memories
-                WHERE tenant_id = ?
-                  AND (? IS NULL OR kind = ?)
-                  AND datetime(created_at) < datetime(?)
-                """,
-                (policy.tenant_id, policy.kind, policy.kind, cutoff.isoformat()),
-            ).fetchall()
-            eligible = [row["memory_id"] for row in rows if int(row["held"]) == 0]
-            if not eligible:
-                self._purge_tenant_cache(policy.tenant_id)
-                continue
-            expired.extend(eligible)
-            placeholders = ", ".join("?" for _ in eligible)
             with self.conn:
-                self._record_repository_event_erasures(
-                    eligible,
-                    f"retention:{policy.policy_id}:{policy.action}",
-                )
+                self._begin_immediate_write()
+                rows = self.conn.execute(
+                    """
+                    SELECT memory_id FROM memories
+                    WHERE tenant_id = ?
+                      AND (? IS NULL OR kind = ?)
+                      AND datetime(created_at) < datetime(?)
+                    """,
+                    (policy.tenant_id, policy.kind, policy.kind, cutoff.isoformat()),
+                ).fetchall()
+                candidates = [row["memory_id"] for row in rows]
+                self._refresh_hold_state(candidates)
+                if not candidates:
+                    continue
+                placeholders = ", ".join("?" for _ in candidates)
                 if policy.action == "delete_soft":
-                    self.conn.execute(
-                        f"UPDATE memories SET status = ?, updated_at = ? WHERE memory_id IN ({placeholders})",
-                        (MemoryStatus.DELETED.value, self._iso_now(), *eligible),
+                    eligible = [
+                        row["memory_id"]
+                        for row in self.conn.execute(
+                            f"SELECT memory_id FROM memories WHERE memory_id IN ({placeholders}) AND held = 0",
+                            candidates,
+                        ).fetchall()
+                    ]
+                    self._record_repository_event_erasures(
+                        eligible, f"retention:{policy.policy_id}:{policy.action}"
                     )
-                else:
                     self._purge_memory_indexes(eligible)
-                    self._delete_memory_rows(eligible)
+                    changed = self.conn.execute(
+                        f"""
+                        UPDATE memories
+                        SET status = ?, updated_at = ?
+                        WHERE memory_id IN ({placeholders}) AND held = 0
+                        RETURNING memory_id
+                        """,
+                        (MemoryStatus.DELETED.value, self._iso_now(), *candidates),
+                    ).fetchall()
+                    expired.extend(row["memory_id"] for row in changed)
+                else:
+                    expired.extend(self._delete_unheld_memory_ids(
+                        candidates, reason=f"retention:{policy.policy_id}:{policy.action}"
+                    ))
             self._purge_tenant_cache(policy.tenant_id)
         return RetentionEnforcementResponse(expired_memory_ids=expired)
 
@@ -3676,6 +3949,23 @@ class ProvenaStore:
             [MemoryStatus.DELETED.value, MemoryStatus.RETRACTED.value],
         )
 
+    @staticmethod
+    def _is_repository_procedure(record: MemoryRecord) -> bool:
+        event = record.metadata.get("provena_event")
+        data = event.get("structured_data") if isinstance(event, dict) else None
+        return record.metadata.get("provena_projection") == "repo-ledger" and isinstance(data, dict) and (
+            "procedure" in data or "procedureOutcome" in data
+        )
+
+    @staticmethod
+    def _generic_memory_predicate(alias: str = "") -> str:
+        column = f"{alias}.metadata_json" if alias else "metadata_json"
+        return (
+            f"NOT (COALESCE(json_extract({column}, '$.provena_projection') = 'repo-ledger', 0) AND ("
+            f"json_type({column}, '$.provena_event.structured_data.procedure') IS NOT NULL OR "
+            f"json_type({column}, '$.provena_event.structured_data.procedureOutcome') IS NOT NULL))"
+        )
+
     def _evaluate_search_candidate(
         self,
         record: MemoryRecord,
@@ -3687,6 +3977,8 @@ class ProvenaStore:
     ) -> SearchEvaluation:
         rejection_reasons: list[str] = []
         now = datetime.now(UTC)
+        if self._is_repository_procedure(record):
+            rejection_reasons.append("procedure recall required")
         if not self._can_access(record, access, ACLPermission.READ):
             rejection_reasons.append("acl denied")
         elif not self._has_required_source_grants(record, access):
@@ -3864,6 +4156,7 @@ class ProvenaStore:
             SELECT *, NULL AS fts_rank
             FROM memories
             WHERE tenant_id = ?{status_sql}{fallback_scope_sql}
+              AND {self._generic_memory_predicate()}
             ORDER BY datetime(updated_at) DESC
             LIMIT ?
             """,
@@ -3888,6 +4181,7 @@ class ProvenaStore:
                 JOIN memories AS m ON m.memory_id = memories_fts.memory_id
                 WHERE memories_fts MATCH ?
                   AND m.tenant_id = ?{status_sql}{scope_sql}
+                  AND {self._generic_memory_predicate('m')}
                 ORDER BY bm25(memories_fts), datetime(m.updated_at) DESC
                 LIMIT ?
                 """,
@@ -3941,6 +4235,7 @@ class ProvenaStore:
             SELECT m.*, NULL AS fts_rank
             FROM memories AS m
             WHERE m.tenant_id = ?{status_sql}{scope_sql}
+              AND {self._generic_memory_predicate('m')}
               AND m.memory_id IN ({placeholders})
             """,
             (payload.scope.tenant_id, *status_params, *scope_params, *ids),
@@ -3975,6 +4270,7 @@ class ProvenaStore:
             FROM memories AS m
             WHERE m.tenant_id = ?{status_sql}
               AND {self._embedding_candidate_predicate('m')}{scope_sql}
+              AND {self._generic_memory_predicate('m')}
             ORDER BY datetime(m.updated_at) DESC
             LIMIT ?
             """,
@@ -4078,6 +4374,8 @@ class ProvenaStore:
         self,
         memory_id: str,
         access: AccessContext | None,
+        *,
+        include_procedures: bool = True,
     ) -> list[RelatedMemory]:
         rows = self.conn.execute(
             """
@@ -4097,6 +4395,7 @@ class ProvenaStore:
             )
             if (
                 record is None
+                or (not include_procedures and self._is_repository_procedure(record))
                 or record.status in {MemoryStatus.DELETED, MemoryStatus.RETRACTED}
                 or (record.valid_from is not None and now < record.valid_from)
                 or (record.valid_to is not None and now > record.valid_to)
@@ -4355,19 +4654,20 @@ class ProvenaStore:
             f"SELECT tenant_id FROM {table} WHERE {id_column} = ?",
             (resource_id,),
         ).fetchone()
+        if require_exists and (row is None or row["tenant_id"] != tenant_id):
+            resource_name = "source" if resource == "connector_source" else resource
+            raise TenantParentNotFoundError(resource_name)
         if row is None:
-            if require_exists:
-                raise TenantOwnershipConflictError("resource write conflict")
             return
         if row["tenant_id"] != tenant_id:
-            raise TenantOwnershipConflictError("resource write conflict")
+            raise TenantOwnershipError("resource write conflict")
 
     @staticmethod
     def _require_tenant_owned_upsert(cursor: Any) -> None:
         """Reject an atomic guarded upsert that lost a tenant-id race."""
 
         if cursor.fetchone() is None:
-            raise TenantOwnershipConflictError("resource write conflict")
+            raise TenantOwnershipError("resource write conflict")
 
     def _insert_audit(self, action: str, memory_id: str | None, tenant_id: str | None, details: dict[str, Any]) -> None:
         self.conn.execute(
@@ -4515,12 +4815,86 @@ class ProvenaStore:
             params.append(payload.user_id)
         return " AND ".join(clauses), params
 
+    def _delete_unheld_memory_ids(
+        self,
+        memory_ids: list[str],
+        *,
+        reason: str = "hard_delete",
+    ) -> list[str]:
+        deleted: list[str] = []
+        for chunk in self._chunks(dict.fromkeys(memory_ids)):
+            placeholders = ", ".join("?" for _ in chunk)
+            deletable = [
+                row["memory_id"]
+                for row in self.conn.execute(
+                    f"SELECT memory_id FROM memories WHERE memory_id IN ({placeholders}) AND held = 0",
+                    chunk,
+                ).fetchall()
+            ]
+            if not deletable:
+                continue
+            # Callers hold the governance write fence. Record replay tombstones
+            # and remove derived indexes in the same transaction as deletion.
+            self._record_repository_event_erasures(deletable, reason)
+            self._purge_memory_indexes(deletable)
+            delete_placeholders = ", ".join("?" for _ in deletable)
+            rows = self.conn.execute(
+                f"DELETE FROM memories WHERE memory_id IN ({delete_placeholders}) AND held = 0 RETURNING memory_id",
+                deletable,
+            ).fetchall()
+            deleted.extend(row["memory_id"] for row in rows)
+        return deleted
+
+    def _begin_immediate_write(self) -> None:
+        if not self.conn.in_transaction:
+            self.conn.execute("BEGIN IMMEDIATE")
+
+    def _ensure_tenant_owned_id(
+        self,
+        table: str,
+        identifier: str,
+        tenant_id: str,
+    ) -> Any | None:
+        id_column = TENANT_OWNED_ID_COLUMNS[table]
+        row = self.conn.execute(
+            f"SELECT * FROM {table} WHERE {id_column} = ?",
+            (identifier,),
+        ).fetchone()
+        if row is not None and row["tenant_id"] != tenant_id:
+            raise TenantOwnershipError("resource identifier is already owned by another tenant")
+        return row
+
+    def _require_tenant_connector(self, connector_id: str, tenant_id: str) -> None:
+        row = self.conn.execute(
+            "SELECT 1 FROM connectors WHERE connector_id = ? AND tenant_id = ?",
+            (connector_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            raise TenantParentNotFoundError("connector")
+
+    def _require_tenant_connector_source(
+        self,
+        source_id: str,
+        connector_id: str,
+        tenant_id: str,
+    ) -> None:
+        row = self.conn.execute(
+            """
+            SELECT 1 FROM connector_sources
+            WHERE source_id = ? AND connector_id = ? AND tenant_id = ?
+            """,
+            (source_id, connector_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            raise TenantParentNotFoundError("source")
+
     def _ensure_schema(self) -> None:
         self.conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
 
     def _ensure_compatibility(self) -> None:
         columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(memories)").fetchall()}
         migrations = {
+            "create_request_digest": "ALTER TABLE memories ADD COLUMN create_request_digest TEXT",
             "embedding_model": "ALTER TABLE memories ADD COLUMN embedding_model TEXT",
             "embedding_json": "ALTER TABLE memories ADD COLUMN embedding_json TEXT",
             "acl_json": "ALTER TABLE memories ADD COLUMN acl_json TEXT NOT NULL DEFAULT '[]'",
@@ -4548,6 +4922,93 @@ class ProvenaStore:
                     ADD COLUMN projection_version INTEGER NOT NULL DEFAULT 1
                     """
                 )
+
+    def _audit_tenant_integrity(self) -> dict[str, int]:
+        return {
+            table: int(self.conn.execute(query).fetchone()["count"])
+            for table, query in TENANT_INTEGRITY_AUDIT_QUERIES.items()
+        }
+
+    def _sqlite_foreign_key_signatures(
+        self,
+        table: str,
+    ) -> set[tuple[str, frozenset[tuple[str, str]]]]:
+        grouped: dict[int, tuple[str, set[tuple[str, str]]]] = {}
+        for row in self.conn.execute(f"PRAGMA foreign_key_list({table})").fetchall():
+            parent, columns = grouped.setdefault(int(row["id"]), (row["table"], set()))
+            columns.add((row["from"], row["to"]))
+            grouped[int(row["id"])] = (parent, columns)
+        return {(parent, frozenset(columns)) for parent, columns in grouped.values()}
+
+    def _sqlite_requires_tenant_integrity_rebuild(self) -> bool:
+        return any(
+            not expected.issubset(self._sqlite_foreign_key_signatures(table))
+            for table, expected in SQLITE_EXPECTED_TENANT_FOREIGN_KEYS.items()
+        )
+
+    @staticmethod
+    def _migration_statements(path: Path) -> list[str]:
+        sql = "\n".join(
+            line
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("--")
+        )
+        return [statement.strip() for statement in sql.split(";") if statement.strip()]
+
+    @staticmethod
+    def _tenant_integrity_error(issues: dict[str, int]) -> TenantIntegrityError:
+        affected = ", ".join(
+            f"{table}={count}" for table, count in issues.items() if count
+        )
+        return TenantIntegrityError(
+            "legacy tenant-integrity audit failed; repair mismatched or orphaned rows "
+            f"before retrying the migration ({affected})"
+        )
+
+    def _ensure_tenant_integrity(self) -> None:
+        self._tenant_integrity_backend = "sqlite"
+        issues = self._audit_tenant_integrity()
+        if any(issues.values()):
+            raise self._tenant_integrity_error(issues)
+
+        if self._sqlite_requires_tenant_integrity_rebuild():
+            self._rebuild_sqlite_tenant_integrity_tables()
+
+        issues = self._audit_tenant_integrity()
+        if any(issues.values()):  # pragma: no cover - guarded inside the migration transaction
+            raise self._tenant_integrity_error(issues)
+        if self._sqlite_requires_tenant_integrity_rebuild():  # pragma: no cover - migration invariant
+            raise TenantIntegrityError("tenant-integrity migration did not install composite foreign keys")
+        self._tenant_integrity_issues = issues
+        self._tenant_integrity_constraints_validated = True
+
+    def _rebuild_sqlite_tenant_integrity_tables(self) -> None:
+        # Foreign-key mode cannot be changed inside an active SQLite transaction.
+        # Disable it only on this migration connection, acquire the write lock,
+        # audit again under that lock, then rebuild every dependent table as one
+        # atomic unit. No DDL or row copy occurs when the locked audit fails.
+        self.conn.commit()
+        self.conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            issues = self._audit_tenant_integrity()
+            if any(issues.values()):
+                raise self._tenant_integrity_error(issues)
+            for statement in self._migration_statements(SQLITE_TENANT_INTEGRITY_MIGRATION_PATH):
+                self.conn.execute(statement)
+            violations = self.conn.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise TenantIntegrityError(
+                    "tenant-integrity migration produced foreign-key violations"
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        finally:
+            self.conn.execute("PRAGMA foreign_keys = ON")
+        if self.conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:  # pragma: no cover
+            raise TenantIntegrityError("failed to restore SQLite foreign-key enforcement")
 
     def _iso_now(self) -> str:
         return datetime.now(UTC).isoformat()
@@ -4617,6 +5078,7 @@ class ProvenaStore:
 
     def _search_cache_key(self, payload: SearchRequest, access: AccessContext | None) -> str:
         envelope = {
+            "generic_context_contract": 2,
             "query": payload.query.strip().lower(),
             "scope": payload.scope.model_dump(exclude_none=True),
             "kinds": sorted(kind.value for kind in payload.kinds),
@@ -4670,6 +5132,47 @@ class ProvenaStore:
                 self._iso_now(),
             ),
         )
+
+    def _validate_supersession(
+        self,
+        *,
+        source_memory_id: str,
+        source_scope: ScopeEnvelope,
+        source_status: MemoryStatus,
+        target_memory_id: str,
+        access: AccessContext | None,
+    ) -> MemoryRecord:
+        if source_memory_id == target_memory_id:
+            raise ValueError("memory cannot supersede itself")
+        if source_status != MemoryStatus.ACTIVE:
+            raise ValueError("supersession source must be active")
+        self._refresh_hold_state([target_memory_id])
+        row = self.conn.execute(
+            "SELECT * FROM memories WHERE memory_id = ?",
+            (target_memory_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("supersession target not found")
+        target = self._row_to_record(row)
+        if not self._can_access(target, access, ACLPermission.WRITE):
+            raise ValueError("write access required for supersession target")
+        if not self._can_access_memory(
+            target,
+            access,
+            ACLPermission.WRITE,
+            source_permission_levels=EDITABLE_PERMISSION_LEVELS,
+            allowed_roles=MEMORY_WRITE_ROLES,
+        ):
+            raise ValueError("superseded memory not found or inaccessible")
+        if self._is_repository_event_projection(target_memory_id):
+            raise RepositoryEventConflictError(
+                "repository ledger projections are immutable; append a source-attested superseding event"
+            )
+        if target.scope != source_scope:
+            raise ValueError("supersession target must have the same scope")
+        if target.status != MemoryStatus.ACTIVE or target.held:
+            raise ValueError("supersession target must be active")
+        return target
 
     def _infer_memory_layer(self, scope: ScopeEnvelope) -> MemoryLayer:
         if scope.session_id:
@@ -5070,6 +5573,84 @@ class ProvenaStore:
             )
         return sources
 
+    def _existing_create_result(
+        self,
+        payload: MemoryCreate,
+        fingerprint: str,
+        create_request_digest: str | None,
+        access: AccessContext | None,
+    ) -> MemoryWriteResult | None:
+        # The lookup refreshes legal-hold state, which can update the memory row.
+        # Always close that transaction before another creator retries the row.
+        with self.conn:
+            return self._existing_create_result_in_transaction(
+                payload,
+                fingerprint,
+                create_request_digest,
+                access,
+            )
+
+    def _existing_create_result_in_transaction(
+        self,
+        payload: MemoryCreate,
+        fingerprint: str,
+        create_request_digest: str | None,
+        access: AccessContext | None,
+    ) -> MemoryWriteResult | None:
+        if payload.memory_id:
+            existing_by_id = self.conn.execute(
+                "SELECT * FROM memories WHERE memory_id = ?",
+                (payload.memory_id,),
+            ).fetchone()
+            if existing_by_id:
+                raw_record = self._row_to_record(existing_by_id)
+                if not self._can_read_memory(raw_record, access):
+                    raise ValueError("memory not found")
+                if raw_record.scope != payload.scope:
+                    raise ValueError("memory_id already exists in a different scope")
+                stored_digest = existing_by_id["create_request_digest"]
+                if not stored_digest:
+                    raise ValueError(
+                        "memory_id already exists without a verifiable create request digest"
+                    )
+                if stored_digest != create_request_digest:
+                    raise ValueError("memory_id already exists with a different create request")
+                record = self.get_memory(
+                    payload.memory_id,
+                    access=access,
+                    enforce_source_grants=True,
+                )
+                if record is None:
+                    raise ValueError("memory already exists but is not accessible")
+                return MemoryWriteResult(created=False, memory=record)
+
+        existing = self.conn.execute(
+            "SELECT memory_id FROM memories WHERE fingerprint = ?",
+            (fingerprint,),
+        ).fetchone()
+        if existing:
+            record = self.get_memory(
+                existing["memory_id"],
+                access=access,
+                enforce_source_grants=True,
+            )
+            if record is None:
+                raise ValueError("memory already exists but is not accessible")
+            if record.status == MemoryStatus.DELETED:
+                raise ValueError(
+                    "memory fingerprint is tombstoned; deleted memories require an explicit restore workflow"
+                )
+            return MemoryWriteResult(created=False, memory=record)
+        return None
+
+    def _create_request_digest(self, payload: MemoryCreate) -> str:
+        canonical = json.dumps(
+            payload.model_dump(mode="json"),
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
     def _fingerprint(
         self,
         scope: ScopeEnvelope,
@@ -5077,6 +5658,8 @@ class ProvenaStore:
         title: str | None,
         content: str,
         metadata: dict[str, Any] | None = None,
+        *,
+        identity: str | None = None,
     ) -> str:
         # JSON.stringify emits Unicode directly; preserve exact CLI parity for
         # deterministic fingerprints when scope identifiers are non-ASCII.
@@ -5085,6 +5668,9 @@ class ProvenaStore:
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        if identity:
+            value = "|".join([scope_json, "identity", identity])
+            return IDENTITY_FINGERPRINT_PREFIX + hashlib.sha256(value.encode("utf-8")).hexdigest()
         generated = (metadata or {}).get("provena_generated_fingerprint")
         parts = [
             scope_json,

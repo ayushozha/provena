@@ -1,6 +1,6 @@
 # Provena CLI — five-minute quick start
 
-Create a living, agent-readable repository memory with Node.js 18.14.1 or newer.
+Create a living, agent-readable repository memory with Node.js 22.17.0 or newer.
 The default path does not require Python, Docker, a model API, or a database server.
 
 ## 1. Install and initialize
@@ -172,8 +172,9 @@ npx provena mcp serve --http
 Use `--port <port>` for another canonical local port and Ctrl+C to stop the
 foreground listener. Managed MCP configs remain stdio. This loopback endpoint
 is unauthenticated, so any local process can invoke both read and mutation
-tools while it runs. Both transports expose five resources and seven tools,
-including the two read-only maintenance tools. It has no TLS, remote binding, permissive CORS,
+tools while it runs. Both transports expose five resources and ten tools,
+including the two read-only maintenance tools and the three procedure tools
+documented in the [procedure guide](./PROCEDURAL_MEMORY.md). It has no TLS, remote binding, permissive CORS,
 SSE/sessions, daemon mode, rate limiting, or enterprise-proxy guarantees.
 
 The separate CLI-managed optional store defaults to `127.0.0.1:18092`, and
