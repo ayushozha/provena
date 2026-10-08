@@ -3,7 +3,7 @@
   "mode": "codex-loop",
   "branchName": "codex/provena-product-loop",
   "objective": "Turn Provena into a production-ready, self-hostable, embeddable governed memory plane that can keep iterating through PM-authored stories and QA-authored test coverage until explicitly stopped.",
-  "updatedAt": "2026-10-08T22:26:06Z",
+  "updatedAt": "2026-10-08T23:03:12Z",
   "sentry": {
     "enabledIfEnvPresent": true,
     "requiredEnv": "SENTRY_AUTH_TOKEN",
@@ -1305,11 +1305,11 @@
       "featureTitle": "Grounded procedure abstraction",
       "title": "Abstract selected coding-tool observations into reviewable procedure drafts",
       "priority": 17,
-      "status": "in_progress",
-      "passes": false,
+      "status": "complete",
+      "passes": true,
       "attempts": 1,
-      "qaStatus": "pending",
-      "qaAttempts": 0,
+      "qaStatus": "passed",
+      "qaAttempts": 1,
       "persona": "Developer who wants reusable procedures grounded in real coding-tool observations",
       "userStory": "As a developer, I want to explicitly request a bounded model abstraction of selected observations so I can review a reusable procedure without granting the model authority to invent actions, declare success, or approve durable memory.",
       "problemStatement": "Capture currently records minimized observations and creates deterministic drafts, but cannot propose relevant steps and triggers from a longer episode. Model output needs a narrow grounded contract so unsupported actions and outcome claims cannot enter a procedure.",
@@ -1358,12 +1358,12 @@
         "loop/qa_test_plan.json#PROVENA-017"
       ],
       "notes": "Package decision: reuse existing schemas, locks, capture readers, hashing, auth, HTTP client, shared LLM client, and model router. No new dependency, model download, migration, replay engine, scheduler, or automatic learning is approved.",
-      "qaNotes": "Focused abstraction tests pass on Node 22.17 and 24.16; intelligence 96 tests plus 32 subtests pass; targeted gateway/auth checks pass. The end-to-end retry completed 79 backend tests, standalone/polyglot, authenticated abstraction guards, pipeline aliases, and Python/TypeScript/Go/Rust SDK checks. Local builds used process-only Go -buildvcs=false (outer workspace VCS metadata) and the existing MSVC Rust toolchain (default GNU dlltool unavailable). Full CLI on final rebased source remains pending. Actual model quality, held-out comparative performance, and live Sentry telemetry are unmeasured.",
+      "qaNotes": "Full combined CLI npm test passed with exit 0 after rebasing the feature onto the final PR54 capture fixes. Focused abstraction tests passed on Node 22.17 and 24.16; intelligence 96 tests plus 32 subtests and focused gateway/auth checks passed. The final configured E2E passed with exit 0: 79 backend tests, standalone/polyglot services, authenticated unavailable and denied routes, pipeline aliases, actual built-CLI capture/draft through the real gateway to a controlled loopback provider, zero provider calls on denials, minimized observations, incomplete/unapproved drafts, unchanged ledger, and Python/TypeScript/Go/Rust SDK checks. The controlled provider proves integration, not actual serving-model quality. Local Go builds used process-only -buildvcs=false for outer workspace VCS metadata; Rust used the existing MSVC toolchain because default GNU dlltool was unavailable. Clean-checkout CI now builds the CLI before E2E and watches CLI changes. Exact-head publication CI remains a separate merge gate. Actual model quality, held-out comparative performance, native-client hook delivery/trust, and live Sentry telemetry remain unmeasured.",
       "pmPrdStatus": "complete",
       "testerPlanStatus": "complete",
       "engineerStatus": "complete",
       "pmReviewStatus": "approved",
-      "testerExecutionStatus": "in_progress",
+      "testerExecutionStatus": "complete",
       "pmPrdAttempts": 1,
       "testerPlanAttempts": 1,
       "engineerAttempts": 1,
@@ -1375,11 +1375,12 @@
       "lastTesterPlanStartedAt": "2026-10-08T21:53:49Z",
       "lastEngineerStartedAt": "2026-10-08T21:53:49Z",
       "fixRecommendations": [],
-      "engineerNotes": "Grounded CLI/Python abstraction, authenticated gateway routing and pipeline aliases, bounded provider transport, credential redaction, snapshot revalidation, and handled draft-pair recovery are implemented. Independent correctness/security reviews and retained adversarial reproductions are clear. Final full CLI and inherited capture fixes remain a release gate after rebasing onto PR54.",
+      "engineerNotes": "Grounded CLI/Python abstraction, authenticated gateway routing and pipeline aliases, bounded transport, credential filtering, snapshot revalidation, and handled draft-pair recovery are implemented. Independent correctness/security/documentation review is clear; final local regression and configured E2E pass. Exact-head CI gates merge.",
       "lastEngineerCompletedAt": "2026-10-08T22:24:53Z",
       "lastTesterExecutionStartedAt": "2026-10-08T22:24:53Z",
-      "pmReviewNotes": "Independent PM/documentation review approved the recorded contract against CLI, intelligence, gateway routing, tests, and documentation. T12 checks evidence honesty only; actual provider quality and superiority remain unmeasured. Final-source full CLI/rebase T11 remains pending; passes remains false.",
-      "lastPmReviewCompletedAt": "2026-10-08T22:26:06Z"
+      "pmReviewNotes": "Independent PM/documentation review approved the grounded contract and final controlled-provider E2E/clean-CI extension. T12 checks evidence honesty only. Actual model quality and superiority remain unmeasured. All twelve local feature cases pass; publication CI remains separate.",
+      "lastPmReviewCompletedAt": "2026-10-08T23:03:12Z",
+      "lastTesterExecutionCompletedAt": "2026-10-08T23:03:12Z"
     }
   ]
 }

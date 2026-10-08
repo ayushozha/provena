@@ -258,6 +258,9 @@ is required for such a comparison.
 Opt-in [native tool capture](./TOOL_CAPTURE.md) records filtered local
 observations from Codex and Claude hooks and prepares incomplete review drafts.
 Learning still requires an explicitly supplied, reviewed structured trace.
-Semantic workflow abstraction, graph composition of multiple procedures, and
-an autonomous replay executor are not implemented. The current layer provides
+Explicit `capture draft --abstract` can ask the configured model to select
+recorded observations and suggest titles, triggers, and recovery notes. Steps
+remain grounded in those observations; the resulting draft is incomplete,
+unverified, and unapproved. Graph composition of multiple procedures and an
+autonomous replay executor are not implemented. The current layer provides
 cited, inspectable guidance for a caller to review and use.
