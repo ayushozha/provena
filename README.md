@@ -43,7 +43,8 @@ daemon.
 |---|---|
 | One-click repo brain | Implemented and packed-install tested; install from a source-built tarball until the first npm release |
 | Durable memory | Implemented as a validated append-only JSONL event ledger with derived views |
-| Procedural memory | Structured candidate capture, explicit human approval, exact-version caller outcome receipts, source freshness, relevance, abstention, and bounded CLI/MCP recall; automatic trace capture and agent execution benchmarks remain roadmap |
+| Procedural memory | Structured candidates, explicit human approval, exact-version caller outcome receipts, source freshness, relevance, abstention, and bounded CLI/MCP recall; agent execution benchmarks remain roadmap |
+| Tool capture | Opt-in Codex/Claude native hook adapters record filtered local observations and produce incomplete review drafts; no transcript scraping, automatic approval, or inferred task success |
 | Repo graph | Implemented with stable nodes/edges, PageRank, degree, components, neighborhoods, and shortest paths |
 | Agent context | Implemented with exact path/symbol/command ranking, lexical + graph expansion, citations, and hard budgets |
 | Maintenance proposals | Implemented as a manifest-attested deterministic plan plus cited task packets; review-only, with no autonomous execution or apply path |
@@ -123,6 +124,12 @@ capture a structured episode, review it with `provena procedure inspect`, approv
 the exact version manually, and record a goal-verification receipt. Use
 `provena procedure recall "<task>" --json` before reuse. Success receipts are
 caller attestations to verify; stored steps do not grant tool permissions.
+
+To collect tool activity locally, opt into `provena capture install --provider
+codex` or `--provider claude`, then review the native client's hook trust settings.
+Use `capture list` and `capture draft` to prepare a candidate for review. See the
+[tool capture guide](./docs/TOOL_CAPTURE.md) for retained fields, limits, and the
+separate procedure-learning step. Initialization does not enable tool capture.
 
 ## The repo-brain contract
 

@@ -1,6 +1,12 @@
 /** Programmatic API surface for @provena/cli. */
 export const CLI_PACKAGE = "@provena/cli";
 export * from "./procedures/index.js";
+export * from "./capture/index.js";
+export { runCaptureCommand } from "./commands/capture.js";
+export {
+  installCaptureHooks, uninstallCaptureHooks,
+  type CaptureProvider, type CaptureHookConfigResult,
+} from "./integrations/capture-hooks.js";
 export { printProcedureHelp, runProcedureCommand } from "./commands/procedure.js";
 
 export {

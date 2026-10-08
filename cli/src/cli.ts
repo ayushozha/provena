@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runAgentsCommand } from "./commands/agents.js";
 import { runCheckpointCommand } from "./commands/checkpoint.js";
+import { runCaptureCommand } from "./commands/capture.js";
 import { runConfigShow } from "./commands/config-show.js";
 import { runContextCommand } from "./commands/context.js";
 import { runDaemonCommand } from "./commands/daemon.js";
@@ -40,6 +41,7 @@ const COMMANDS = [
   ["maintain", "List deterministic review proposals or compile one task packet"],
   ["remember", "Append an explicit durable memory to the repo ledger"],
   ["procedure", "Learn, review, and recall evidence-backed procedures and outcomes"],
+  ["capture", "Opt in to local coding-tool observations and reviewed procedure drafts"],
   ["checkpoint", "Record a handoff and refresh the brain"],
   ["status", "Show freshness, memory, daemon, and integration health"],
   ["session", "Start an agent session against the current repo brain"],
@@ -116,6 +118,8 @@ function runConfigCommand(args: string[]): number {
 
 async function dispatch(command: string, args: string[]): Promise<number> {
   switch (command) {
+    case "capture":
+      return runCaptureCommand(args);
     case "procedure":
       return runProcedureCommand(args);
     case "init":

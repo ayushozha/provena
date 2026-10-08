@@ -233,6 +233,7 @@ function canReuseRuntime(
   runnerPath: string,
   wantedRunner: string,
   version: string,
+  sourcePackageSha256: string,
 ): boolean {
   if (!existsSync(runtimeRoot)) return false;
   for (const path of [runtimeRoot, runnerPath, join(runtimeRoot, "integrity.json")]) {
@@ -249,8 +250,9 @@ function canReuseRuntime(
       readFileSync(join(runtimeRoot, "integrity.json"), "utf8"),
     ) as Record<string, unknown>;
     return (
-      integrity.schemaVersion === 2 &&
+      integrity.schemaVersion === 3 &&
       integrity.packageVersion === version &&
+      integrity.sourcePackageSha256 === sourcePackageSha256 &&
       typeof integrity.runtimeTreeSha256 === "string" &&
       packageVersion(installedRoot) === version &&
       readFileSync(runnerPath, "utf8") === wantedRunner &&
@@ -270,6 +272,14 @@ function canReuseRuntime(
 export function installPortableRuntime(repoRoot: string): RuntimeInstallResult {
   const sourceRoot = packageRoot();
   const version = packageVersion(sourceRoot);
+  // A prerelease can change executable code or bundled dependencies without a
+  // version bump. Validate its invoking package as well as the installed tree;
+  // the installed tree's self-recorded integrity alone cannot detect an upgrade.
+  const sourceIdentity = createHash("sha256").update(readFileSync(join(sourceRoot, "package.json")));
+  sourceIdentity.update(`\0dist\0${runtimeTreeSha256(join(sourceRoot, "dist"))}`);
+  const sourceDependencies = join(sourceRoot, "node_modules");
+  if (existsSync(sourceDependencies)) sourceIdentity.update(`\0dependencies\0${runtimeTreeSha256(sourceDependencies)}`);
+  const sourcePackageSha256 = sourceIdentity.digest("hex");
   const runtimeRoot = join(repoRoot, ".provena", "runtime");
   const runnerPath = join(runtimeRoot, "runtime.mjs");
   const wanted = runtimeSource(version);
@@ -281,7 +291,7 @@ export function installPortableRuntime(repoRoot: string): RuntimeInstallResult {
   for (const path of [cacheRoot, stageRoot, packRoot, backupRoot, runtimeRoot]) {
     assertSafeRepoPath(repoRoot, path);
   }
-  if (canReuseRuntime(repoRoot, runtimeRoot, runnerPath, wanted, version)) {
+  if (canReuseRuntime(repoRoot, runtimeRoot, runnerPath, wanted, version, sourcePackageSha256)) {
     return { runtimeRoot, runnerPath, installed: false, reused: true };
   }
   mkdirSync(cacheRoot, { recursive: true });
@@ -350,8 +360,9 @@ export function installPortableRuntime(repoRoot: string): RuntimeInstallResult {
     writeFileSync(
       join(stageRoot, "integrity.json"),
       `${JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         packageVersion: version,
+        sourcePackageSha256,
         packageTarballSha256: createHash("sha256")
           .update(readFileSync(tarballPath))
           .digest("hex"),

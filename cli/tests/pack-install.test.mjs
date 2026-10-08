@@ -580,6 +580,19 @@ try {
   assert.equal(offlineInit.status, 0, offlineInit.stderr || offlineInit.stdout);
   assert.match(offlineInit.stdout, /runtime: current/, "verified runtime reuse must need no npm or registry");
 
+  const integrityPath = join(scratch, ".provena", "runtime", "integrity.json");
+  const beforeUpgrade = JSON.parse(readFileSync(integrityPath, "utf8"));
+  const invokingBrainModule = join(dirname(cliBin), "brain", "index.js");
+  const sameVersionMarker = "// same-version packed release upgrade";
+  appendFileSync(invokingBrainModule, `\n${sameVersionMarker}\n`, "utf8");
+  const upgradeRuntime = run(process.execPath, [cliBin, "init", "--no-daemon"], scratch);
+  assert.equal(upgradeRuntime.status, 0, upgradeRuntime.stderr || upgradeRuntime.stdout);
+  const afterUpgrade = JSON.parse(readFileSync(integrityPath, "utf8"));
+  assert.equal(afterUpgrade.packageVersion, beforeUpgrade.packageVersion, "release code can change while the prerelease package version stays the same");
+  assert.notEqual(afterUpgrade.sourcePackageSha256, beforeUpgrade.sourcePackageSha256);
+  assert(readFileSync(join(persistedPackage, "dist", "brain", "index.js"), "utf8").includes(sameVersionMarker), "an intact older runtime must be replaced by the invoking same-version build");
+  assert.equal(afterUpgrade.schemaVersion, 3);
+
   const daemonStart = run(process.execPath, [cliBin, "daemon", "start", "--interval", "10s"], scratch);
   assert.equal(daemonStart.status, 0, daemonStart.stderr || daemonStart.stdout);
   const daemonBeforeRepair = JSON.parse(
