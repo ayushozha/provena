@@ -5793,7 +5793,7 @@
           "id": "PROVENA-017-T11",
           "title": "Shared-client compatibility, package, documentation, and full regression",
           "level": "release-evidence",
-          "automation": "command-review",
+          "automation": "command_and_review",
           "preconditions": [
             "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
           ],
@@ -5827,7 +5827,7 @@
           "id": "PROVENA-017-T12",
           "title": "Actual provider and held-out task evidence stays separate from mock validation",
           "level": "release-evidence",
-          "automation": "command-review",
+          "automation": "command_and_review",
           "preconditions": [
             "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
           ],
