@@ -1383,6 +1383,84 @@
       "pmReviewNotes": "Independent PM/documentation review approved the grounded contract and final controlled-provider E2E/clean-CI extension. T12 checks evidence honesty only. Actual model quality and superiority remain unmeasured. All thirteen local feature cases pass; publication CI remains separate.",
       "lastPmReviewCompletedAt": "2026-10-08T23:51:09Z",
       "lastTesterExecutionCompletedAt": "2026-10-08T23:51:09Z"
+    },
+    {
+      "id": "PROVENA-018",
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "featureId": "FEATURE-CURRENT-RUNTIME-COMPATIBILITY",
+      "featureTitle": "Current stable runtime compatibility",
+      "title": "Validate current stable runtimes while preserving supported compatibility and storage",
+      "priority": 18,
+      "status": "in_progress",
+      "passes": false,
+      "attempts": 1,
+      "qaStatus": "pending",
+      "qaAttempts": 0,
+      "persona": "Developer using Provena with current supported runtimes",
+      "userStory": "As a developer, I want current stable runtime compatibility and refreshed container bases without losing existing support or mutating persistent storage.",
+      "problemStatement": "Direct dependency resolutions are current, but latest stable runtime compatibility is not covered and the Go/Rust base distribution is older than stable.",
+      "featureDescription": "A bounded runtime/image/CI increment using existing manifests, packages, locks, behavioral suites, and authentication checks.",
+      "acceptanceCriteria": [
+        "Use the verified current stable Python 3.14 image line for the store and intelligence, with declared Python support floors and dependency locks preserved.",
+        "Use the existing current Go/Rust toolchain pins on verified Debian trixie builder images and matching trixie-slim runtime images; shipped images build and their binaries start.",
+        "Run existing real PostgreSQL tests for representative Python 3.12/PostgreSQL 16 and Python 3.14/PostgreSQL 18 pairs. Preserve deployed Compose PostgreSQL 16 and its persistent volume layout; no migration or data mutation is authorized.",
+        "Preserve Node 22.17 compatibility and Node 24 LTS coverage/types, and add current Node 26 Linux compatibility through the same existing full CLI suite.",
+        "Verify the installed noneditable wheel and intelligence suite on Python 3.12 and 3.14, without replacing protected behavioral tests with shallow version assertions.",
+        "Run the existing authenticated end-to-end harness on Python 3.14, preserving PR55 CLI-build preparation, authorization, identity, controlled-provider boundaries, and the full Windows timeout fix after rebase.",
+        "Keep model selection configured and credentials private; do not add dependencies, alter lock resolutions, migrate storage, install system runtimes, or claim unsupported serving-model/performance results.",
+        "Update affected runtime documentation and record actual checks/limits. Publication requires independent review and all exact-head CI; unavailable local Docker/Python runtimes remain unclaimed."
+      ],
+      "expectedBehaviors": [
+        "Use the verified current stable Python 3.14 image line for the store and intelligence, with declared Python support floors and dependency locks preserved.",
+        "Use the existing current Go/Rust toolchain pins on verified Debian trixie builder images and matching trixie-slim runtime images; shipped images build and their binaries start.",
+        "Run existing real PostgreSQL tests for representative Python 3.12/PostgreSQL 16 and Python 3.14/PostgreSQL 18 pairs. Preserve deployed Compose PostgreSQL 16 and its persistent volume layout; no migration or data mutation is authorized.",
+        "Preserve Node 22.17 compatibility and Node 24 LTS coverage/types, and add current Node 26 Linux compatibility through the same existing full CLI suite.",
+        "Verify the installed noneditable wheel and intelligence suite on Python 3.12 and 3.14, without replacing protected behavioral tests with shallow version assertions.",
+        "Run the existing authenticated end-to-end harness on Python 3.14, preserving PR55 CLI-build preparation, authorization, identity, controlled-provider boundaries, and the full Windows timeout fix after rebase.",
+        "Keep model selection configured and credentials private; do not add dependencies, alter lock resolutions, migrate storage, install system runtimes, or claim unsupported serving-model/performance results.",
+        "Update affected runtime documentation and record actual checks/limits. Publication requires independent review and all exact-head CI; unavailable local Docker/Python runtimes remain unclaimed."
+      ],
+      "verificationCommands": [
+        "docker compose config --quiet",
+        "docker compose build",
+        "cd cli && npm test",
+        "python -m pytest -m \"not postgres\"",
+        "python -m pytest -m postgres tests/test_postgres_store.py",
+        "python -m pytest intelligence/tests -q",
+        "python scripts/run_e2e.py"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": true,
+        "integration": true,
+        "ui": false
+      },
+      "sentryChecks": [],
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-018"
+      ],
+      "notes": "Reuse existing dependencies/tests. Latest compatible resolutions are distinct from support floors; Node 24 types and the NumPy Python-version split are intentional. No deployed database major upgrade is included.",
+      "qaNotes": "Official registry/image/wheel metadata and independent source review are complete. Existing local Python 3.14.5 ran 97 root tests plus 16 subtests, with one unconfigured live-Redis skip and 29 PostgreSQL tests deselected; pre-PR55 intelligence ran 76 tests. A noneditable installed wheel persistence/recall check, OpenAPI equivalence, authenticated standalone/polyglot E2E (exit 0), YAML/matrix checks, Compose configuration and diff checks passed. The Linux Docker engine is unavailable locally, so exact Python 3.14.8 images, matching trixie Go/Rust runtime startup, real PostgreSQL 16/18 and Linux Node 26 execution remain hosted-CI gates. Final PR55 capture/abstraction source and CI fixes must be preserved by rebase, followed by Python 3.14 intelligence and configured-production E2E. No actual model quality, native-client emission, live Sentry, deployed database migration or performance result is asserted.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "in_progress",
+      "pmPrdAttempts": 1,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 1,
+      "pmReviewAttempts": 1,
+      "testerExecutionAttempts": 1,
+      "pmPrdNotes": "Contract recorded before engineering. Official registry/release/image evidence determines compatible targets; broad dependency and operating-system changes are excluded.",
+      "testerPlanNotes": "Six cases trace eight acceptance criteria with existing meaningful behavioral and container checks; unsupported local execution is reported honestly.",
+      "lastPmPrdStartedAt": "2026-10-08T23:09:41Z",
+      "lastTesterPlanStartedAt": "2026-10-08T23:09:41Z",
+      "fixRecommendations": [],
+      "engineerNotes": "Official registry/image/wheel metadata and independent source review are complete. Existing local Python 3.14.5 ran 97 root tests plus 16 subtests, with one unconfigured live-Redis skip and 29 PostgreSQL tests deselected; pre-PR55 intelligence ran 76 tests. A noneditable installed wheel persistence/recall check, OpenAPI equivalence, authenticated standalone/polyglot E2E (exit 0), YAML/matrix checks, Compose configuration and diff checks passed. The Linux Docker engine is unavailable locally, so exact Python 3.14.8 images, matching trixie Go/Rust runtime startup, real PostgreSQL 16/18 and Linux Node 26 execution remain hosted-CI gates. Final PR55 capture/abstraction source and CI fixes must be preserved by rebase, followed by Python 3.14 intelligence and configured-production E2E. No actual model quality, native-client emission, live Sentry, deployed database migration or performance result is asserted.",
+      "lastEngineerCompletedAt": "2026-10-08T23:27:32Z",
+      "pmReviewNotes": "Independent source/documentation and official image/wheel review found no blocker. Final rebased validation and exact-head CI remain required.",
+      "lastPmReviewCompletedAt": "2026-10-08T23:27:32Z"
     }
   ]
 }

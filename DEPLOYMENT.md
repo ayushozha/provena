@@ -25,6 +25,26 @@ surface for product-to-product traffic.
 
 ## Standalone mode
 
+### Runtime targets
+
+The store and intelligence images use Python 3.14.8 on Debian trixie. The Go
+1.27.2 and Rust 1.99 builders also use trixie, with matching `trixie-slim`
+runtime images. Compose CI builds and starts these images and waits for their
+application health checks.
+
+Python packages retain their declared 3.11 minimum. CI targets Python 3.12 with
+PostgreSQL 16 and Python 3.14 with PostgreSQL 18; installed-wheel and intelligence
+tests run on both Python versions, and authenticated end-to-end verification
+runs on 3.14. PostgreSQL major upgrades remain operator-managed and require a
+backup and `pg_upgrade` or dump/restore plan. The PostgreSQL 18 Docker image also
+changes the data-directory and volume layout; review the
+[official image guidance](https://github.com/docker-library/docs/blob/master/postgres/README.md#pgdata)
+before updating a persistent database deployment.
+
+The CLI retains Node.js 22.17.0 as its minimum and tests Node 22 and 24 on Linux
+and Windows. Linux CI additionally targets Node 26 compatibility. Node 26 is
+currently a Current release; use an LTS line for production deployments.
+
 ### What it runs
 
 Standalone mode runs the FastAPI app in [app/main.py](./app/main.py). This is

@@ -56,11 +56,15 @@ jobs:
   wheel-install:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - name: Build and install a noneditable wheel outside the checkout
         run: |
           python -m pip wheel --no-deps . --wheel-dir "$RUNNER_TEMP/provena-wheelhouse"
@@ -72,11 +76,19 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.12"
+            postgres: "16"
+          - python: "3.14"
+            postgres: "18"
     env:
       PROVENA_ENVIRONMENT: test
     services:
       postgres:
-        image: postgres:16
+        image: postgres:${{ matrix.postgres }}
         env:
           POSTGRES_DB: provena
           POSTGRES_PASSWORD: postgres
@@ -93,7 +105,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
           cache: pip
       - name: Install store and test dependencies
         run: python -m pip install -e ".[dev]" pytest
@@ -111,11 +123,15 @@ jobs:
   intelligence:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
           cache: pip
       - name: Install intelligence and test dependencies
         run: python -m pip install -e ./intelligence pytest
@@ -146,6 +162,14 @@ jobs:
         run: docker compose config --quiet
       - name: Build the shipped Compose services
         run: docker compose build
+      - name: Start the built services and verify their health checks
+        run: docker compose up --detach --no-build --wait --wait-timeout 120
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=100
+      - name: Stop the verification topology
+        if: always()
+        run: docker compose down
 
   e2e:
     runs-on: ubuntu-latest
@@ -156,7 +180,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
