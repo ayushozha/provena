@@ -101,6 +101,13 @@ ownership is ignored too. Repository locks and atomic writes serialize
 concurrent deliveries; replaying an identical tool-call identity is a no-op,
 while conflicting filtered input or status fails closed.
 
+Drafting checks both destination files and their temporary paths before
+writing either payload. A handled second-file write failure restores the
+previous draft bytes or removes the newly written first file. Owned temporary
+files are cleaned up even if ignore rules change during the write. The pair
+is not crash-atomic: process termination or a failed rollback can leave local
+draft files that require review before learning or sharing.
+
 | Limit | Value |
 | --- | --- |
 | Native JSON input | 256 KiB, depth eight, 128 entries per container |
@@ -127,6 +134,8 @@ From `cli/`, run `npm run build` and `node tests/capture.test.mjs` for the
 focused adapter, boundary, config-preservation, and draft checks. Fixtures
 exercise documented payload shapes; they do not by themselves prove native
 client delivery or an agent's task success.
+Run `node tests/capture-draft-pair.test.mjs` for draft privacy, handled write
+failure, and ignore-rule change regressions.
 
 The native schemas are documented in [Codex hooks](https://learn.chatgpt.com/docs/hooks)
 and [Claude Code hooks](https://code.claude.com/docs/en/hooks). Hook availability,

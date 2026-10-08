@@ -9,7 +9,7 @@ import {
   CAPTURE_DIRECTORY, CAPTURE_LIMITS, captureHook, draftCapturedEpisode,
   listCapturedEpisodes, parseCapturePayload,
 } from "../dist/capture/index.js";
-import { installCaptureHooks, uninstallCaptureHooks } from "../dist/integrations/capture-hooks.js";
+import { captureRepoRoot, installCaptureHooks, uninstallCaptureHooks } from "../dist/integrations/capture-hooks.js";
 import { learnProcedure, approveProcedure, recallProcedures } from "../dist/procedures/index.js";
 import { readMemoryLedgerSnapshot } from "../dist/brain/events.js";
 
@@ -78,6 +78,8 @@ try {
   const userSettings = { hooks: { PostToolUse: [userHook], Stop: [{ hooks: [{ type: "command", command: "echo stop" }] }] }, permissions: { deny: ["Bash(rm *)"] }, disableAllHooks: false };
   await writeFile(join(root, ".claude/settings.local.json"), JSON.stringify(userSettings));
   const installedClaude = await installCaptureHooks(root, "claude");
+  assert.throws(() => captureRepoRoot(join(root, "src")), /exact root/, "a contained child directory is not the checkout root");
+  if (process.platform === "win32") assert.equal(captureRepoRoot(root.toUpperCase()), resolve(root.toUpperCase()), "equivalent filesystem spelling preserves the configured root");
   assert.equal(installedClaude.action, "updated", installedClaude.reason);
   assert.equal((await installCaptureHooks(root, "claude")).action, "unchanged", "installation is idempotent");
   assert.equal((await installCaptureHooks(root, "codex")).action, "created");
@@ -278,7 +280,10 @@ try {
   const negatedRecord = await captureHook(negated.root, "claude", payload(negated.root, "one"));
   await writeFile(join(negated.root, ".gitignore"), ".provena/cache/*\n!.provena/cache/episodes/\n.provena/cache/episodes/*\n!.provena/cache/episodes/drafts/\n.provena/cache/episodes/drafts/*\n!.provena/cache/episodes/drafts/*.candidate.json\n");
   await assert.rejects(draftCapturedEpisode(negated.root, { episodeId: negatedRecord.episodeId, goal: "Review tests", sources: ["src/token.js"] }), /every capture cache file/);
-  assert(!(await readdir(join(negated.root, CAPTURE_DIRECTORY, "drafts"))).some((name) => name.endsWith(".candidate.json")), "unignored candidate payload is never written");
+  let negatedDrafts = [];
+  try { negatedDrafts = await readdir(join(negated.root, CAPTURE_DIRECTORY, "drafts")); }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
+  assert.deepEqual(negatedDrafts, [], "candidate privacy rejection precedes either draft payload or temporary write");
   const memoized = await fixture("memoized cwd");
   await installCaptureHooks(memoized.root, "claude");
   const workdir = join(memoized.root, "src");

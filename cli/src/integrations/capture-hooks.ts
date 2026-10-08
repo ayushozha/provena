@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { open, opendir, mkdir, rename, rm } from "node:fs/promises";
+import { lstatSync, realpathSync } from "node:fs";
+import { open, opendir, mkdir, rename, rm, lstat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
@@ -40,7 +41,7 @@ export function captureRepoRoot(value: string): string {
   const root = resolve(value);
   try {
     if (execFileSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() !== "true" ||
-        resolve(getGitRoot(root)) !== root) throw new Error();
+        realpathSync.native(getGitRoot(root)) !== realpathSync.native(root) || lstatSync(root).isSymbolicLink()) throw new Error();
     assertSafeRepoPath(root, root);
   } catch { throw new Error("capture requires the exact root of a Git working tree"); }
   return root;
@@ -88,7 +89,7 @@ function assertPrivateCaptureTarget(root: string, path: string): void {
   } catch { throw new Error("every capture cache file and temporary file must be ignored and untracked"); }
 }
 
-async function privateWrite(root: string, path: string, content: string): Promise<void> {
+async function privateWrite(root: string, path: string, content: string | Buffer): Promise<void> {
   assertSafeRepoPath(root, dirname(path));
   assertSafeRepoPath(root, path);
   const temporary = `${path}.capture-${process.pid}-${randomUUID()}.tmp`;
@@ -109,6 +110,78 @@ async function privateWrite(root: string, path: string, content: string): Promis
   }
 }
 export { privateWrite as writeCaptureFile };
+
+/** Publish the two local draft views together, restoring original bytes on a failed second rename. */
+export async function writeCaptureDraftPair(root: string, wrapperPath: string, wrapper: string, candidatePath: string, candidate: string): Promise<void> {
+  const relative = normalizeRepoPath(root, wrapperPath);
+  if (!/^\.provena\/cache\/episodes\/drafts\/[a-f0-9]{64}\.json$/.test(relative) ||
+      normalizeRepoPath(root, candidatePath) !== relative.replace(/\.json$/, ".candidate.json")) throw new Error("invalid capture draft pair paths");
+  const maximum = 80_000;
+  const plans = [
+    { path: wrapperPath, bytes: Buffer.from(wrapper) }, { path: candidatePath, bytes: Buffer.from(candidate) },
+  ].map((item) => ({ ...item, temporary: `${item.path}.capture-${process.pid}-${randomUUID()}.tmp`, previous: undefined as Buffer | undefined, identity: undefined as { dev: bigint; ino: bigint } | undefined, staged: false, published: false }));
+  const guard = (path: string) => { assertSafeRepoPath(root, path); assertPrivateCaptureTarget(root, path); };
+  const readPrevious = async (path: string): Promise<Buffer | undefined> => {
+    try { return await readCaptureFile(root, path, maximum); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+  };
+  // Preflight every actual destination and nonce before persisting either payload.
+  for (const plan of plans) {
+    if (plan.bytes.length > maximum) throw new Error("capture draft pair exceeds its byte limit");
+    guard(plan.path); guard(plan.temporary);
+    plan.previous = await readPrevious(plan.path);
+  }
+  let failure: unknown;
+  let recoveryFailed = false;
+  try {
+    for (const plan of plans) {
+      await mkdir(dirname(plan.path), { recursive: true });
+      guard(plan.path); guard(plan.temporary);
+      const handle = await open(plan.temporary, "wx", 0o600);
+      plan.staged = true;
+      try {
+        plan.identity = await handle.stat({ bigint: true });
+        await handle.writeFile(plan.bytes); await handle.sync();
+      } finally { await handle.close(); }
+    }
+    // Check both destinations before the first publish, then immediately before each rename.
+    for (const plan of plans) { guard(plan.path); guard(plan.temporary); }
+    for (const plan of plans) {
+      guard(plan.path); guard(plan.temporary);
+      const current = await readPrevious(plan.path);
+      if (Boolean(current) !== Boolean(plan.previous) || current && !current.equals(plan.previous!)) throw new Error("capture draft destination changed during write");
+      await rename(plan.temporary, plan.path);
+      plan.staged = false;
+      plan.published = true;
+    }
+  } catch (error) {
+    failure = error;
+    for (const plan of [...plans].reverse().filter((item) => item.published)) {
+      try {
+        guard(plan.path);
+        const current = await readPrevious(plan.path);
+        if (!current?.equals(plan.bytes)) throw new Error("capture draft destination changed before rollback");
+        if (plan.previous) await privateWrite(root, plan.path, plan.previous);
+        else { guard(plan.path); await rm(plan.path); }
+      } catch { recoveryFailed = true; }
+    }
+  } finally {
+    for (const plan of plans.filter((item) => item.staged)) {
+      try {
+        // Ignore changes must not strand our private payload; never delete a
+        // replacement file or follow a path that became unsafe after staging.
+        assertSafeRepoPath(root, plan.temporary);
+        const current = await lstat(plan.temporary, { bigint: true });
+        if (!current.isFile() || current.dev !== plan.identity?.dev || current.ino !== plan.identity.ino) throw new Error("capture temporary ownership changed");
+        assertSafeRepoPath(root, plan.temporary);
+        await rm(plan.temporary);
+      }
+      catch { recoveryFailed = true; }
+    }
+  }
+  if (recoveryFailed) throw new Error("capture draft pair failed; local draft files require review");
+  if (failure) throw new Error("capture draft pair was not written; previous files were preserved");
+}
 
 export async function readCaptureDirectory(root: string, directory: string, maxEntries: number): Promise<Dirent[]> {
   assertSafeRepoPath(root, directory);

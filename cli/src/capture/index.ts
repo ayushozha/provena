@@ -1,4 +1,5 @@
 import { isAbsolute, join, resolve } from "node:path";
+import { realpathSync } from "node:fs";
 import { z } from "zod";
 import { getGitRoot } from "../config.js";
 import { withRepoMemoryLock } from "../brain/lock.js";
@@ -8,7 +9,7 @@ import { assertNoSecretMaterial } from "../security/memory.js";
 import { assertSafeRepoPath } from "../security/paths.js";
 import { learnProcedureInputSchema, type LearnProcedureInput } from "../procedures/index.js";
 import {
-  assertCaptureEnabled, assertCaptureIgnored, captureRepoRoot, readCaptureDirectory, readCaptureFile, writeCaptureFile,
+  assertCaptureEnabled, assertCaptureIgnored, captureRepoRoot, readCaptureDirectory, readCaptureFile, writeCaptureDraftPair, writeCaptureFile,
   type CaptureProvider,
 } from "../integrations/capture-hooks.js";
 
@@ -94,7 +95,7 @@ function validateCwd(root: string, value: unknown): string {
   if (typeof value !== "string" || !isAbsolute(value)) throw new Error("capture cwd must identify this repository");
   const cwd = resolve(value);
   assertSafeRepoPath(root, cwd);
-  if (resolve(getGitRoot(cwd)) !== root) throw new Error("capture cwd belongs to another checkout");
+  if (realpathSync.native(getGitRoot(cwd)) !== realpathSync.native(root)) throw new Error("capture cwd belongs to another checkout");
   return cwd;
 }
 async function sourceFingerprint(root: string, path: string): Promise<string> {
@@ -356,8 +357,7 @@ export async function draftCapturedEpisode(value: string, input: DraftCaptureInp
     if (draftEntries.some((entry) => !entry.isFile() || !/^[a-f0-9]{64}(?:\.candidate)?\.json$/.test(entry.name))) throw new Error("invalid capture draft directory");
     for (const entry of draftEntries) await readCaptureFile(root, join(directory, entry.name), CAPTURE_LIMITS.draftBytes);
     if (!entries.includes(`${draftId}.json`) && entries.length >= CAPTURE_LIMITS.drafts * 2) throw new Error("capture draft accumulation limit reached");
-    await writeCaptureFile(root, join(root, draftPath), draft);
-    await writeCaptureFile(root, join(root, candidatePath), candidateText);
+    await writeCaptureDraftPair(root, join(root, draftPath), draft, join(root, candidatePath), candidateText);
     return result;
   });
 }

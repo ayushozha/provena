@@ -1,5 +1,6 @@
 import { isAbsolute, resolve } from "node:path";
 import { getGitRoot } from "../config.js";
+import { realpathSync } from "node:fs";
 import {
   CAPTURE_LIMITS, captureHook, draftCapturedEpisode, listCapturedEpisodes, parseCapturePayload,
 } from "../capture/index.js";
@@ -75,7 +76,7 @@ export async function runCaptureCommand(args: string[], cwd = process.cwd()): Pr
     const root = captureRepoRoot(rawRoot ? resolve(cwd, rawRoot) : resolve(getGitRoot(cwd)));
     if (isHook) {
       assertSafeRepoPath(root, resolve(cwd));
-      if (resolve(getGitRoot(cwd)) !== root) throw new Error("hook invoked from another checkout");
+      if (realpathSync.native(getGitRoot(cwd)) !== realpathSync.native(root)) throw new Error("hook invoked from another checkout");
     }
     const optionSets: Record<string, Set<string>> = {
       install: new Set(["--provider", "--root", "--json"]), uninstall: new Set(["--provider", "--root", "--json"]),
