@@ -9,10 +9,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import {
   DEFAULT_REPO_MCP_HTTP_PORT,
   REPO_MCP_HTTP_BODY_LIMIT_BYTES,
   REPO_MCP_HTTP_HOST,
+  appendMemoryEvent,
   createDefaultConfig,
   readMemoryEvents,
   refreshRepoBrain,
@@ -231,6 +234,49 @@ function spawnCli(args, cwd, env = {}) {
   return { child, output };
 }
 
+async function connectStdioCli(cwd) {
+  const stdio = spawnCli(["mcp", "serve"], cwd);
+  const messages = [];
+  const buffer = new ReadBuffer();
+  let parseError;
+  stdio.child.stdout.on("data", (chunk) => {
+    try {
+      buffer.append(Buffer.from(chunk));
+      let message;
+      while ((message = buffer.readMessage()) !== null) messages.push(message);
+    } catch (error) {
+      parseError = error;
+    }
+  });
+  const send = (message) => stdio.child.stdin.write(serializeMessage(message));
+  const assertProtocolOnly = () => {
+    assert.equal(parseError, undefined, "stdio stdout contains valid MCP messages only");
+  };
+  const receive = async (id) => {
+    await waitFor(() => messages.some((message) => message.id === id), `stdio response ${id}`);
+    assertProtocolOnly();
+    const response = messages.find((message) => message.id === id);
+    assert.equal(response.error, undefined, `stdio request ${id} succeeds`);
+    return response.result;
+  };
+  try {
+    send({
+      jsonrpc: "2.0", id: 1, method: "initialize",
+      params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "stdio-lifecycle-test", version: "1.0.0" } },
+    });
+    const initialized = await receive(1);
+    assert.equal(initialized.protocolVersion, LATEST_PROTOCOL_VERSION);
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+    assert.deepEqual((await receive(2)).tools.map((tool) => tool.name).sort(), expectedTools);
+    return { ...stdio, messages, send, receive, assertProtocolOnly };
+  } catch (error) {
+    stdio.child.kill("SIGKILL");
+    await waitForExit(stdio.child).catch(() => {});
+    throw error;
+  }
+}
+
 async function within(promise, timeoutMs, label) {
   let timer;
   try {
@@ -246,12 +292,13 @@ async function within(promise, timeoutMs, label) {
 }
 
 async function waitForExit(child, timeoutMs = 5_000) {
-  if (child.exitCode !== null || child.signalCode !== null) {
+  if ((child.exitCode !== null || child.signalCode !== null) &&
+      child.stdout.readableEnded && child.stderr.readableEnded) {
     return { code: child.exitCode, signal: child.signalCode };
   }
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("child process did not exit")), timeoutMs);
-    child.once("exit", (code, signal) => {
+    child.once("close", (code, signal) => {
       clearTimeout(timer);
       resolve({ code, signal });
     });
@@ -947,15 +994,126 @@ try {
     await active?.close().catch(() => {});
   }
 
-  const stdio = spawnCli(["mcp", "serve"], subdirectory);
+  const stdio = await connectStdioCli(subdirectory);
   try {
     await delay(250);
-    assert.equal(stdio.child.exitCode, null, "stdio MCP remains a foreground process");
+    assert.equal(stdio.child.exitCode, null, "initialized stdio MCP remains a foreground process while idle");
     await assert.rejects(rawRequest({ port: DEFAULT_REPO_MCP_HTTP_PORT }));
-    assert.equal(stdio.output.stdout, "", "stdio MCP keeps stdout protocol-only and silent before traffic");
+    stdio.send({
+      jsonrpc: "2.0", id: 3, method: "tools/call",
+      params: { name: "provena_context", arguments: { paths: ["src/repo-a-only.ts"], maxTokens: 512 } },
+    });
+    assert.match((await stdio.receive(3)).content[0].text, /repo-a-only\.ts/u);
+    stdio.child.stdin.end();
+    assert.deepEqual(await waitForExit(stdio.child), { code: 0, signal: null }, "stdin EOF closes the initialized server cleanly");
+    stdio.assertProtocolOnly();
+    assert.equal(stdio.messages.length, 3, "stdio stdout contains exactly the three protocol responses");
+    assert.equal(stdio.output.stderr, "");
   } finally {
     stdio.child.kill("SIGKILL");
     await waitForExit(stdio.child).catch(() => {});
+  }
+
+  const earlyEof = spawnCli(["mcp", "serve"], subdirectory);
+  earlyEof.child.stdin.end();
+  try {
+    assert.deepEqual(await waitForExit(earlyEof.child), { code: 0, signal: null }, "EOF during startup also exits cleanly");
+    assert.equal(earlyEof.output.stdout, "", "stdio MCP remains silent without protocol traffic");
+    assert.equal(earlyEof.output.stderr, "");
+  } finally {
+    earlyEof.child.kill("SIGKILL");
+    await waitForExit(earlyEof.child).catch(() => {});
+  }
+
+  let releaseStdioLock;
+  let markStdioLockAcquired;
+  const stdioLockAcquired = new Promise((resolve) => { markStdioLockAcquired = resolve; });
+  const stdioLockRelease = new Promise((resolve) => { releaseStdioLock = resolve; });
+  const heldStdioLock = withRepoMemoryLock(repoA, async () => {
+    markStdioLockAcquired();
+    await stdioLockRelease;
+  });
+  let mutatingStdio;
+  try {
+    await stdioLockAcquired;
+    mutatingStdio = await connectStdioCli(subdirectory);
+    mutatingStdio.send({
+      jsonrpc: "2.0", id: 4, method: "tools/call",
+      params: { name: "provena_remember", arguments: { kind: "decision", title: "Stdio EOF durable receipt", body: "An accepted memory write completes before stdin EOF shutdown." } },
+    });
+    mutatingStdio.child.stdin.end();
+    await delay(250);
+    assert.equal(mutatingStdio.child.exitCode, null, "EOF waits for an accepted mutation blocked by the repository lock");
+    releaseStdioLock();
+    await heldStdioLock;
+    assert.match((await mutatingStdio.receive(4)).content[0].text, /Stdio EOF durable receipt/u);
+    assert.deepEqual(await waitForExit(mutatingStdio.child), { code: 0, signal: null });
+    mutatingStdio.assertProtocolOnly();
+    assert.equal((await readMemoryEvents(repoA)).filter((event) => event.title === "Stdio EOF durable receipt").length, 1);
+    assert(!allFiles(join(repoA, ".provena")).some((path) => /(?:\.tmp|\.lock)(?:\/|$)/u.test(path)), "stdio EOF leaves no incomplete lock or temporary state");
+    assert.equal(mutatingStdio.output.stderr, "");
+  } finally {
+    releaseStdioLock?.();
+    await heldStdioLock.catch(() => {});
+    mutatingStdio?.child.kill("SIGKILL");
+    if (mutatingStdio) await waitForExit(mutatingStdio.child).catch(() => {});
+  }
+
+  if (process.platform !== "win32") {
+    for (const signal of ["SIGINT", "SIGTERM"]) {
+      const signaledStdio = await connectStdioCli(subdirectory);
+      try {
+        signaledStdio.child.kill(signal);
+        assert.deepEqual(await waitForExit(signaledStdio.child), { code: 0, signal: null }, `${signal} closes initialized stdio cleanly`);
+        signaledStdio.assertProtocolOnly();
+        assert.equal(signaledStdio.output.stderr, "");
+      } finally {
+        signaledStdio.child.kill("SIGKILL");
+        await waitForExit(signaledStdio.child).catch(() => {});
+      }
+    }
+  }
+
+  for (let index = 0; index < 24; index += 1) {
+    await appendMemoryEvent(repoA, {
+      kind: "decision", subjectType: "repo", title: `Stdio output pressure ${index}`,
+      body: "memory".repeat(8_000), sources: [], appliesTo: [],
+      provenance: { actor: "stdio-lifecycle-test", method: "explicit" },
+      authority: "human", confidence: 1, importance: 0.5, sensitivity: "internal",
+    });
+  }
+  await refreshRepoBrain(repoA);
+  // Node stdout pipe writes are synchronous on Windows; JS deadlines apply to POSIX backpressure.
+  const outputPressureCases = process.platform === "win32" ? ["broken-pipe"] : ["eof", "signal", "broken-pipe"];
+  for (const shutdownCase of outputPressureCases) {
+    const pressuredStdio = await connectStdioCli(subdirectory);
+    try {
+      pressuredStdio.child.stdout.pause();
+      pressuredStdio.send({ jsonrpc: "2.0", id: 5, method: "resources/read", params: { uri: "provena://repo/memories" } });
+      await waitFor(() => pressuredStdio.child.stdout.readableLength >= pressuredStdio.child.stdout.readableHighWaterMark, "large stdio response reaches output backpressure");
+      pressuredStdio.child.stdin.end();
+      if (shutdownCase === "broken-pipe") {
+        const exited = waitForExit(pressuredStdio.child);
+        pressuredStdio.child.stdout.destroy();
+        assert.deepEqual(await exited, { code: 1, signal: null }, "broken output pipe exits through the controlled CLI error path");
+        assert.match(pressuredStdio.output.stderr, /^provena: /u);
+        assert.doesNotMatch(pressuredStdio.output.stderr, /Unhandled 'error' event|node:events|triggerUncaughtException/u);
+      } else {
+        if (shutdownCase === "signal") {
+          await delay(250);
+          pressuredStdio.child.kill("SIGTERM");
+        }
+        await waitFor(() => pressuredStdio.child.exitCode !== null, "stdio shutdown exits despite an unread response");
+        assert.equal(pressuredStdio.child.exitCode, 0);
+        pressuredStdio.child.stdout.resume();
+        assert.deepEqual(await waitForExit(pressuredStdio.child), { code: 0, signal: null });
+        assert.equal(pressuredStdio.output.stderr, "");
+      }
+    } finally {
+      pressuredStdio.child.stdout.resume();
+      pressuredStdio.child.kill("SIGKILL");
+      await waitForExit(pressuredStdio.child).catch(() => {});
+    }
   }
 
   await assertPortReleased(DEFAULT_REPO_MCP_HTTP_PORT);
