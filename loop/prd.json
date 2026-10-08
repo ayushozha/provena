@@ -3,7 +3,7 @@
   "mode": "codex-loop",
   "branchName": "codex/provena-product-loop",
   "objective": "Turn Provena into a production-ready, self-hostable, embeddable governed memory plane that can keep iterating through PM-authored stories and QA-authored test coverage until explicitly stopped.",
-  "updatedAt": "2026-10-08T23:03:12Z",
+  "updatedAt": "2026-10-08T23:36:12Z",
   "sentry": {
     "enabledIfEnvPresent": true,
     "requiredEnv": "SENTRY_AUTH_TOKEN",
@@ -1305,10 +1305,10 @@
       "featureTitle": "Grounded procedure abstraction",
       "title": "Abstract selected coding-tool observations into reviewable procedure drafts",
       "priority": 17,
-      "status": "complete",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "attempts": 1,
-      "qaStatus": "passed",
+      "qaStatus": "pending",
       "qaAttempts": 1,
       "persona": "Developer who wants reusable procedures grounded in real coding-tool observations",
       "userStory": "As a developer, I want to explicitly request a bounded model abstraction of selected observations so I can review a reusable procedure without granting the model authority to invent actions, declare success, or approve durable memory.",
@@ -1321,7 +1321,8 @@
         "The repository lock is released for the bounded network call, then the complete selected episode and source fingerprints are revalidated under the lock before writing any draft.",
         "Strict shared request and response schemas, canonical hashes, reference partitions, byte limits, deadlines, configured-origin restrictions, authenticated write scope, and generic errors protect both trust boundaries.",
         "Unavailable providers or malformed responses fail without a fake offline abstraction, ledger mutation, or model-key disclosure. Both draft views and temporary paths are preflighted; handled second-file failures restore prior bytes and clean owned temporary payloads. Publication is not crash-atomic and rollback failures require review.",
-        "Learning, approval, exact-version outcome receipts, and ready status retain the existing explicit governance gates; model suggestions and successful tool observations never prove task success."
+        "Learning, approval, exact-version outcome receipts, and ready status retain the existing explicit governance gates; model suggestions and successful tool observations never prove task success.",
+        "Stored capture observations survive removal or renaming of their former working directory. Their nearest existing physical ancestor must still belong to the same checkout; replacement symlinks and newly introduced nested repositories remain rejected. Incoming live observations still require a valid existing working directory."
       ],
       "acceptanceCriteria": [
         "The CLI exposes an explicit --abstract flag on capture draft and rejects malformed flags. The configured intelligence_url points to the authenticated gateway origin in production; existing client bearer and scope helpers are reused. No model-provider credential is sent by the CLI.",
@@ -1333,7 +1334,8 @@
         "Candidate goal remains the explicit caller goal and explicit caller title takes precedence. Candidate steps/arguments are derived only from recorded selected observations in original order. Model recovery text and configured model metadata remain untrusted local wrapper data; deterministic failure warnings and all original evidence remain.",
         "Every draft remains complete=false, taskOutcome=unknown, verification=[], and unapproved; abstraction never executes commands or writes the authoritative memory ledger. Existing learn/approve/outcome gates are exercised by focused regressions.",
         "Use only existing Node/Zod/fetch and FastAPI/Pydantic/httpx/model router/shared LLM client dependencies, with env-driven model selection. Existing callers retain their previous LLM transport behavior.",
-        "Focused lifecycle, authorization, no-network-default, adversarial input/output, concurrency, transport caps, and full CLI/intelligence/E2E checks pass on the final source. Documentation states configured-model metadata limits, opt-in egress, and draft-only status. Actual provider/task-quality and competitor results remain explicitly pending until measured."
+        "Focused lifecycle, authorization, no-network-default, adversarial input/output, concurrency, transport caps, and full CLI/intelligence/E2E checks pass on the final source. Documentation states configured-model metadata limits, opt-in egress, and draft-only status. Actual provider/task-quality and competitor results remain explicitly pending until measured.",
+        "Stored capture observations survive removal or renaming of their former working directory. Their nearest existing physical ancestor must still belong to the same checkout; replacement symlinks and newly introduced nested repositories remain rejected. Incoming live observations still require a valid existing working directory."
       ],
       "verificationCommands": [
         "cd cli && npm run build",
@@ -1358,12 +1360,12 @@
         "loop/qa_test_plan.json#PROVENA-017"
       ],
       "notes": "Package decision: reuse existing schemas, locks, capture readers, hashing, auth, HTTP client, shared LLM client, and model router. No new dependency, model download, migration, replay engine, scheduler, or automatic learning is approved.",
-      "qaNotes": "Full combined CLI npm test passed with exit 0 after rebasing the feature onto the final PR54 capture fixes. Focused abstraction tests passed on Node 22.17 and 24.16; intelligence 96 tests plus 32 subtests and focused gateway/auth checks passed. The final configured E2E passed with exit 0: 79 backend tests, standalone/polyglot services, authenticated unavailable and denied routes, pipeline aliases, actual built-CLI capture/draft through the real gateway to a controlled loopback provider, zero provider calls on denials, minimized observations, incomplete/unapproved drafts, unchanged ledger, and Python/TypeScript/Go/Rust SDK checks. The controlled provider proves integration, not actual serving-model quality. Local Go builds used process-only -buildvcs=false for outer workspace VCS metadata; Rust used the existing MSVC toolchain because default GNU dlltool was unavailable. Clean-checkout CI now builds the CLI before E2E and watches CLI changes. Exact-head publication CI remains a separate merge gate. Actual model quality, held-out comparative performance, native-client hook delivery/trust, and live Sentry telemetry remain unmeasured.",
+      "qaNotes": "PR55 review4225045594 was reproduced before repair. Both complete focused capture suites passed with exit 0 on Node 22.17 and 24.16, including removal/rename, unchanged history, later live hook, unrelated incomplete draft, strict missing live-directory rejection, canonical path rejection, replacement junction and newly nested Git ancestor denial. Independent built-dist Node22 probe and source/privacy review are clear; PM remediation review approved. A fresh packed archive passed actual offline installation, persisted runtime, direct installed-hook failure/edit/recovery, incomplete/unknown candidate governance, ready count zero and same-runtime reuse. The same installed archive passed actual authenticated gateway/production-intelligence abstraction with a controlled loopback provider, no-cost denials and secret scans. This is harness fixture delivery, not native-engine emission/trust or actual model quality. The final full CLI suite is running and exact final-head CI remains required; previous full-suite receipts remain historical evidence.",
       "pmPrdStatus": "complete",
       "testerPlanStatus": "complete",
       "engineerStatus": "complete",
       "pmReviewStatus": "approved",
-      "testerExecutionStatus": "complete",
+      "testerExecutionStatus": "in_progress",
       "pmPrdAttempts": 1,
       "testerPlanAttempts": 1,
       "engineerAttempts": 1,
@@ -1375,11 +1377,11 @@
       "lastTesterPlanStartedAt": "2026-10-08T21:53:49Z",
       "lastEngineerStartedAt": "2026-10-08T21:53:49Z",
       "fixRecommendations": [],
-      "engineerNotes": "Grounded CLI/Python abstraction, authenticated gateway routing and pipeline aliases, bounded transport, credential filtering, snapshot revalidation, and handled draft-pair recovery are implemented. Independent correctness/security/documentation review is clear; final local regression and configured E2E pass. Exact-head CI gates merge.",
-      "lastEngineerCompletedAt": "2026-10-08T22:24:53Z",
+      "engineerNotes": "PR55 review4225045594 was reproduced before repair. Both complete focused capture suites passed with exit 0 on Node 22.17 and 24.16, including removal/rename, unchanged history, later live hook, unrelated incomplete draft, strict missing live-directory rejection, canonical path rejection, replacement junction and newly nested Git ancestor denial. Independent built-dist Node22 probe and source/privacy review are clear; PM remediation review approved. A fresh packed archive passed actual offline installation, persisted runtime, direct installed-hook failure/edit/recovery, incomplete/unknown candidate governance, ready count zero and same-runtime reuse. The same installed archive passed actual authenticated gateway/production-intelligence abstraction with a controlled loopback provider, no-cost denials and secret scans. This is harness fixture delivery, not native-engine emission/trust or actual model quality. The final full CLI suite is running and exact final-head CI remains required; previous full-suite receipts remain historical evidence.",
+      "lastEngineerCompletedAt": "2026-10-08T23:36:12Z",
       "lastTesterExecutionStartedAt": "2026-10-08T22:24:53Z",
-      "pmReviewNotes": "Independent PM/documentation review approved the grounded contract and final controlled-provider E2E/clean-CI extension. T12 checks evidence honesty only. Actual model quality and superiority remain unmeasured. All twelve local feature cases pass; publication CI remains separate.",
-      "lastPmReviewCompletedAt": "2026-10-08T23:03:12Z",
+      "pmReviewNotes": "Independent PM remediation review approved the historical/live directory contract and honest pending final-source validation.",
+      "lastPmReviewCompletedAt": "2026-10-08T23:36:12Z",
       "lastTesterExecutionCompletedAt": "2026-10-08T23:03:12Z"
     }
   ]

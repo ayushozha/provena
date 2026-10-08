@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import childProcess, { spawn, spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import { dirname, join, resolve } from "node:path";
@@ -284,6 +284,47 @@ try {
   try { negatedDrafts = await readdir(join(negated.root, CAPTURE_DIRECTORY, "drafts")); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
   assert.deepEqual(negatedDrafts, [], "candidate privacy rejection precedes either draft payload or temporary write");
+  const historical = await fixture("removed historical directories");
+  await installCaptureHooks(historical.root, "claude");
+  const removed = join(historical.root, "removed", "nested");
+  const renamed = join(historical.root, "renamed", "nested");
+  await mkdir(removed, { recursive: true });
+  await mkdir(renamed, { recursive: true });
+  const removedCall = await captureHook(historical.root, "claude", payload(historical.root, "removed-cwd", { cwd: removed, session_id: "removed-session" }));
+  const renamedCall = await captureHook(historical.root, "claude", payload(historical.root, "renamed-workdir", { session_id: "renamed-session", tool_input: { command: "npm test", workdir: renamed } }));
+  const unrelatedCall = await captureHook(historical.root, "claude", payload(historical.root, "unrelated-call", { session_id: "unrelated-session" }));
+  const removedEpisodePath = join(historical.root, CAPTURE_DIRECTORY, "observations", `${removedCall.episodeId}.json`);
+  const removedBytes = await readFile(removedEpisodePath);
+  await rm(dirname(removed), { recursive: true });
+  await rename(dirname(renamed), join(historical.root, "moved"));
+  assert.equal((await listCapturedEpisodes(historical.root)).length, 3, "removed cwd and renamed argument workdir must not poison historical reads");
+  assert.equal((await readEpisode(historical.root, removedCall.episodeId)).observations[0].workingDirectory, "removed/nested");
+  assert.equal((await readEpisode(historical.root, renamedCall.episodeId)).observations[0].args.workdir, "renamed/nested");
+  assert.deepEqual(await readFile(removedEpisodePath), removedBytes, "ancestor validation does not rewrite history");
+  assert.equal((await captureHook(historical.root, "claude", payload(historical.root, "later-root-call", { session_id: "later-session" }))).skipped, false);
+  const unrelatedDraft = await draftCapturedEpisode(historical.root, { episodeId: unrelatedCall.episodeId, goal: "Review the local token check", sources: ["src/token.js"] });
+  const historicalDraft = JSON.parse(await readFile(join(historical.root, unrelatedDraft.draftPath), "utf8"));
+  assert.equal(historicalDraft.taskOutcome, "unknown");
+  assert.equal(historicalDraft.complete, false);
+  await assert.rejects(captureHook(historical.root, "claude", payload(historical.root, "missing-live-cwd", { cwd: removed })), /ENOENT/);
+  await assert.rejects(captureHook(historical.root, "claude", payload(historical.root, "missing-live-workdir", { tool_input: { command: "npm test", workdir: renamed } })), /ENOENT/);
+  for (const value of ["../outside", "removed/../removed/nested", removed]) {
+    const invalidHistory = JSON.parse(removedBytes.toString("utf8"));
+    invalidHistory.observations[0].workingDirectory = value;
+    await writeFile(removedEpisodePath, JSON.stringify(invalidHistory));
+    await assert.rejects(listCapturedEpisodes(historical.root), /outside|invalid stored/);
+  }
+  await writeFile(removedEpisodePath, removedBytes);
+  const replacement = dirname(removed);
+  await symlink(outside, replacement, process.platform === "win32" ? "junction" : "dir");
+  await assert.rejects(listCapturedEpisodes(historical.root), /symlink|junction|reparse/, "a replacement symlink must not be treated as missing history");
+  await assert.rejects(captureHook(historical.root, "claude", payload(historical.root, "replacement-symlink-call")), /symlink|junction|reparse/);
+  await rm(replacement);
+  await mkdir(replacement);
+  assert.equal(spawnSync("git", ["init", "-q"], { cwd: replacement }).status, 0);
+  await assert.rejects(listCapturedEpisodes(historical.root), /another checkout/, "the current existing ancestor must still belong to the pinned physical checkout");
+  await assert.rejects(draftCapturedEpisode(historical.root, { episodeId: unrelatedCall.episodeId, goal: "Review the local token check", sources: ["src/token.js"] }), /another checkout/);
+
   const memoized = await fixture("memoized cwd");
   await installCaptureHooks(memoized.root, "claude");
   const workdir = join(memoized.root, "src");

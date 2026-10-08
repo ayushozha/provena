@@ -1,6 +1,6 @@
 {
   "product": "Provena",
-  "updatedAt": "2026-10-08T23:03:12Z",
+  "updatedAt": "2026-10-08T23:36:12Z",
   "epics": [
     {
       "epicId": "EPIC-PRODUCTIZE",
@@ -5499,7 +5499,9 @@
       "executionNotes": [
         "Planning complete; independent PM review and tester execution are pending. No competitor or actual model quality result is implied.",
         "[2026-10-08T22:24:53Z] Engineer implementation and independent review cycles complete. T01-T10 and evidence-honesty T12 pass; T11 final full CLI/rebase gate remains pending. Story passes remains false. Focused abstraction tests pass on Node22.17 and24.16; intelligence96 tests plus32 subtests pass; targeted gateway/auth checks pass. The end-to-end retry completed79 backend tests, standalone/polyglot, authenticated abstraction guards, pipeline aliases, and Python/TypeScript/Go/Rust SDK checks. Local builds used process-only Go -buildvcs=false (outer workspace VCS metadata) and the existing MSVC Rust toolchain (default GNU dlltool unavailable). Full CLI on final rebased source remains pending. Actual model quality, held-out comparative performance, and live Sentry telemetry are unmeasured.",
-        "[2026-10-08T23:03:12Z] TESTER-EXECUTION green for local PROVENA-017 cases T01-T12. Full combined CLI npm test passed with exit 0 after rebasing the feature onto the final PR54 capture fixes. Focused abstraction tests passed on Node 22.17 and 24.16; intelligence 96 tests plus 32 subtests and focused gateway/auth checks passed. The final configured E2E passed with exit 0: 79 backend tests, standalone/polyglot services, authenticated unavailable and denied routes, pipeline aliases, actual built-CLI capture/draft through the real gateway to a controlled loopback provider, zero provider calls on denials, minimized observations, incomplete/unapproved drafts, unchanged ledger, and Python/TypeScript/Go/Rust SDK checks. The controlled provider proves integration, not actual serving-model quality. Local Go builds used process-only -buildvcs=false for outer workspace VCS metadata; Rust used the existing MSVC toolchain because default GNU dlltool was unavailable. Clean-checkout CI now builds the CLI before E2E and watches CLI changes. Exact-head publication CI remains a separate merge gate. Actual model quality, held-out comparative performance, native-client hook delivery/trust, and live Sentry telemetry remain unmeasured."
+        "[2026-10-08T23:03:12Z] TESTER-EXECUTION green for local PROVENA-017 cases T01-T12. Full combined CLI npm test passed with exit 0 after rebasing the feature onto the final PR54 capture fixes. Focused abstraction tests passed on Node 22.17 and 24.16; intelligence 96 tests plus 32 subtests and focused gateway/auth checks passed. The final configured E2E passed with exit 0: 79 backend tests, standalone/polyglot services, authenticated unavailable and denied routes, pipeline aliases, actual built-CLI capture/draft through the real gateway to a controlled loopback provider, zero provider calls on denials, minimized observations, incomplete/unapproved drafts, unchanged ledger, and Python/TypeScript/Go/Rust SDK checks. The controlled provider proves integration, not actual serving-model quality. Local Go builds used process-only -buildvcs=false for outer workspace VCS metadata; Rust used the existing MSVC toolchain because default GNU dlltool was unavailable. Clean-checkout CI now builds the CLI before E2E and watches CLI changes. Exact-head publication CI remains a separate merge gate. Actual model quality, held-out comparative performance, native-client hook delivery/trust, and live Sentry telemetry remain unmeasured.",
+        "[2026-10-08T23:26:39Z] PM review-remediation contract and tester T13 plan recorded before engineering for PR55 comment4225045594. Prior test receipts retained; no new pass asserted.",
+        "[2026-10-08T23:36:12Z] Review remediation targeted TESTER pass; final full CLI and publication gates pending. PR55 review4225045594 was reproduced before repair. Both complete focused capture suites passed with exit 0 on Node 22.17 and 24.16, including removal/rename, unchanged history, later live hook, unrelated incomplete draft, strict missing live-directory rejection, canonical path rejection, replacement junction and newly nested Git ancestor denial. Independent built-dist Node22 probe and source/privacy review are clear; PM remediation review approved. A fresh packed archive passed actual offline installation, persisted runtime, direct installed-hook failure/edit/recovery, incomplete/unknown candidate governance, ready count zero and same-runtime reuse. The same installed archive passed actual authenticated gateway/production-intelligence abstraction with a controlled loopback provider, no-cost denials and secret scans. This is harness fixture delivery, not native-engine emission/trust or actual model quality. The final full CLI suite is running and exact final-head CI remains required; previous full-suite receipts remain historical evidence."
       ],
       "uiManualCases": [],
       "testCases": [
@@ -5818,9 +5820,10 @@
             "acceptanceCriteria[8]",
             "acceptanceCriteria[9]"
           ],
-          "status": "passed",
+          "status": "pending",
           "executionNotes": [
-            "Full combined CLI npm test passed with exit 0 after rebasing the feature onto the final PR54 capture fixes. Focused abstraction tests passed on Node 22.17 and 24.16; intelligence 96 tests plus 32 subtests and focused gateway/auth checks passed. The final configured E2E passed with exit 0: 79 backend tests, standalone/polyglot services, authenticated unavailable and denied routes, pipeline aliases, actual built-CLI capture/draft through the real gateway to a controlled loopback provider, zero provider calls on denials, minimized observations, incomplete/unapproved drafts, unchanged ledger, and Python/TypeScript/Go/Rust SDK checks. The controlled provider proves integration, not actual serving-model quality. Local Go builds used process-only -buildvcs=false for outer workspace VCS metadata; Rust used the existing MSVC toolchain because default GNU dlltool was unavailable. Clean-checkout CI now builds the CLI before E2E and watches CLI changes. Exact-head publication CI remains a separate merge gate. Actual model quality, held-out comparative performance, native-client hook delivery/trust, and live Sentry telemetry remain unmeasured."
+            "Full combined CLI npm test passed with exit 0 after rebasing the feature onto the final PR54 capture fixes. Focused abstraction tests passed on Node 22.17 and 24.16; intelligence 96 tests plus 32 subtests and focused gateway/auth checks passed. The final configured E2E passed with exit 0: 79 backend tests, standalone/polyglot services, authenticated unavailable and denied routes, pipeline aliases, actual built-CLI capture/draft through the real gateway to a controlled loopback provider, zero provider calls on denials, minimized observations, incomplete/unapproved drafts, unchanged ledger, and Python/TypeScript/Go/Rust SDK checks. The controlled provider proves integration, not actual serving-model quality. Local Go builds used process-only -buildvcs=false for outer workspace VCS metadata; Rust used the existing MSVC toolchain because default GNU dlltool was unavailable. Clean-checkout CI now builds the CLI before E2E and watches CLI changes. Exact-head publication CI remains a separate merge gate. Actual model quality, held-out comparative performance, native-client hook delivery/trust, and live Sentry telemetry remain unmeasured.",
+            "Final-source full CLI validation is running after the removed-directory review fix; earlier receipt retained."
           ]
         },
         {
@@ -5849,6 +5852,34 @@
           "status": "passed",
           "executionNotes": [
             "Documentation and source review distinguish configured model metadata, controlled responses, real service authorization, and still-unmeasured task quality. This case checks evidence honesty; it does not pass the quality experiment."
+          ]
+        },
+        {
+          "id": "PROVENA-017-T13",
+          "title": "Historical working directory removal without weakening checkout privacy",
+          "level": "integration",
+          "automation": "existing_commands_and_review",
+          "preconditions": [
+            "Use isolated temporary repositories and actual capture observations."
+          ],
+          "steps": [
+            "Capture tools inside a subdirectory, then remove or rename that directory.",
+            "Verify capture list, subsequent live hooks and drafting an unrelated episode continue to work.",
+            "Verify outside-checkout/replacement symlinks and new nested Git roots remain rejected.",
+            "Verify missing or invalid incoming live working directories are still rejected."
+          ],
+          "expectedResults": [
+            "Historical paths remain usable only when their existing physical ancestor remains in the original checkout; trust boundaries remain enforced."
+          ],
+          "commands": [
+            "cd cli && npm test"
+          ],
+          "covers": [
+            "acceptanceCriteria[10]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "PR55 review4225045594 was reproduced before repair. Both complete focused capture suites passed with exit 0 on Node 22.17 and 24.16, including removal/rename, unchanged history, later live hook, unrelated incomplete draft, strict missing live-directory rejection, canonical path rejection, replacement junction and newly nested Git ancestor denial. Independent built-dist Node22 probe and source/privacy review are clear; PM remediation review approved. A fresh packed archive passed actual offline installation, persisted runtime, direct installed-hook failure/edit/recovery, incomplete/unknown candidate governance, ready count zero and same-runtime reuse. The same installed archive passed actual authenticated gateway/production-intelligence abstraction with a controlled loopback provider, no-cost denials and secret scans. This is harness fixture delivery, not native-engine emission/trust or actual model quality. The final full CLI suite is running and exact final-head CI remains required; previous full-suite receipts remain historical evidence."
           ]
         }
       ]

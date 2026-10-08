@@ -225,9 +225,13 @@ async function readEpisodes(root: string): Promise<{ episodes: CapturedEpisode[]
     const cwd = resolve(root, value);
     assertSafeRepoPath(root, cwd);
     if (normalizeRepoPath(root, cwd) !== value) throw new Error("invalid stored capture working directory");
-    const validated = validatedCwds.get(cwd) ?? validateCwd(root, cwd);
-    validatedCwds.set(cwd, validated);
-    return validated;
+    // History can outlive a deleted directory. Check its original components
+    // above, then validate checkout ownership through its nearest live ancestor.
+    let directory = cwd;
+    while (directory !== root && !existsSync(directory)) directory = dirname(directory);
+    const validated = validatedCwds.get(directory) ?? validateCwd(root, directory);
+    validatedCwds.set(directory, validated);
+    return cwd;
   };
   let bytes = 0;
   for (const entry of entries) {
