@@ -786,6 +786,16 @@ def verify_authenticated_chain(
     auth_intelligence_env["PROVENA_INTEL_PIPELINE_URL"] = auth_store_url
     auth_intelligence_env["PROVENA_INTEL_ORCHESTRATION_URL"] = base_urls["orchestration"]
     auth_intelligence_env["PROVENA_INTEL_LISTEN_PORT"] = str(AUTH_INTELLIGENCE_PORT)
+    auth_intelligence_env["PROVENA_INTEL_ENVIRONMENT"] = "production"
+    auth_intelligence_env["PROVENA_INTEL_ALLOW_UNAUTHENTICATED_LOCAL"] = "false"
+    auth_intelligence_env["PROVENA_INTEL_GATEWAY_SERVICE_TOKEN"] = gateway_service_token
+    auth_intelligence_env["PROVENA_INTEL_SERVICE_TOKEN"] = queue_service_token
+    auth_intelligence_env["PROVENA_INTEL_SERVICE_TENANT_ID"] = "tenant-poly"
+    auth_intelligence_env["PROVENA_INTEL_SERVICE_PRINCIPAL_ID"] = "queue-service-configured-sentinel"
+    auth_intelligence_env["PROVENA_INTEL_SERVICE_ROLE"] = "editor"
+    # This fixture proves routing and authorization without a model call.
+    auth_intelligence_env["PROVENA_INTEL_LLM_MODEL"] = ""
+    auth_intelligence_env["PROVENA_INTEL_LLM_PROVIDERS"] = ""
     launch_healthy(
         "intelligence-auth",
         [
@@ -939,6 +949,37 @@ def verify_authenticated_chain(
             principal_id="principal-admin-registry",
             groups=["admins"],
         )
+
+        abstraction_input = {
+            "schemaVersion": 1,
+            "goal": "Review the recorded test command",
+            "observations": [{
+                "id": hashlib.sha256(b"synthetic-abstraction-observation").hexdigest(),
+                "tool": "Bash", "workingDirectory": ".", "args": {"command": "npm test"},
+                "status": "unknown", "issues": [],
+            }],
+        }
+        for headers, expected_status in (
+            ({}, 401),
+            ({"Authorization": "Bearer invalid-e2e-token"}, 401),
+            ({**viewer_pm_1, "X-Provena-Role": "superadmin"}, 403),
+            (auth_headers(editor_token, principal_id="spoofed-editor"), 503),
+            (admin_headers, 503),
+        ):
+            response = httpx.post(
+                f"{auth_gateway_url}/v1/procedures/abstract", json=abstraction_input,
+                headers=headers, timeout=10.0,
+            )
+            if response.status_code != expected_status:
+                raise RuntimeError("procedure abstraction gateway identity or write authorization failed")
+            if expected_status == 503 and response.json() != {"detail": "procedure abstraction unavailable"}:
+                raise RuntimeError("procedure abstraction unavailable response disclosed unexpected data")
+        direct_abstraction = httpx.post(
+            f"{auth_intelligence_url}/v1/procedures/abstract", json=abstraction_input,
+            headers=admin_headers, timeout=10.0,
+        )
+        if direct_abstraction.status_code != 401:
+            raise RuntimeError("intelligence accepted an external client bearer directly for abstraction")
 
         rpc_list = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
         for invalid_headers in ({}, {"Authorization": "Bearer invalid-e2e-token"}):
@@ -1314,7 +1355,7 @@ def verify_authenticated_chain(
             raise RuntimeError("auth-enabled gateway grant setup failed")
 
         registry_memory = post_json(
-            f"{auth_gateway_url}/v1/memories",
+            f"{auth_gateway_url}/v1/pipeline/write",
             {
                 "kind": "fact",
                 "scope": {
@@ -1394,6 +1435,20 @@ def verify_authenticated_chain(
             viewer_pm_1,
         )
         result_ids = [item["memory"]["memory_id"] for item in search_response["results"]]
+        alias_search = post_json(
+            f"{auth_gateway_url}/v1/pipeline/search",
+            {
+                "query": "connected permission smoke roadmap memory",
+                "scope": {
+                    "tenant_id": "tenant-poly", "workspace_id": "ws-authz",
+                    "project_id": "proj-authz", "user_id": "pm-1",
+                },
+                "limit": 10,
+            },
+            viewer_pm_1,
+        )
+        if [item["memory"]["memory_id"] for item in alias_search["results"]] != result_ids:
+            raise RuntimeError("authenticated gateway pipeline search alias changed visible results")
         if allowed_memory_id not in result_ids:
             raise RuntimeError("auth-enabled gateway search did not return the granted memory")
         if blocked_memory_id in result_ids:

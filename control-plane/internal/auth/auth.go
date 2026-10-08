@@ -223,10 +223,13 @@ func WritePermissionMiddleware(next http.Handler) http.Handler {
 		"/v1/agent/context":           {},
 		"/v1/memories/graph/temporal": {},
 		"/v1/memories/search":         {},
+		"/v1/pipeline/search":         {},
 	}
 	writePrefixes := []string{
 		"/v1/memories",
 		"/v1/repositories",
+		"/v1/procedures",
+		"/v1/pipeline",
 		"/v1/project-snapshots",
 		"/v1/admin/",
 		"/v1/integrations/",
