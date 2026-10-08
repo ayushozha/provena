@@ -967,7 +967,8 @@ def test_repository_procedures_stay_out_of_postgres_generic_retrieval(
     }
     raw = rfc8785.dumps(event) + b"\n"
     payload = RepositoryMemorySyncRequest(
-        scope=scope, ledger_path=".provena/memory/events.jsonl", ledger=raw.decode("utf-8"),
+        schema_version=1, scope={"tenant_id": scope.tenant_id, "project_id": scope.project_id},
+        ledger_path=".provena/memory/events.jsonl", ledger=raw.decode("utf-8"),
         memory_fingerprint=hashlib.sha256(raw).hexdigest(), ledger_bytes=len(raw),
     )
     postgres_store.sync_repository_memory_events(repository_id, payload, access=access)
