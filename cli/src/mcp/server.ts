@@ -51,17 +51,22 @@ function text(value: unknown) {
 
 export interface RepoMcpServerOptions {
   sanitizeErrors?: boolean;
+  onOperationStart?: () => void;
+  onOperationEnd?: () => void;
 }
 
 async function boundedMcpOperation<T>(
   options: RepoMcpServerOptions,
   operation: () => Promise<T>,
 ): Promise<T> {
+  options.onOperationStart?.();
   try {
     return await operation();
   } catch (error) {
     if (!options.sanitizeErrors) throw error;
     throw new Error("Repository memory request failed");
+  } finally {
+    options.onOperationEnd?.();
   }
 }
 
@@ -401,6 +406,90 @@ export async function createRepoMcpServer(
 }
 
 export async function runRepoMcpServer(cwd = process.cwd()): Promise<void> {
-  const server = await createRepoMcpServer(cwd);
-  await server.connect(new StdioServerTransport());
+  let activeOperations = 0;
+  let operationEnded: (() => void) | undefined;
+  const server = await createRepoMcpServer(cwd, {
+    onOperationStart: () => { activeOperations += 1; },
+    onOperationEnd: () => {
+      activeOperations -= 1;
+      operationEnded?.();
+    },
+  });
+  let finish!: () => void;
+  let fail!: (error: unknown) => void;
+  const finished = new Promise<void>((resolve, reject) => {
+    finish = resolve;
+    fail = reject;
+  });
+  let closing = false;
+  let streamError: Error | undefined;
+  let signalReceived = false;
+  let stopFlushing: (() => void) | undefined;
+  const shutdown = () => {
+    if (closing) return;
+    closing = true;
+    process.stdin.pause();
+    void (async () => {
+      // The SDK dispatches already-parsed requests through promise microtasks.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      while (activeOperations > 0) {
+        await new Promise<void>((resolve) => { operationEnded = resolve; });
+      }
+      // Let completed handlers construct their responses, then flush the pipe.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (!process.stdout.destroyed && !process.stdout.errored && !signalReceived) {
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const complete = (error?: Error | null) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            stopFlushing = undefined;
+            if (error) reject(error);
+            else resolve();
+          };
+          // A disconnected client may keep stdout open without consuming it.
+          const timer = setTimeout(complete, 2_000);
+          stopFlushing = () => complete();
+          process.stdout.write("", complete);
+        });
+      }
+      await server.close();
+      if (streamError) throw streamError;
+    })().then(finish, fail);
+  };
+  const onStreamError = (error: Error) => {
+    streamError ??= error;
+    shutdown();
+  };
+  const onSignal = () => {
+    signalReceived = true;
+    stopFlushing?.();
+    shutdown();
+  };
+  server.server.onclose = shutdown;
+  process.stdin.once("end", shutdown);
+  process.stdin.once("close", shutdown);
+  process.stdin.once("error", onStreamError);
+  process.stdout.on("error", onStreamError);
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  try {
+    await server.connect(new StdioServerTransport());
+    if (process.stdin.readableEnded || process.stdin.destroyed) shutdown();
+    await finished;
+  } finally {
+    process.stdin.off("end", shutdown);
+    process.stdin.off("close", shutdown);
+    process.stdin.off("error", onStreamError);
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    await server.close();
+    if (process.stdout.errored && !process.stdout.closed) {
+      const outputClosed = new Promise<void>((resolve) => process.stdout.once("close", resolve));
+      process.stdout.destroy();
+      await outputClosed;
+    }
+    process.stdout.off("error", onStreamError);
+  }
 }
