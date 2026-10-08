@@ -77,7 +77,8 @@ try {
   const userHook = { matcher: "Read", hooks: [{ type: "command", command: "echo user-owned" }] };
   const userSettings = { hooks: { PostToolUse: [userHook], Stop: [{ hooks: [{ type: "command", command: "echo stop" }] }] }, permissions: { deny: ["Bash(rm *)"] }, disableAllHooks: false };
   await writeFile(join(root, ".claude/settings.local.json"), JSON.stringify(userSettings));
-  assert.equal((await installCaptureHooks(root, "claude")).action, "updated");
+  const installedClaude = await installCaptureHooks(root, "claude");
+  assert.equal(installedClaude.action, "updated", installedClaude.reason);
   assert.equal((await installCaptureHooks(root, "claude")).action, "unchanged", "installation is idempotent");
   assert.equal((await installCaptureHooks(root, "codex")).action, "created");
   const config = JSON.parse(await readFile(join(root, ".claude/settings.local.json"), "utf8"));
@@ -233,6 +234,16 @@ try {
   assert.deepEqual(JSON.parse(await readFile(join(root, ".codex/hooks.json"), "utf8")).hooks.PostToolUse, edited.hooks.PostToolUse, "uninstall preserves edited user-owned commands");
   assert.equal((await uninstallCaptureHooks(root, "claude")).action, "updated");
   assert.deepEqual(JSON.parse(await readFile(join(root, ".claude/settings.local.json"), "utf8")), userSettings, "uninstall restores unrelated settings and hooks");
+
+  const shortName = await fixture("RUNNER~1");
+  for (const provider of ["claude", "codex"]) {
+    const installed = await installCaptureHooks(shortName.root, provider);
+    assert.equal(installed.action, "created", installed.reason);
+    const delivered = await executeInstalled(shortName.root, provider, payload(shortName.root, `short-name-${provider}`));
+    assert.equal(delivered.status, 0, delivered.stderr);
+    assert.equal(delivered.stdout, "{}\n");
+  }
+  assert.equal((await listCapturedEpisodes(shortName.root)).reduce((count, episode) => count + episode.observations, 0), 2);
 
   const unsafe = await fixture("unsafe & path");
   assert.equal((await installCaptureHooks(unsafe.root, "codex")).action, "skipped");

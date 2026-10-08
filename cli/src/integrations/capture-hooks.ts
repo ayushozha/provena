@@ -167,7 +167,9 @@ function managedEntries(root: string, provider: CaptureProvider): ManagedEntry[]
   assertSafeRepoPath(root, runtime);
   // Codex uses shell commands. A deliberately restricted alphabet makes double quoting
   // safe under POSIX sh, PowerShell and cmd without interpolating hook input or env vars.
-  if (![root, runtime].every((path) => /^[A-Za-z0-9 _./:@\\-]+$/.test(path))) {
+  // Windows runner temp paths can use 8.3 names such as RUNNER~1. A tilde
+  // inside these double-quoted paths has no expansion in the supported shells.
+  if (![root, runtime].every((path) => /^[A-Za-z0-9 _./:@\\~-]+$/.test(path))) {
     throw new Error("this repository path cannot be represented safely by the supported hook command; capture installation was skipped");
   }
   const hook = provider === "claude"
