@@ -56,10 +56,10 @@ available for diagnosis instead of being erased to improve reported scores.
 ## Independent source research
 
 Memorable's public description identifies graph-based reuse of agent tool
-traces: https://www.ycombinator.com/companies/memorable . Its core CLI is
-proprietary; it will not be copied, reverse-engineered, or run for development
-of a competing product under restrictive terms. Its public figures are vendor
-claims, not Provena benchmark results.
+traces: https://www.ycombinator.com/companies/memorable . Its public Cowork
+plugin is MIT-licensed; the published core CLI carries a separate proprietary
+license. Direct evaluation requires authorization appropriate to the intended
+comparison. Its public figures are vendor claims, not Provena benchmark results.
 
 Workflow-learning research informing the independent design includes Agent
 Workflow Memory (https://arxiv.org/abs/2409.07429) and Memp

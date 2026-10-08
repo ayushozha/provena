@@ -134,6 +134,7 @@ remain roadmap.
 | `maintain context <task-id> [--max-tokens N] [--json]` | Compile one cited proposal packet |
 | `remember` | Append a typed explicit memory event |
 | `procedure learn\|approve\|outcome\|recall\|inspect` | Capture, review, attest, and retrieve structured tool sequences |
+| `capture install\|uninstall\|hook\|list\|draft` | Opt into native Codex/Claude observations and prepare local review drafts |
 | `checkpoint` | Append a handoff with current Git state |
 | `session start` | Refresh and emit boot context for an agent session |
 | `status` | Show freshness and integration health |
@@ -212,6 +213,13 @@ read-only maintenance-context, procedure-learn, procedure-outcome, and read-only
 procedure-recall. Loopback HTTP exposes the same surface. Human procedure
 approval is available through the CLI only. See the
 [procedure guide](../docs/PROCEDURAL_MEMORY.md) for payloads and limitations.
+
+Native tool capture is a separate opt-in integration: `provena capture install
+--provider codex` or `--provider claude`. It requires the persisted runtime and
+the client's hook trust settings. Filtered observations and incomplete drafts
+remain in ignored local cache; they enter the ledger only through an explicit
+`procedure learn` call. Follow the [capture guide](../docs/TOOL_CAPTURE.md) before
+enabling or sharing captured data.
 
 For a local client that requires a Streamable HTTP URL, run:
 

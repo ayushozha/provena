@@ -255,7 +255,9 @@ another memory system. **No external competitor has been measured by this
 fixture.** Full task execution with independent goal checks and equal budgets
 is required for such a comparison.
 
-Automatic trace capture, semantic workflow abstraction, graph composition of
-multiple procedures, and an autonomous replay executor are not implemented.
-The current layer learns explicitly supplied structured traces and provides
+Opt-in [native tool capture](./TOOL_CAPTURE.md) records filtered local
+observations from Codex and Claude hooks and prepares incomplete review drafts.
+Learning still requires an explicitly supplied, reviewed structured trace.
+Semantic workflow abstraction, graph composition of multiple procedures, and
+an autonomous replay executor are not implemented. The current layer provides
 cited, inspectable guidance for a caller to review and use.
