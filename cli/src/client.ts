@@ -1,4 +1,10 @@
-import type { ProvenaScope } from "./config.js";
+import { assertLoopbackStoreUrl, type ProvenaScope } from "./config.js";
+import {
+  CAPTURE_ABSTRACTION_LIMITS, assertCaptureAbstractionCredentialFree, captureAbstractionInputSchema, validateCaptureAbstraction,
+  type CaptureAbstractionInput, type CaptureAbstractionResponse,
+} from "./capture/abstraction.js";
+import { canonicalJson } from "./brain/utils.js";
+import { assertNoSecretMaterial } from "./security/memory.js";
 
 /** Store API scope envelope (matches app.models.ScopeEnvelope). */
 export interface ScopeEnvelope {
@@ -188,6 +194,7 @@ export interface ProvenaClientOptions {
 }
 
 const DEFAULT_SEARCH_LIMIT = 5;
+class CaptureAbstractionError extends Error {}
 
 export class ProvenaClient {
   private readonly baseUrl: string;
@@ -211,6 +218,67 @@ export class ProvenaClient {
       "X-Provena-Role": "editor",
       ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
     };
+  }
+
+  /** Explicit review-only abstraction; credentials and remote response errors never enter local drafts. */
+  async abstractCapturedProcedure(input: CaptureAbstractionInput, scope: ScopeEnvelope): Promise<CaptureAbstractionResponse> {
+    if (!this.intelligenceUrl) throw new Error("capture abstraction requires config.intelligence_url");
+    try { assertLoopbackStoreUrl(this.intelligenceUrl); }
+    catch { throw new Error("capture abstraction intelligence URL must be an authorized HTTP(S) origin without credentials"); }
+    const parsed = captureAbstractionInputSchema.safeParse(input);
+    if (!parsed.success) throw new Error("invalid capture abstraction input");
+    const body = canonicalJson(parsed.data).slice(0, -1);
+    assertNoSecretMaterial(body);
+    assertCaptureAbstractionCredentialFree(parsed.data, this.apiKey);
+    if (Buffer.byteLength(body) > CAPTURE_ABSTRACTION_LIMITS.requestBytes) throw new Error("capture abstraction request exceeds its byte limit; select fewer calls");
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => { controller.abort(); reject(new CaptureAbstractionError("capture abstraction deadline exceeded")); }, this.timeoutMs);
+    });
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const response = await Promise.race([this.fetchImpl(`${this.intelligenceUrl}/v1/procedures/abstract`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...this.scopedHeaders(scope) },
+        body, redirect: "error", signal: controller.signal,
+      }), deadline]);
+      if (response.redirected || response.status >= 300 && response.status < 400) throw new CaptureAbstractionError("capture abstraction redirects are not accepted");
+      if (!response.ok) throw new CaptureAbstractionError(`capture abstraction request failed (HTTP ${response.status})`);
+      if ((response.headers.get("content-encoding") ?? "identity").toLowerCase() !== "identity") throw new CaptureAbstractionError("capture abstraction compressed responses are not accepted");
+      if (!/^application\/(?:json|[A-Za-z0-9!#$&^_.+-]+\+json)(?:\s*;|$)/i.test(response.headers.get("content-type") ?? "")) throw new CaptureAbstractionError("capture abstraction requires a JSON response");
+      const declared = Number(response.headers.get("content-length"));
+      if (Number.isFinite(declared) && declared > CAPTURE_ABSTRACTION_LIMITS.responseBytes) throw new CaptureAbstractionError("capture abstraction response exceeds its byte limit");
+      if (!response.body) throw new CaptureAbstractionError("capture abstraction response has no body");
+      reader = response.body.getReader();
+      let size = 0;
+      const chunks: Uint8Array[] = [];
+      for (;;) {
+        const item = await Promise.race([reader.read(), deadline]);
+        if (item.done) break;
+        size += item.value.byteLength;
+        if (size > CAPTURE_ABSTRACTION_LIMITS.responseBytes) throw new CaptureAbstractionError("capture abstraction response exceeds its byte limit");
+        chunks.push(item.value);
+      }
+      let value: unknown;
+      try {
+        const text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, size));
+        value = JSON.parse(text);
+      } catch { throw new CaptureAbstractionError("invalid capture abstraction JSON response"); }
+      try {
+        const result = validateCaptureAbstraction(parsed.data, value);
+        assertCaptureAbstractionCredentialFree(result, this.apiKey);
+        return result;
+      }
+      catch { throw new CaptureAbstractionError("invalid capture abstraction grounded response"); }
+    } catch (error) {
+      // Never retain a cause or echo URLs, headers, service bodies, or credentials.
+      if (error instanceof CaptureAbstractionError) throw new Error(error.message);
+      throw new Error("capture abstraction unavailable or rejected; no draft was written");
+    } finally {
+      clearTimeout(timer!);
+      controller.abort();
+      void reader?.cancel().catch(() => {});
+    }
   }
 
   async createMemory(payload: MemoryCreate): Promise<MemoryWriteResult> {
@@ -487,6 +555,10 @@ export function scopeEnvelopeFromConfig(scope: ProvenaScope): ScopeEnvelope {
     tenant_id: scope.tenant_id,
     project_id: scope.project_id,
   };
+}
+
+export function readStoreApiKey(environmentVariable: string): string | undefined {
+  return process.env[environmentVariable]?.trim() || undefined;
 }
 
 function validateRepositoryMemorySyncResponse(

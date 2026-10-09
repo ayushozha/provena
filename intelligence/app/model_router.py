@@ -44,7 +44,7 @@ _TIER_ORDER: list[ModelTier] = [ModelTier.FAST, ModelTier.BALANCED, ModelTier.QU
 
 # Every LLM task the pipelines route. The single-provider shorthand serves all
 # of them with the one configured model.
-ALL_TASKS: frozenset[str] = frozenset({"classify", "summarize", "extract", "rerank", "compact"})
+ALL_TASKS: frozenset[str] = frozenset({"classify", "summarize", "extract", "rerank", "compact", "abstract"})
 
 
 @dataclass(frozen=True)

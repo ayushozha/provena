@@ -12,7 +12,10 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
+from uuid import uuid4
 
 import rfc8785
 import httpx
@@ -168,6 +171,156 @@ def tail(path: Path, lines: int = 60) -> str:
 
 def sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+@contextmanager
+def controlled_abstraction_provider(
+    model: str, provider_token: str,
+) -> Iterator[tuple[str, list[dict[str, object]], list[str]]]:
+    # Controlled HTTP receipts prove integration, never actual model quality.
+    calls: list[dict[str, object]] = []
+    errors: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args: object) -> None:
+            pass  # Never put provider headers, payloads, or credentials in logs.
+
+        def do_POST(self) -> None:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if self.path != "/v1/chat/completions" or not 0 < length <= 262_144:
+                    raise ValueError()
+                if self.headers.get("Authorization") != f"Bearer {provider_token}":
+                    raise ValueError()
+                payload = json.loads(self.rfile.read(length))
+                if payload["model"] != model:
+                    raise ValueError()
+                captured = json.loads(payload["messages"][-1]["content"])
+                observations = captured["observations"]
+                if not 2 <= len(observations) <= 32:
+                    raise ValueError()
+                calls.append(captured)
+                proposal = {
+                    "title": "Review the captured retry",
+                    "triggers": ["Before handing off session changes"],
+                    # Exclude the failed attempt only from candidate steps, not review history.
+                    "keptObservationIds": [item["id"] for item in reversed(observations[1:])],
+                    "omitted": [{"observationId": observations[0]["id"],
+                                 "reason": "Keep the earlier failed attempt in review history."}],
+                    "recoverySummary": "Controlled fixture notes; task outcome remains unknown.",
+                }
+                body = json.dumps({"choices": [{"message": {"content": json.dumps(proposal)}}]}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:  # noqa: BLE001
+                errors.append("controlled provider received an invalid request")
+                self.send_error(400, "controlled provider request rejected")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    worker = Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1", calls, errors
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+
+def verify_capture_abstraction_cli(
+    gateway_url: str, editor_token: str, viewer_token: str, provider_token: str, model: str,
+    provider_calls: list[dict[str, object]], provider_errors: list[str],
+    env: dict[str, str], repo: Path,
+) -> None:
+    cli = ROOT / "cli" / "dist" / "cli.js"
+    if not cli.is_file():
+        raise RuntimeError("capture abstraction E2E requires the previously built CLI")
+    repo.mkdir()
+    source = "src/session.js"
+    (repo / "src").mkdir()
+    source_path = repo / source
+    source_path.write_text("export const session = false;\n", encoding="utf-8")
+    run(["git", "init", "-q"], repo, env, capture=True)
+    run(["node", str(cli), "init", "--no-runtime", "--no-daemon", "--no-hooks", "--no-mcp", "--no-agents"], repo, env, capture=True)
+    config_path = repo / ".provena" / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config.update({"store_url": gateway_url, "intelligence_url": gateway_url,
+                   "scope": {"tenant_id": "tenant-poly", "project_id": "project-abstraction-e2e"}})
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    # Fixture forwarding entry executes the already-built CLI. This is not an
+    # archive-install or native-client emission/trust test; neither is inferred.
+    runtime_package = repo / ".provena" / "runtime" / "node_modules" / "@provena" / "cli"
+    (runtime_package / "dist").mkdir(parents=True)
+    (runtime_package / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+    runtime = runtime_package / "dist" / "cli.js"
+    runtime.write_text(f"await import({json.dumps(cli.as_uri())});\n", encoding="utf-8")
+    installed = json.loads(run(["node", str(cli), "capture", "install", "--provider", "codex", "--json"], repo, env, capture=True).stdout)
+    if installed["action"] not in {"created", "updated"}:
+        raise RuntimeError("capture abstraction fixture hook installation failed")
+    ledger = repo / ".provena" / "memory" / "events.jsonl"
+    before_ledger = ledger.read_bytes() if ledger.exists() else None
+    # These are real benign command exit receipts, not task-success receipts.
+    (repo / "package.json").write_text(json.dumps({"scripts": {"test": "node -e \"process.exit(1)\""}}), encoding="utf-8")
+    for name, expected in (("failed", 1), ("retry", 0)):
+        if expected == 0:
+            (repo / "package.json").write_text(json.dumps({"scripts": {"test": "node -e \"process.exit(0)\""}}), encoding="utf-8")
+        receipt = subprocess.run(normalise_command(["npm", "test"]), cwd=repo, env=env, capture_output=True, text=True, timeout=30)
+        if receipt.returncode != expected:
+            raise RuntimeError("capture abstraction command receipt did not match the fixture")
+        payload = {"session_id": "controlled-e2e-session", "cwd": str(repo),
+                   "hook_event_name": "PostToolUse", "tool_use_id": name, "tool_name": "Bash",
+                   "tool_input": {"command": "npm test"},
+                   "tool_response": {"exit_code": receipt.returncode, "stdout": receipt.stdout, "stderr": receipt.stderr}}
+        delivered = subprocess.run(["node", str(runtime), "capture", "hook", "--provider", "codex", "--root", str(repo)],
+                                   cwd=repo, env=env, input=json.dumps(payload), text=True, capture_output=True, check=True, timeout=20)
+        if delivered.stdout != "{}\n" or delivered.stderr:
+            raise RuntimeError("capture abstraction fixture hook did not record its receipt")
+    episodes = json.loads(run(["node", str(cli), "capture", "list", "--json"], repo, env, capture=True).stdout)
+    if len(episodes) != 1 or episodes[0]["statuses"] != {"success": 1, "failure": 1, "unknown": 0}:
+        raise RuntimeError("capture abstraction did not retain failure and retry observations")
+    command = ["node", str(cli), "capture", "draft", episodes[0]["id"],
+               "--goal", "Review session handling before handoff", "--source", source,
+               "--title", "Human-reviewed fixture title", "--abstract", "--json"]
+    denied_env = {**env, "PROVENA_API_KEY": viewer_token}
+    denied = subprocess.run(command, cwd=repo, env=denied_env, capture_output=True, text=True, timeout=40)
+    if denied.returncode == 0 or provider_calls or provider_errors:
+        raise RuntimeError("denied capture abstraction reached the configured provider")
+    drafts = repo / ".provena" / "cache" / "episodes" / "drafts"
+    if drafts.exists() and any(drafts.iterdir()):
+        raise RuntimeError("denied capture abstraction wrote a local draft")
+    allowed_env = {**env, "PROVENA_API_KEY": editor_token}
+    result = json.loads(run(command, repo, allowed_env, capture=True).stdout)
+    wrapper = json.loads((repo / result["draftPath"]).read_text(encoding="utf-8"))
+    candidate = json.loads((repo / result["candidatePath"]).read_text(encoding="utf-8"))
+    if len(provider_calls) != 1 or provider_errors:
+        raise RuntimeError("capture abstraction did not use exactly one controlled provider call")
+    request = provider_calls[0]
+    if set(request) != {"schemaVersion", "goal", "observations"} or len(request["observations"]) != 2:
+        raise RuntimeError("capture abstraction provider received unexpected request fields")
+    for observation in request["observations"]:
+        if set(observation) != {"id", "tool", "workingDirectory", "args", "status", "issues"}:
+            raise RuntimeError("capture abstraction sent raw observation metadata")
+    if (wrapper["complete"] is not False or wrapper["taskOutcome"] != "unknown" or
+        wrapper["reviewRequired"] is not True or candidate["verification"] != [] or
+        candidate["title"] != "Human-reviewed fixture title" or len(wrapper["observations"]) != 2 or
+        wrapper["observations"][0]["status"] != "failure" or len(candidate["steps"]) != 1 or
+        candidate["steps"][0]["args"] != {"command": "npm test"} or
+        wrapper["abstraction"]["omitted"][0]["observationId"] != wrapper["observations"][0]["id"] or
+        wrapper["abstraction"]["model"]["model"] != model):
+        raise RuntimeError("capture abstraction lost grounding or incomplete-draft governance")
+    if (ledger.read_bytes() if ledger.exists() else None) != before_ledger:
+        raise RuntimeError("capture abstraction changed the authoritative ledger")
+    recall = json.loads(run(["node", str(cli), "procedure", "recall", "session handling", "--include-review", "--json"], repo, allowed_env, capture=True).stdout)
+    if recall["ready"] or recall["review"]:
+        raise RuntimeError("an unlearned capture draft became a governed procedure")
+    for token in (editor_token, viewer_token, provider_token):
+        if token in json.dumps({"result": result, "wrapper": wrapper, "candidate": candidate, "request": request}) or token in denied.stdout + denied.stderr:
+            raise RuntimeError("capture abstraction fixture disclosed a credential")
+    print("[ok] authenticated controlled-provider HTTP chain produced an unapproved local capture draft; denied calls incurred zero provider requests.")
 
 
 def auth_headers(
@@ -786,7 +939,17 @@ def verify_authenticated_chain(
     auth_intelligence_env["PROVENA_INTEL_PIPELINE_URL"] = auth_store_url
     auth_intelligence_env["PROVENA_INTEL_ORCHESTRATION_URL"] = base_urls["orchestration"]
     auth_intelligence_env["PROVENA_INTEL_LISTEN_PORT"] = str(AUTH_INTELLIGENCE_PORT)
-    launch_healthy(
+    auth_intelligence_env["PROVENA_INTEL_ENVIRONMENT"] = "production"
+    auth_intelligence_env["PROVENA_INTEL_ALLOW_UNAUTHENTICATED_LOCAL"] = "false"
+    auth_intelligence_env["PROVENA_INTEL_GATEWAY_SERVICE_TOKEN"] = gateway_service_token
+    auth_intelligence_env["PROVENA_INTEL_SERVICE_TOKEN"] = queue_service_token
+    auth_intelligence_env["PROVENA_INTEL_SERVICE_TENANT_ID"] = "tenant-poly"
+    auth_intelligence_env["PROVENA_INTEL_SERVICE_PRINCIPAL_ID"] = "queue-service-configured-sentinel"
+    auth_intelligence_env["PROVENA_INTEL_SERVICE_ROLE"] = "editor"
+    # This fixture proves routing and authorization without a model call.
+    auth_intelligence_env["PROVENA_INTEL_LLM_MODEL"] = ""
+    auth_intelligence_env["PROVENA_INTEL_LLM_PROVIDERS"] = ""
+    auth_intelligence_process = launch_healthy(
         "intelligence-auth",
         [
             sys.executable,
@@ -939,6 +1102,67 @@ def verify_authenticated_chain(
             principal_id="principal-admin-registry",
             groups=["admins"],
         )
+
+        abstraction_input = {
+            "schemaVersion": 1,
+            "goal": "Review the recorded test command",
+            "observations": [{
+                "id": hashlib.sha256(b"synthetic-abstraction-observation").hexdigest(),
+                "tool": "Bash", "workingDirectory": ".", "args": {"command": "npm test"},
+                "status": "unknown", "issues": [],
+            }],
+        }
+        for headers, expected_status in (
+            ({}, 401),
+            ({"Authorization": "Bearer invalid-e2e-token"}, 401),
+            ({**viewer_pm_1, "X-Provena-Role": "superadmin"}, 403),
+            (auth_headers(editor_token, principal_id="spoofed-editor"), 503),
+            (admin_headers, 503),
+        ):
+            response = httpx.post(
+                f"{auth_gateway_url}/v1/procedures/abstract", json=abstraction_input,
+                headers=headers, timeout=10.0,
+            )
+            if response.status_code != expected_status:
+                raise RuntimeError("procedure abstraction gateway identity or write authorization failed")
+            if expected_status == 503 and response.json() != {"detail": "procedure abstraction unavailable"}:
+                raise RuntimeError("procedure abstraction unavailable response disclosed unexpected data")
+        direct_abstraction = httpx.post(
+            f"{auth_intelligence_url}/v1/procedures/abstract", json=abstraction_input,
+            headers=admin_headers, timeout=10.0,
+        )
+        if direct_abstraction.status_code != 401:
+            raise RuntimeError("intelligence accepted an external client bearer directly for abstraction")
+
+        provider_token = secrets.token_urlsafe(32)
+        raw_tokens.append(provider_token)
+        fixture_model = env.get("PROVENA_E2E_ABSTRACTION_MODEL") or str(uuid4())
+        with controlled_abstraction_provider(fixture_model, provider_token) as (provider_url, provider_calls, provider_errors):
+            # Keep the model-disabled unavailable checks above. Enable only the
+            # abstraction task after them, using the same real gateway registry.
+            auth_intelligence_process.stop()
+            configured_env = auth_intelligence_env.copy()
+            configured_env["PROVENA_INTEL_LLM_PROVIDERS"] = json.dumps([{
+                "name": "e2e-controlled", "base_url": provider_url, "api_key": provider_token,
+                "models": [{"model": fixture_model, "tier": "balanced", "tasks": ["abstract"]}],
+            }])
+            launch_healthy(
+                "intelligence-auth-configured",
+                [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(AUTH_INTELLIGENCE_PORT)],
+                ROOT / "intelligence", configured_env, log_dir / "intelligence-auth-configured.log",
+                f"{auth_intelligence_url}/healthz",
+            )
+            for headers, expected_status in (({}, 401), ({"Authorization": "Bearer invalid-e2e-token"}, 401),
+                                             ({**viewer_pm_1, "X-Provena-Role": "superadmin"}, 403)):
+                denied = httpx.post(f"{auth_gateway_url}/v1/procedures/abstract", json=abstraction_input, headers=headers, timeout=10.0)
+                if denied.status_code != expected_status or provider_calls or provider_errors:
+                    raise RuntimeError("denied gateway abstraction incurred provider work")
+            direct_configured = httpx.post(f"{auth_intelligence_url}/v1/procedures/abstract", json=abstraction_input,
+                                          headers=auth_headers(editor_token), timeout=10.0)
+            if direct_configured.status_code != 401 or provider_calls or provider_errors:
+                raise RuntimeError("direct external bearer incurred provider work")
+            verify_capture_abstraction_cli(auth_gateway_url, editor_token, viewer_pm_1_token, provider_token, fixture_model,
+                                           provider_calls, provider_errors, env, log_dir.parent / "capture-abstraction")
 
         rpc_list = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
         for invalid_headers in ({}, {"Authorization": "Bearer invalid-e2e-token"}):
@@ -1314,7 +1538,7 @@ def verify_authenticated_chain(
             raise RuntimeError("auth-enabled gateway grant setup failed")
 
         registry_memory = post_json(
-            f"{auth_gateway_url}/v1/memories",
+            f"{auth_gateway_url}/v1/pipeline/write",
             {
                 "kind": "fact",
                 "scope": {
@@ -1394,6 +1618,20 @@ def verify_authenticated_chain(
             viewer_pm_1,
         )
         result_ids = [item["memory"]["memory_id"] for item in search_response["results"]]
+        alias_search = post_json(
+            f"{auth_gateway_url}/v1/pipeline/search",
+            {
+                "query": "connected permission smoke roadmap memory",
+                "scope": {
+                    "tenant_id": "tenant-poly", "workspace_id": "ws-authz",
+                    "project_id": "proj-authz", "user_id": "pm-1",
+                },
+                "limit": 10,
+            },
+            viewer_pm_1,
+        )
+        if [item["memory"]["memory_id"] for item in alias_search["results"]] != result_ids:
+            raise RuntimeError("authenticated gateway pipeline search alias changed visible results")
         if allowed_memory_id not in result_ids:
             raise RuntimeError("auth-enabled gateway search did not return the granted memory")
         if blocked_memory_id in result_ids:

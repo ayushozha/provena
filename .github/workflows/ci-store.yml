@@ -3,6 +3,7 @@ name: Store
 on:
   pull_request:
     paths:
+      - "cli/**"
       - "app/**"
       - "storage/**"
       - "tests/**"
@@ -26,6 +27,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "cli/**"
       - "app/**"
       - "storage/**"
       - "tests/**"
@@ -165,6 +167,11 @@ jobs:
           node-version: "22"
       - name: Install Python services
         run: python -m pip install -e ".[dev]" -e ./intelligence pytest
+      - name: Build the CLI used by end-to-end verification
+        working-directory: cli
+        run: |
+          npm ci
+          npm run build
       - name: Run authenticated polyglot end-to-end verification
         env:
           PROVENA_E2E_TMP_DIR: ${{ runner.temp }}/provena-e2e

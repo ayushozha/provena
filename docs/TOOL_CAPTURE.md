@@ -79,6 +79,71 @@ steps in the [procedure lifecycle](./PROCEDURAL_MEMORY.md). Drafts have
 `verification: []`, `complete: false`, and `taskOutcome: "unknown"`. A successful
 tool exit never becomes a successful task receipt.
 
+## Optional grounded abstraction
+
+Ordinary drafts and installed hooks remain offline. Add `--abstract` to an
+explicit draft command to request help selecting relevant recorded steps:
+
+```powershell
+npx provena capture draft $Episode `
+  --goal "Validate session handling before handoff" `
+  --source src/session.ts `
+  --abstract `
+  --json
+```
+
+This requires `intelligence_url` in the existing `.provena/config.json` and a
+configured intelligence service with model routing. In production, set this
+URL to the authenticated gateway origin. The CLI uses the existing
+`PROVENA_API_KEY` runtime environment variable for its client credential and
+sends the configured tenant scope. The gateway authenticates that credential,
+enforces write authority, and supplies the authoritative service identity.
+Service and model-provider credentials stay on the server. A direct service
+origin is supported only by the existing explicit local development bypass.
+The URL must be an HTTP(S) origin without embedded credentials,
+query parameters, or a path. A remote origin requires HTTPS and the existing
+`PROVENA_ALLOW_REMOTE_STORE=1` opt-in. Redirects are rejected.
+
+The request sends the explicit goal and one to 32 selected observations:
+hashed call IDs, tool names, repository-relative working directories, filtered
+safe arguments, tool statuses, and issue labels. Source contents, fingerprints,
+raw outputs, transcripts, native identifiers, and environment values are not
+sent. The configured service can pass this minimized data to its configured
+model provider. Goals, command names and paths can still be sensitive; review
+them before choosing this explicit egress option.
+
+The service may suggest a title, triggers, retained observation IDs, omission
+reasons, and a recovery summary. It cannot supply steps, arguments, source
+paths, prerequisites, approval, or outcome receipts. The CLI verifies strict
+schemas, an exact partition of the supplied IDs, and canonical request/response
+hashes. It constructs candidate steps from the original retained observations
+in recorded order. An explicit `--title` takes precedence over the suggested
+title, and the caller's goal remains unchanged.
+
+All original selected observations, including failed and omitted attempts,
+remain in the local review wrapper alongside source evidence. Model recovery
+text and model metadata stay in that wrapper as untrusted review notes; they
+do not replace the candidate's deterministic failure warnings. Reported model
+configuration and matching hashes are not authenticated proof of execution,
+model quality, or task success.
+
+The CLI releases its repository lock during the request, then rechecks the
+entire episode and current source fingerprints under the lock before writing.
+Changed or removed observations, changed sources, or unsafe cache paths cause
+an error. Missing configuration, service failures, redirects, malformed or
+oversized responses, compressed responses, and the request deadline also fail
+explicitly. They create no draft and no ledger event; no offline result is
+silently substituted. Successful abstraction still produces an incomplete,
+unapproved draft with `taskOutcome: "unknown"` and `verification: []`.
+
+Both draft destinations and their actual temporary paths are checked before
+either payload is staged. If the second publish fails, the writer attempts to
+restore previous destination bytes and remove its own temporary files. The two-file
+write is not crash-atomic; interrupted processes, rollback I/O failures, or
+concurrent filesystem ownership changes can require local draft review.
+Caught write or rollback failures are reported explicitly. Draft writing never
+creates a ledger event.
+
 ## Retained data and limits
 
 Observations retain a hashed session/call identity, named tool, completion
@@ -116,6 +181,8 @@ draft files that require review before learning or sharing.
 | Local review drafts | 32 pairs, at most 80,000 bytes per file |
 | One fingerprinted source | 1 MiB UTF-8 text |
 | Stdin wait | Ten seconds |
+| Explicit abstraction request / response | 80,000 bytes each in the CLI |
+| Explicit abstraction deadline | Thirty seconds in the CLI |
 
 At a quota limit, later observations are rejected and an existing episode is
 marked incomplete with `quotaReached`. Hook stdout is `{}`; diagnostics are
@@ -125,8 +192,8 @@ detect every sensitive string; review before learning, committing, or sharing.
 
 Completion order is not causal order. Native coverage can be partial, and
 parallel calls may complete out of sequence. Failed attempts and later recovery
-remain visible; every draft requires review. Semantic abstraction, automatic
-learning/approval, and replay execution are not part of this adapter.
+remain visible; every draft requires review. Optional abstraction is review
+assistance. Automatic learning, approval, and replay execution are not provided.
 
 ## Validation and client references
 
@@ -136,6 +203,12 @@ exercise documented payload shapes; they do not by themselves prove native
 client delivery or an agent's task success.
 Run `node tests/capture-draft-pair.test.mjs` for draft privacy, handled write
 failure, and ignore-rule change regressions.
+
+`node tests/capture-abstraction.test.mjs` checks the explicit CLI path, minimized
+egress, mocked authentication/transport limits, invalid proposals, source and
+episode concurrency, and recorded cross-language hash fixtures. Mocked reports
+do not measure actual provider quality or comparative task performance; those
+measurements remain pending.
 
 The native schemas are documented in [Codex hooks](https://learn.chatgpt.com/docs/hooks)
 and [Claude Code hooks](https://code.claude.com/docs/en/hooks). Hook availability,

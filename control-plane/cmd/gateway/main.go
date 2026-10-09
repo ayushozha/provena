@@ -85,6 +85,9 @@ func main() {
 
 	mux.Handle("POST /v1/memories", intelligenceProxy.WithRewritePath("/v1/pipeline/write"))
 	mux.Handle("POST /v1/memories/search", intelligenceProxy.WithRewritePath("/v1/pipeline/search"))
+	mux.Handle("POST /v1/procedures/abstract", intelligenceProxy)
+	mux.Handle("POST /v1/pipeline/write", intelligenceProxy)
+	mux.Handle("POST /v1/pipeline/search", intelligenceProxy)
 	mux.Handle("POST /v1/agent/context", storeProxy)
 	mux.Handle("GET /v1/memories/{id}", storeProxy)
 	mux.Handle("PUT /v1/memories/{id}", storeProxy)

@@ -3,7 +3,7 @@
   "mode": "codex-loop",
   "branchName": "codex/provena-product-loop",
   "objective": "Turn Provena into a production-ready, self-hostable, embeddable governed memory plane that can keep iterating through PM-authored stories and QA-authored test coverage until explicitly stopped.",
-  "updatedAt": "2026-07-13T19:24:04Z",
+  "updatedAt": "2026-10-08T23:51:09Z",
   "sentry": {
     "enabledIfEnvPresent": true,
     "requiredEnv": "SENTRY_AUTH_TOKEN",
@@ -142,6 +142,22 @@
       "dependencies": [
         "FEATURE-TEMPORAL-MEMORY-GRAPH"
       ]
+    },
+    {
+      "featureId": "FEATURE-GROUNDED-PROCEDURE-ABSTRACTION",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "Grounded procedure abstraction",
+      "featureDescription": "Add one explicit CLI-to-intelligence abstraction request using existing authenticated HTTP and env-driven model infrastructure. A strict proposal selects only recorded observations; the CLI preserves full local evidence and writes an incomplete draft after revalidating the source snapshot.",
+      "expectedBehaviors": [
+        "Only explicit capture draft --abstract sends the selected minimized observations and caller goal to the configured authenticated intelligence service; ordinary drafts and hooks stay offline.",
+        "A configured model may select recorded observations and suggest a title, triggers, omission reasons, and recovery summary; it cannot supply executable steps, paths, arguments, prerequisites, sources, task receipts, or approval.",
+        "All original observations, failures, unknown outcomes, omitted observations, and source evidence remain reviewable in a local incomplete draft; deterministic candidate steps preserve recorded order and tool arguments.",
+        "The repository lock is released for the bounded network call, then the complete selected episode and source fingerprints are revalidated under the lock before writing any draft.",
+        "Strict shared request and response schemas, canonical hashes, reference partitions, byte limits, deadlines, configured-origin restrictions, authenticated write scope, and generic errors protect both trust boundaries.",
+        "Unavailable providers or malformed responses fail without a fake offline abstraction, ledger mutation, or model-key disclosure. Both draft views and temporary paths are preflighted; handled second-file failures restore prior bytes and clean owned temporary payloads. Publication is not crash-atomic and rollback failures require review.",
+        "Learning, approval, exact-version outcome receipts, and ready status retain the existing explicit governance gates; model suggestions and successful tool observations never prove task success."
+      ],
+      "dependencies": []
     }
   ],
   "userStories": [
@@ -1280,6 +1296,93 @@
       "lastEngineerStartedAt": "2026-07-13T20:35:00Z",
       "lastPmReviewStartedAt": "2026-07-13T20:51:01Z",
       "lastTesterExecutionStartedAt": "2026-07-13T21:32:50Z"
+    },
+    {
+      "id": "PROVENA-017",
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "featureId": "FEATURE-GROUNDED-PROCEDURE-ABSTRACTION",
+      "featureTitle": "Grounded procedure abstraction",
+      "title": "Abstract selected coding-tool observations into reviewable procedure drafts",
+      "priority": 17,
+      "status": "complete",
+      "passes": true,
+      "attempts": 1,
+      "qaStatus": "passed",
+      "qaAttempts": 2,
+      "persona": "Developer who wants reusable procedures grounded in real coding-tool observations",
+      "userStory": "As a developer, I want to explicitly request a bounded model abstraction of selected observations so I can review a reusable procedure without granting the model authority to invent actions, declare success, or approve durable memory.",
+      "problemStatement": "Capture currently records minimized observations and creates deterministic drafts, but cannot propose relevant steps and triggers from a longer episode. Model output needs a narrow grounded contract so unsupported actions and outcome claims cannot enter a procedure.",
+      "featureDescription": "Add one explicit CLI-to-intelligence abstraction request using existing authenticated HTTP and env-driven model infrastructure. A strict proposal selects only recorded observations; the CLI preserves full local evidence and writes an incomplete draft after revalidating the source snapshot.",
+      "expectedBehaviors": [
+        "Only explicit capture draft --abstract sends the selected minimized observations and caller goal to the configured authenticated intelligence service; ordinary drafts and hooks stay offline.",
+        "A configured model may select recorded observations and suggest a title, triggers, omission reasons, and recovery summary; it cannot supply executable steps, paths, arguments, prerequisites, sources, task receipts, or approval.",
+        "All original observations, failures, unknown outcomes, omitted observations, and source evidence remain reviewable in a local incomplete draft; deterministic candidate steps preserve recorded order and tool arguments.",
+        "The repository lock is released for the bounded network call, then the complete selected episode and source fingerprints are revalidated under the lock before writing any draft.",
+        "Strict shared request and response schemas, canonical hashes, reference partitions, byte limits, deadlines, configured-origin restrictions, authenticated write scope, and generic errors protect both trust boundaries.",
+        "Unavailable providers or malformed responses fail without a fake offline abstraction, ledger mutation, or model-key disclosure. Both draft views and temporary paths are preflighted; handled second-file failures restore prior bytes and clean owned temporary payloads. Publication is not crash-atomic and rollback failures require review.",
+        "Learning, approval, exact-version outcome receipts, and ready status retain the existing explicit governance gates; model suggestions and successful tool observations never prove task success.",
+        "Stored capture observations survive removal or renaming of their former working directory. Their nearest existing physical ancestor must still belong to the same checkout; replacement symlinks and newly introduced nested repositories remain rejected. Incoming live observations still require a valid existing working directory."
+      ],
+      "acceptanceCriteria": [
+        "The CLI exposes an explicit --abstract flag on capture draft and rejects malformed flags. The configured intelligence_url points to the authenticated gateway origin in production; existing client bearer and scope helpers are reused. No model-provider credential is sent by the CLI.",
+        "POST /v1/procedures/abstract is routed through the authenticated gateway with write authorization and authoritative service identity; the intelligence service validates ingress and write authority before parsing/model work. Direct external client bearers are rejected. Request schemaVersion is integer 1, goal is bounded, observations contain at most 32 hashed IDs and safe argument/status/issue fields, and unknown fields are rejected.",
+        "The request stream is limited to 256 KiB before parsing. Model response content is bounded to 80 KiB with a total deadline on the new transport path; compressed expansion, redirects, provider failures, missing model configuration, and invalid JSON fail generically.",
+        "Model output contains only bounded title, triggers, a nonempty unique keptObservationIds subset, an exact complementary omission partition with reasons, and recoverySummary. Unknown/duplicate IDs and invented commands/paths/arguments/prerequisites/outcomes are rejected.",
+        "inputSha256 hashes the strict normalized complete request using UTF-8 compact sorted-key JSON without a trailing newline. outputSha256 hashes the full response except outputSha256, including input hash, prompt revision, and configured model metadata. Type, Unicode, and goal-trim parity are tested across Python and TypeScript.",
+        "Before the call, a locked validated snapshot includes the entire episode and selected current source fingerprints. After the call, a fresh locked read must match; changed sources, changed or removed episode data, nested repositories, symlinks, tracked/unignored cache targets, or unsafe paths fail without writing a draft.",
+        "Candidate goal remains the explicit caller goal and explicit caller title takes precedence. Candidate steps/arguments are derived only from recorded selected observations in original order. Model recovery text and configured model metadata remain untrusted local wrapper data; deterministic failure warnings and all original evidence remain.",
+        "Every draft remains complete=false, taskOutcome=unknown, verification=[], and unapproved; abstraction never executes commands or writes the authoritative memory ledger. Existing learn/approve/outcome gates are exercised by focused regressions.",
+        "Use only existing Node/Zod/fetch and FastAPI/Pydantic/httpx/model router/shared LLM client dependencies, with env-driven model selection. Existing callers retain their previous LLM transport behavior.",
+        "Focused lifecycle, authorization, no-network-default, adversarial input/output, concurrency, transport caps, and full CLI/intelligence/E2E checks pass on the final source. Documentation states configured-model metadata limits, opt-in egress, and draft-only status. Actual provider/task-quality and competitor results remain explicitly pending until measured.",
+        "Stored capture observations survive removal or renaming of their former working directory. Their nearest existing physical ancestor must still belong to the same checkout; replacement symlinks and newly introduced nested repositories remain rejected. Incoming live observations still require a valid existing working directory."
+      ],
+      "verificationCommands": [
+        "cd cli && npm run build",
+        "cd cli && node tests/capture-abstraction.test.mjs",
+        "cd cli && node tests/capture.test.mjs",
+        "cd intelligence && python -m pytest tests -q",
+        "cd cli && npm test",
+        "python scripts/run_e2e.py",
+        "cd control-plane && go test ./internal/auth ./cmd/gateway",
+        "cd control-plane && go build ./..."
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": true,
+        "integration": true,
+        "ui": false
+      },
+      "sentryChecks": [
+        "When configured, inspect bounded abstraction failure/latency counters without attaching goals, commands, source paths, model responses, credentials, or private data."
+      ],
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-017"
+      ],
+      "notes": "Package decision: reuse existing schemas, locks, capture readers, hashing, auth, HTTP client, shared LLM client, and model router. No new dependency, model download, migration, replay engine, scheduler, or automatic learning is approved.",
+      "qaNotes": "Final full CLI npm test passed with exit 0 on the stable e6725ac product source after the removed-directory review remediation, including packaging, installed-runtime, HTTP/stdio MCP, rollback, incremental/watch/search and concurrency checks. Both complete capture suites passed on Node22.17/24.16; the independent privacy probe and PM remediation review approved T13. The fresh offline-installed archive and its actual authenticated controlled-provider HTTP chain also passed. The earlier full combined CLI npm test passed with exit 0 after rebasing the feature onto the final PR54 capture fixes. Focused abstraction tests passed on Node 22.17 and 24.16; intelligence 96 tests plus 32 subtests and focused gateway/auth checks passed. The earlier configured E2E passed with exit 0 before the removed-directory repair: 79 backend tests, standalone/polyglot services, authenticated unavailable and denied routes, pipeline aliases, actual built-CLI capture/draft through the real gateway to a controlled loopback provider, zero provider calls on denials, minimized observations, incomplete/unapproved drafts, unchanged ledger, and Python/TypeScript/Go/Rust SDK checks. The controlled provider proves integration, not actual serving-model quality. Local Go builds used process-only -buildvcs=false for outer workspace VCS metadata; Rust used the existing MSVC toolchain because default GNU dlltool was unavailable. Clean-checkout CI now builds the CLI before E2E and watches CLI changes. Exact-head publication CI remains a separate merge gate. Actual model quality, held-out comparative performance, native-client hook delivery/trust, and live Sentry telemetry remain unmeasured.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "green",
+      "pmPrdAttempts": 1,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 2,
+      "pmReviewAttempts": 2,
+      "testerExecutionAttempts": 2,
+      "pmPrdNotes": "The explicit bounded contract is now recorded. Initial engineer edits arrived before these local phase records; they are unapproved and unvalidated, and no historical phase completion is asserted.",
+      "testerPlanNotes": "Twelve planned cases trace all ten acceptance criteria; execution results are pending. Engineers were held while these phase records were finalized, then released for implementation and fix cycles.",
+      "lastPmPrdStartedAt": "2026-10-08T21:53:49Z",
+      "lastTesterPlanStartedAt": "2026-10-08T21:53:49Z",
+      "lastEngineerStartedAt": "2026-10-08T21:53:49Z",
+      "fixRecommendations": [],
+      "engineerNotes": "Grounded CLI/Python abstraction, authenticated gateway routing and pipeline aliases, bounded transport, credential filtering, snapshot revalidation, and handled draft-pair recovery are implemented. Independent correctness/security/documentation review is clear; final local regression and the earlier configured E2E pass. Exact-head CI gates merge.",
+      "lastEngineerCompletedAt": "2026-10-08T23:36:12Z",
+      "lastTesterExecutionStartedAt": "2026-10-08T22:24:53Z",
+      "pmReviewNotes": "Independent PM/documentation review approved the grounded contract and final controlled-provider E2E/clean-CI extension. T12 checks evidence honesty only. Actual model quality and superiority remain unmeasured. All thirteen local feature cases pass; publication CI remains separate.",
+      "lastPmReviewCompletedAt": "2026-10-08T23:51:09Z",
+      "lastTesterExecutionCompletedAt": "2026-10-08T23:51:09Z"
     }
   ]
 }

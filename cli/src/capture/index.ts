@@ -1,7 +1,9 @@
-import { isAbsolute, join, resolve } from "node:path";
-import { realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
 import { z } from "zod";
-import { getGitRoot } from "../config.js";
+import { getGitRoot, loadConfig } from "../config.js";
+import { ProvenaClient, readStoreApiKey, scopeEnvelopeFromConfig } from "../client.js";
+import { assertCaptureAbstractionCredentialFree, captureAbstractionInputSchema, type CaptureAbstractionResponse } from "./abstraction.js";
 import { withRepoMemoryLock } from "../brain/lock.js";
 import { canonicalJson, normalizeRepoPath, sha256 } from "../brain/utils.js";
 import { isDeniedSecretPath } from "../indexer/discover.js";
@@ -55,11 +57,12 @@ export interface CapturedEpisodeSummary {
   calls: { id: string; tool: string; status: CapturedObservation["status"]; issues: CapturedObservation["issues"] }[];
 }
 export interface DraftCaptureInput {
-  episodeId: string; goal: string; sources: string[]; title?: string; observationIds?: string[];
+  episodeId: string; goal: string; sources: string[]; title?: string; observationIds?: string[]; abstract?: boolean;
 }
 export interface CaptureDraftResult {
   episodeId: string; draftPath: string; candidatePath: string; observations: number;
   taskOutcome: "unknown"; reviewRequired: true; complete: false; warnings: string[];
+  retainedObservations?: number;
 }
 
 export function assertCaptureJsonBounds(value: unknown, depth = 0): void {
@@ -99,7 +102,9 @@ function validateCwd(root: string, value: unknown): string {
   return cwd;
 }
 async function sourceFingerprint(root: string, path: string): Promise<string> {
-  const bytes = await readCaptureFile(root, join(root, path), CAPTURE_LIMITS.sourceBytes);
+  const absolute = join(root, path);
+  validateCwd(root, dirname(absolute));
+  const bytes = await readCaptureFile(root, absolute, CAPTURE_LIMITS.sourceBytes);
   let text: string;
   try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes).replace(/\r\n?/g, "\n"); }
   catch { throw new Error("capture source must be valid UTF-8 text"); }
@@ -220,9 +225,13 @@ async function readEpisodes(root: string): Promise<{ episodes: CapturedEpisode[]
     const cwd = resolve(root, value);
     assertSafeRepoPath(root, cwd);
     if (normalizeRepoPath(root, cwd) !== value) throw new Error("invalid stored capture working directory");
-    const validated = validatedCwds.get(cwd) ?? validateCwd(root, cwd);
-    validatedCwds.set(cwd, validated);
-    return validated;
+    // History can outlive a deleted directory. Check its original components
+    // above, then validate checkout ownership through its nearest live ancestor.
+    let directory = cwd;
+    while (directory !== root && !existsSync(directory)) directory = dirname(directory);
+    const validated = validatedCwds.get(directory) ?? validateCwd(root, directory);
+    validatedCwds.set(directory, validated);
+    return cwd;
   };
   let bytes = 0;
   for (const entry of entries) {
@@ -241,12 +250,16 @@ async function readEpisodes(root: string): Promise<{ episodes: CapturedEpisode[]
       assertNoSecretMaterial(canonicalJson(observation));
       for (const source of observation.sources) safePath(root, source.path);
       const args = observation.args;
-      const observedCwd = resolve(root, observation.workingDirectory);
-      assertSafeRepoPath(root, observedCwd);
-      if (normalizeRepoPath(root, observedCwd) !== observation.workingDirectory) throw new Error("invalid stored capture working directory");
+      const observedCwd = storedCwd(observation.workingDirectory);
       const cwd = args.workdir === undefined ? observedCwd : storedCwd(args.workdir);
       if (args.command !== undefined && safeCommand(root, cwd, args.command) !== args.command) throw new Error("invalid stored capture command");
-      for (const key of ["file_path", "path"]) if (args[key] !== undefined && safePath(root, args[key]) !== args[key]) throw new Error("invalid stored capture file reference");
+      for (const key of ["file_path", "path"]) if (args[key] !== undefined) {
+        const reference = safePath(root, args[key]);
+        if (reference !== args[key]) throw new Error("invalid stored capture file reference");
+        let directory = dirname(resolve(root, reference));
+        while (directory !== root && !existsSync(directory)) directory = dirname(directory);
+        storedCwd(normalizeRepoPath(root, directory));
+      }
       for (const key of ["offset", "limit", "start_line", "end_line"]) if (args[key] !== undefined && (typeof args[key] !== "number" || !Number.isSafeInteger(args[key]) || (args[key] as number) < 0 || (args[key] as number) > 1_000_000)) throw new Error("invalid stored capture line range");
     }
     episodes.push(result.data);
@@ -300,7 +313,7 @@ export async function listCapturedEpisodes(value: string): Promise<CapturedEpiso
   })).sort((a, b) => a.id.localeCompare(b.id)));
 }
 
-export async function draftCapturedEpisode(value: string, input: DraftCaptureInput): Promise<CaptureDraftResult> {
+export async function draftCapturedEpisode(value: string, input: DraftCaptureInput, options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<CaptureDraftResult> {
   const root = captureRepoRoot(value);
   assertCaptureIgnored(root);
   if (!id.safeParse(input.episodeId).success || !Array.isArray(input.sources) || input.sources.length < 1 || input.sources.length > 32 ||
@@ -308,7 +321,7 @@ export async function draftCapturedEpisode(value: string, input: DraftCaptureInp
   assertNoSecretMaterial(input.goal);
   if (input.title !== undefined) assertNoSecretMaterial(input.title);
   if (input.observationIds && (!input.observationIds.length || input.observationIds.length > 32 || input.observationIds.some((item) => !id.safeParse(item).success))) throw new Error("invalid draft observation selection");
-  return withRepoMemoryLock(root, async () => {
+  const prepare = async () => {
     const episode = (await readEpisodes(root)).episodes.find((item) => item.id === input.episodeId);
     if (!episode) throw new Error("capture episode was not found");
     const selected = input.observationIds ? new Set(input.observationIds) : undefined;
@@ -324,6 +337,35 @@ export async function draftCapturedEpisode(value: string, input: DraftCaptureInp
       return { path, blob, fingerprintTiming: "draft-time" as const,
         captureBlob: captured?.blob ?? null, changedSinceCapture: captured ? captured.blob !== blob : null };
     }));
+    return { episode, observations, sources, sourceEvidence };
+  };
+  // The network phase has no repository lock. Snapshot identity is checked again
+  // under the write lock, so a slow service cannot authorize changed observations.
+  const snapshot = await withRepoMemoryLock(root, prepare);
+  let abstraction: CaptureAbstractionResponse | undefined;
+  let runtimeCredential: string | undefined;
+  if (input.abstract) {
+    let loaded;
+    try { loaded = loadConfig(root); }
+    catch { throw new Error("capture abstraction requires a valid local Provena config"); }
+    if (!loaded.config.intelligence_url) throw new Error("capture abstraction requires config.intelligence_url");
+    runtimeCredential = readStoreApiKey(loaded.config.store_api_key_env);
+    assertCaptureAbstractionCredentialFree({ snapshot, goal: input.goal, title: input.title }, runtimeCredential);
+    const request = captureAbstractionInputSchema.parse({
+      schemaVersion: 1, goal: input.goal.trim(),
+      observations: snapshot.observations.map(({ id, tool, workingDirectory, args, status, issues }) => ({ id, tool, workingDirectory, args, status, issues })),
+    });
+    const client = new ProvenaClient({
+      storeUrl: loaded.config.store_url, intelligenceUrl: loaded.config.intelligence_url,
+      apiKey: runtimeCredential, ...options,
+    });
+    abstraction = await client.abstractCapturedProcedure(request, scopeEnvelopeFromConfig(loaded.config.scope));
+  }
+  return withRepoMemoryLock(root, async () => {
+    const current = await prepare();
+    if (canonicalJson(current) !== canonicalJson(snapshot)) throw new Error("capture episode or source changed during draft preparation; review and draft again");
+    const { episode, observations, sources, sourceEvidence } = current;
+    const retained = abstraction ? observations.filter((item) => abstraction!.keptObservationIds.includes(item.id)) : observations;
     const warnings = [
       "Tool completion order is not causal order. Review the selected sequence and all omitted or redacted arguments.",
       "Native hooks provide partial coverage. This draft is incomplete and does not establish task success or tool permissions.",
@@ -333,20 +375,23 @@ export async function draftCapturedEpisode(value: string, input: DraftCaptureInp
     if (sourceEvidence.some((source) => source.changedSinceCapture)) warnings.push("Selected source changed since its latest captured observation; historical steps need review against current source.");
     if (observations.some((item) => item.issues.includes("arguments-redacted") || item.issues.includes("missing-tool-input"))) warnings.push("Some captured calls have incomplete arguments. Fill or remove those steps after reviewing the failure and recovery history.");
     const goal = input.goal.trim();
-    const title = input.title?.trim() ?? goal.slice(0, 512);
-    const draftId = sha256(canonicalJson({ episode: episode.id, observations, goal, title, sourceEvidence }));
+    const title = input.title?.trim() ?? abstraction?.title ?? goal.slice(0, 512);
+    if (abstraction) warnings.push("Model abstraction is untrusted review assistance. All selected observations, including failures and omissions, remain in this wrapper; model metadata and hashes do not prove task success.");
+    const draftId = sha256(canonicalJson({ episode: episode.id, observations, goal, title, sourceEvidence, ...(abstraction ? { abstraction } : {}) }));
     const candidate: LearnProcedureInput = {
       episodeId: `capture:${draftId}`, sessionId: `capture:${episode.id}`, actor: `capture-${episode.provider}`,
       title, goal,
-      triggers: [], prerequisites: [], sources: sources.map((path) => ({ path })), sensitivity: "internal",
-      steps: observations.map((item) => ({ tool: item.tool, args: item.args, expected: `Observed tool status: ${item.status}; session cwd: ${item.workingDirectory}. ${item.issues.includes("arguments-redacted") || item.issues.includes("missing-tool-input") ? "Arguments are incomplete; reconstruct or remove this step during review." : "Review arguments and applicability."} Verify the task independently.` })),
+      triggers: abstraction?.triggers ?? [], prerequisites: [], sources: sources.map((path) => ({ path })), sensitivity: "internal",
+      steps: retained.map((item) => ({ tool: item.tool, args: item.args, expected: `Observed tool status: ${item.status}; session cwd: ${item.workingDirectory}. ${item.issues.includes("arguments-redacted") || item.issues.includes("missing-tool-input") ? "Arguments are incomplete; reconstruct or remove this step during review." : "Review arguments and applicability."} Verify the task independently.` })),
       verification: [], recovery: `INCOMPLETE CAPTURE: outputs and content were omitted, completion order is not causal order, and hooks may miss calls. Captured tool results: ${observations.filter((item) => item.status === "failure").length} failures, ${observations.filter((item) => item.status === "unknown").length} unknown. Review failures, recovery and missing arguments; task outcome is unknown.`,
     };
     if (!learnProcedureInputSchema.safeParse(candidate).success) throw new Error("draft candidate exceeds the procedure schema limits");
     const draftPath = `${CAPTURE_DIRECTORY}/drafts/${draftId}.json`;
     const candidatePath = `${CAPTURE_DIRECTORY}/drafts/${draftId}.candidate.json`;
-    const result: CaptureDraftResult = { episodeId: episode.id, draftPath, candidatePath, observations: observations.length, taskOutcome: "unknown", reviewRequired: true, complete: false, warnings };
-    const draft = canonicalJson({ schemaVersion: 1, kind: "capture-review-draft", ...result, ordering: "completion-only", sourceEvidence, observations, candidate });
+    const result: CaptureDraftResult = { episodeId: episode.id, draftPath, candidatePath, observations: observations.length, taskOutcome: "unknown", reviewRequired: true, complete: false, warnings, ...(abstraction ? { retainedObservations: retained.length } : {}) };
+    const review = { schemaVersion: 1, kind: "capture-review-draft", ...result, ordering: "completion-only", sourceEvidence, observations, ...(abstraction ? { abstraction } : {}), candidate };
+    assertCaptureAbstractionCredentialFree(review, runtimeCredential);
+    const draft = canonicalJson(review);
     const candidateText = canonicalJson(candidate);
     if (Buffer.byteLength(draft) > CAPTURE_LIMITS.draftBytes || Buffer.byteLength(candidateText) > CAPTURE_LIMITS.draftBytes) throw new Error("capture draft exceeds its byte limit; select fewer calls");
     assertNoSecretMaterial(draft);

@@ -39,7 +39,7 @@ on:
 
 jobs:
   test:
-    timeout-minutes: 20
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 20 }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

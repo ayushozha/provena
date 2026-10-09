@@ -1,6 +1,6 @@
 {
   "product": "Provena",
-  "updatedAt": "2026-07-13T19:27:50Z",
+  "updatedAt": "2026-10-08T23:51:09Z",
   "epics": [
     {
       "epicId": "EPIC-PRODUCTIZE",
@@ -1403,6 +1403,43 @@
             "PROVENA-015-T09"
           ],
           "commands": [
+            "cd cli && npm test",
+            "python scripts/run_e2e.py"
+          ]
+        }
+      ]
+    },
+    {
+      "featureId": "FEATURE-GROUNDED-PROCEDURE-ABSTRACTION",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureTitle": "Grounded procedure abstraction",
+      "storyIds": [
+        "PROVENA-017"
+      ],
+      "regressionCoverage": [
+        {
+          "id": "FEATURE-GROUNDED-PROCEDURE-ABSTRACTION-RC1",
+          "area": "Grounded explicit abstraction trust boundaries",
+          "goal": "As a developer, I want to explicitly request a bounded model abstraction of selected observations so I can review a reusable procedure without granting the model authority to invent actions, declare success, or approve durable memory.",
+          "tests": [
+            "PROVENA-017-T01",
+            "PROVENA-017-T02",
+            "PROVENA-017-T03",
+            "PROVENA-017-T04",
+            "PROVENA-017-T05",
+            "PROVENA-017-T06",
+            "PROVENA-017-T07",
+            "PROVENA-017-T08",
+            "PROVENA-017-T09",
+            "PROVENA-017-T10",
+            "PROVENA-017-T11",
+            "PROVENA-017-T12"
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/capture-abstraction.test.mjs",
+            "cd cli && node tests/capture.test.mjs",
+            "cd intelligence && python -m pytest tests -q",
             "cd cli && npm test",
             "python scripts/run_e2e.py"
           ]
@@ -5133,7 +5170,7 @@
       ]
     },
     {
-    "storyId": "PROVENA-016",
+      "storyId": "PROVENA-016",
       "epicId": "EPIC-PRODUCTIZE",
       "featureId": "FEATURE-LIVING-MAINTENANCE",
       "title": "Compile bounded maintenance proposals and subagent-ready context packets",
@@ -5149,11 +5186,11 @@
           "Never attach memory content, IDs, plan paths, source paths, environment values, request bodies, or credentials to telemetry."
         ]
       },
-    "executionNotes": [
-      "T01-T09 passed across focused maintenance, attestation, temporal harness, context, CLI, stdio/HTTP MCP, sync, security, Go control-plane, and cross-service identity regressions. Independent general, security, test-writer, and doc-writer gates report no unresolved P0/P1/blocking P2 findings.",
-      "T10 passed: `npm test` completed in 429.2 seconds with every CLI suite green, including `pack-install.test`; `python scripts/run_e2e.py` through the repository virtual environment completed in 131.1 seconds with 47 Python tests plus TypeScript, Go, Rust, OpenAPI, standalone, and polyglot verification.",
-      "Residual environment gates are explicit: PostgreSQL 16 remains CI-only on this host, live Redis and Neo4j were unavailable, Neo4j is mock-driver proven only, Sentry credentials were unavailable, and `go test -race` could not run because CGO is disabled. No live-service or competitive superiority claim is made."
-    ],
+      "executionNotes": [
+        "T01-T09 passed across focused maintenance, attestation, temporal harness, context, CLI, stdio/HTTP MCP, sync, security, Go control-plane, and cross-service identity regressions. Independent general, security, test-writer, and doc-writer gates report no unresolved P0/P1/blocking P2 findings.",
+        "T10 passed: `npm test` completed in 429.2 seconds with every CLI suite green, including `pack-install.test`; `python scripts/run_e2e.py` through the repository virtual environment completed in 131.1 seconds with 47 Python tests plus TypeScript, Go, Rust, OpenAPI, standalone, and polyglot verification.",
+        "Residual environment gates are explicit: PostgreSQL 16 remains CI-only on this host, live Redis and Neo4j were unavailable, Neo4j is mock-driver proven only, Sentry credentials were unavailable, and `go test -race` could not run because CGO is disabled. No live-service or competitive superiority claim is made."
+      ],
       "uiManualCases": [],
       "testCases": [
         {
@@ -5440,6 +5477,410 @@
             "verificationCommands[6]",
             "verificationCommands[7]",
             "verificationCommands[8]"
+          ]
+        }
+      ]
+    },
+    {
+      "storyId": "PROVENA-017",
+      "epicId": "EPIC-PRODUCTIZE",
+      "featureId": "FEATURE-GROUNDED-PROCEDURE-ABSTRACTION",
+      "title": "Abstract selected coding-tool observations into reviewable procedure drafts",
+      "persona": "Developer who wants reusable procedures grounded in real coding-tool observations",
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-017"
+      ],
+      "sentry": {
+        "available": false,
+        "sentryPending": [
+          "Sentry credentials are unavailable on this host; live issue and post-release telemetry checks remain pending and are not claimed."
+        ]
+      },
+      "executionNotes": [
+        "Planning complete; independent PM review and tester execution are pending. No competitor or actual model quality result is implied.",
+        "[2026-10-08T22:24:53Z] Engineer implementation and independent review cycles complete. T01-T10 and evidence-honesty T12 pass; T11 final full CLI/rebase gate remains pending. Story passes remains false. Focused abstraction tests pass on Node22.17 and24.16; intelligence96 tests plus32 subtests pass; targeted gateway/auth checks pass. The end-to-end retry completed79 backend tests, standalone/polyglot, authenticated abstraction guards, pipeline aliases, and Python/TypeScript/Go/Rust SDK checks. Local builds used process-only Go -buildvcs=false (outer workspace VCS metadata) and the existing MSVC Rust toolchain (default GNU dlltool unavailable). Full CLI on final rebased source remains pending. Actual model quality, held-out comparative performance, and live Sentry telemetry are unmeasured.",
+        "[2026-10-08T23:03:12Z] TESTER-EXECUTION green for local PROVENA-017 cases T01-T12. Full combined CLI npm test passed with exit 0 after rebasing the feature onto the final PR54 capture fixes. Focused abstraction tests passed on Node 22.17 and 24.16; intelligence 96 tests plus 32 subtests and focused gateway/auth checks passed. The final configured E2E passed with exit 0: 79 backend tests, standalone/polyglot services, authenticated unavailable and denied routes, pipeline aliases, actual built-CLI capture/draft through the real gateway to a controlled loopback provider, zero provider calls on denials, minimized observations, incomplete/unapproved drafts, unchanged ledger, and Python/TypeScript/Go/Rust SDK checks. The controlled provider proves integration, not actual serving-model quality. Local Go builds used process-only -buildvcs=false for outer workspace VCS metadata; Rust used the existing MSVC toolchain because default GNU dlltool was unavailable. Clean-checkout CI now builds the CLI before E2E and watches CLI changes. Exact-head publication CI remains a separate merge gate. Actual model quality, held-out comparative performance, native-client hook delivery/trust, and live Sentry telemetry remain unmeasured.",
+        "[2026-10-08T23:26:39Z] PM review-remediation contract and tester T13 plan recorded before engineering for PR55 comment4225045594. Prior test receipts retained; no new pass asserted.",
+        "[2026-10-08T23:36:12Z] Review remediation targeted TESTER pass; final full CLI and publication gates pending. PR55 review4225045594 was reproduced before repair. Both complete focused capture suites passed with exit 0 on Node 22.17 and 24.16, including removal/rename, unchanged history, later live hook, unrelated incomplete draft, strict missing live-directory rejection, canonical path rejection, replacement junction and newly nested Git ancestor denial. Independent built-dist Node22 probe and source/privacy review are clear; PM remediation review approved. A fresh packed archive passed actual offline installation, persisted runtime, direct installed-hook failure/edit/recovery, incomplete/unknown candidate governance, ready count zero and same-runtime reuse. The same installed archive passed actual authenticated gateway/production-intelligence abstraction with a controlled loopback provider, no-cost denials and secret scans. This is harness fixture delivery, not native-engine emission/trust or actual model quality. The final full CLI suite is running and exact final-head CI remains required; previous full-suite receipts remain historical evidence.",
+        "[2026-10-08T23:51:09Z] TESTER-EXECUTION green for local PROVENA-017 cases T01-T13. Final full CLI npm test passed with exit 0 on the stable e6725ac product source after the removed-directory review remediation, including packaging, installed-runtime, HTTP/stdio MCP, rollback, incremental/watch/search and concurrency checks. Both complete capture suites passed on Node22.17/24.16; the independent privacy probe and PM remediation review approved T13. The fresh offline-installed archive and its actual authenticated controlled-provider HTTP chain also passed. The earlier full combined CLI npm test passed with exit 0 after rebasing the feature onto the final PR54 capture fixes. Focused abstraction tests passed on Node 22.17 and 24.16; intelligence 96 tests plus 32 subtests and focused gateway/auth checks passed. The earlier configured E2E passed with exit 0 before the removed-directory repair: 79 backend tests, standalone/polyglot services, authenticated unavailable and denied routes, pipeline aliases, actual built-CLI capture/draft through the real gateway to a controlled loopback provider, zero provider calls on denials, minimized observations, incomplete/unapproved drafts, unchanged ledger, and Python/TypeScript/Go/Rust SDK checks. The controlled provider proves integration, not actual serving-model quality. Local Go builds used process-only -buildvcs=false for outer workspace VCS metadata; Rust used the existing MSVC toolchain because default GNU dlltool was unavailable. Clean-checkout CI now builds the CLI before E2E and watches CLI changes. Exact-head publication CI remains a separate merge gate. Actual model quality, held-out comparative performance, native-client hook delivery/trust, and live Sentry telemetry remain unmeasured."
+      ],
+      "uiManualCases": [],
+      "testCases": [
+        {
+          "id": "PROVENA-017-T01",
+          "title": "Explicit opt-in and unchanged offline defaults",
+          "level": "integration-security",
+          "automation": "mocked-node-and-python",
+          "preconditions": [
+            "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
+          ],
+          "steps": [
+            "The CLI exposes an explicit --abstract flag on capture draft and rejects malformed flags. The configured intelligence_url points to the authenticated gateway origin in production; existing client bearer and scope helpers are reused. No model-provider credential is sent by the CLI."
+          ],
+          "expectedResults": [
+            "Accept valid grounded inputs; reject each malformed or unavailable variant before unauthorized work or partial writes. Record actual command outcomes and preserve every stated evidence limitation."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/capture-abstraction.test.mjs",
+            "cd cli && node tests/capture.test.mjs",
+            "cd intelligence && python -m pytest tests -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "Focused Node22/24 abstraction checks, retained adversarial reproductions, intelligence96 tests+32 subtests, focused gateway/auth tests, and the completed authenticated end-to-end harness. Full final-source CLI remains a separate pending release gate."
+          ]
+        },
+        {
+          "id": "PROVENA-017-T02",
+          "title": "Authenticated endpoint and strict bounded request",
+          "level": "integration-security",
+          "automation": "mocked-node-and-python",
+          "preconditions": [
+            "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
+          ],
+          "steps": [
+            "POST /v1/procedures/abstract is routed through the authenticated gateway with write authorization and authoritative service identity; the intelligence service validates ingress and write authority before parsing/model work. Direct external client bearers are rejected. Request schemaVersion is integer 1, goal is bounded, observations contain at most 32 hashed IDs and safe argument/status/issue fields, and unknown fields are rejected.",
+            "The request stream is limited to 256 KiB before parsing. Model response content is bounded to 80 KiB with a total deadline on the new transport path; compressed expansion, redirects, provider failures, missing model configuration, and invalid JSON fail generically."
+          ],
+          "expectedResults": [
+            "Accept valid grounded inputs; reject each malformed or unavailable variant before unauthorized work or partial writes. Record actual command outcomes and preserve every stated evidence limitation."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/capture-abstraction.test.mjs",
+            "cd cli && node tests/capture.test.mjs",
+            "cd intelligence && python -m pytest tests -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[1]",
+            "acceptanceCriteria[2]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "Focused Node22/24 abstraction checks, retained adversarial reproductions, intelligence96 tests+32 subtests, focused gateway/auth tests, and the completed authenticated end-to-end harness. Full final-source CLI remains a separate pending release gate."
+          ]
+        },
+        {
+          "id": "PROVENA-017-T03",
+          "title": "Grounded reference partition and forbidden output fields",
+          "level": "integration-security",
+          "automation": "mocked-node-and-python",
+          "preconditions": [
+            "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
+          ],
+          "steps": [
+            "Model output contains only bounded title, triggers, a nonempty unique keptObservationIds subset, an exact complementary omission partition with reasons, and recoverySummary. Unknown/duplicate IDs and invented commands/paths/arguments/prerequisites/outcomes are rejected."
+          ],
+          "expectedResults": [
+            "Accept valid grounded inputs; reject each malformed or unavailable variant before unauthorized work or partial writes. Record actual command outcomes and preserve every stated evidence limitation."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/capture-abstraction.test.mjs",
+            "cd cli && node tests/capture.test.mjs",
+            "cd intelligence && python -m pytest tests -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[3]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "Focused Node22/24 abstraction checks, retained adversarial reproductions, intelligence96 tests+32 subtests, focused gateway/auth tests, and the completed authenticated end-to-end harness. Full final-source CLI remains a separate pending release gate."
+          ]
+        },
+        {
+          "id": "PROVENA-017-T04",
+          "title": "Canonical hash, Unicode, integer, and goal-trim parity",
+          "level": "integration-security",
+          "automation": "mocked-node-and-python",
+          "preconditions": [
+            "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
+          ],
+          "steps": [
+            "inputSha256 hashes the strict normalized complete request using UTF-8 compact sorted-key JSON without a trailing newline. outputSha256 hashes the full response except outputSha256, including input hash, prompt revision, and configured model metadata. Type, Unicode, and goal-trim parity are tested across Python and TypeScript."
+          ],
+          "expectedResults": [
+            "Accept valid grounded inputs; reject each malformed or unavailable variant before unauthorized work or partial writes. Record actual command outcomes and preserve every stated evidence limitation."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/capture-abstraction.test.mjs",
+            "cd cli && node tests/capture.test.mjs",
+            "cd intelligence && python -m pytest tests -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[4]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "Focused Node22/24 abstraction checks, retained adversarial reproductions, intelligence96 tests+32 subtests, focused gateway/auth tests, and the completed authenticated end-to-end harness. Full final-source CLI remains a separate pending release gate."
+          ]
+        },
+        {
+          "id": "PROVENA-017-T05",
+          "title": "Provider deadline, byte cap, compression, and unavailable failure",
+          "level": "integration-security",
+          "automation": "mocked-node-and-python",
+          "preconditions": [
+            "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
+          ],
+          "steps": [
+            "The request stream is limited to 256 KiB before parsing. Model response content is bounded to 80 KiB with a total deadline on the new transport path; compressed expansion, redirects, provider failures, missing model configuration, and invalid JSON fail generically.",
+            "Use only existing Node/Zod/fetch and FastAPI/Pydantic/httpx/model router/shared LLM client dependencies, with env-driven model selection. Existing callers retain their previous LLM transport behavior."
+          ],
+          "expectedResults": [
+            "Accept valid grounded inputs; reject each malformed or unavailable variant before unauthorized work or partial writes. Record actual command outcomes and preserve every stated evidence limitation."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/capture-abstraction.test.mjs",
+            "cd cli && node tests/capture.test.mjs",
+            "cd intelligence && python -m pytest tests -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[2]",
+            "acceptanceCriteria[8]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "Focused Node22/24 abstraction checks, retained adversarial reproductions, intelligence96 tests+32 subtests, focused gateway/auth tests, and the completed authenticated end-to-end harness. Full final-source CLI remains a separate pending release gate."
+          ]
+        },
+        {
+          "id": "PROVENA-017-T06",
+          "title": "Configured origin, redirects, scoped bearer, and secret-safe errors",
+          "level": "integration-security",
+          "automation": "mocked-node-and-python",
+          "preconditions": [
+            "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
+          ],
+          "steps": [
+            "The CLI exposes an explicit --abstract flag on capture draft and rejects malformed flags. The configured intelligence_url points to the authenticated gateway origin in production; existing client bearer and scope helpers are reused. No model-provider credential is sent by the CLI.",
+            "The request stream is limited to 256 KiB before parsing. Model response content is bounded to 80 KiB with a total deadline on the new transport path; compressed expansion, redirects, provider failures, missing model configuration, and invalid JSON fail generically."
+          ],
+          "expectedResults": [
+            "Accept valid grounded inputs; reject each malformed or unavailable variant before unauthorized work or partial writes. Record actual command outcomes and preserve every stated evidence limitation."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/capture-abstraction.test.mjs",
+            "cd cli && node tests/capture.test.mjs",
+            "cd intelligence && python -m pytest tests -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[0]",
+            "acceptanceCriteria[2]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "Focused Node22/24 abstraction checks, retained adversarial reproductions, intelligence96 tests+32 subtests, focused gateway/auth tests, and the completed authenticated end-to-end harness. Full final-source CLI remains a separate pending release gate."
+          ]
+        },
+        {
+          "id": "PROVENA-017-T07",
+          "title": "Released HTTP lock and source/episode concurrency recheck",
+          "level": "integration-security",
+          "automation": "mocked-node-and-python",
+          "preconditions": [
+            "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
+          ],
+          "steps": [
+            "Before the call, a locked validated snapshot includes the entire episode and selected current source fingerprints. After the call, a fresh locked read must match; changed sources, changed or removed episode data, nested repositories, symlinks, tracked/unignored cache targets, or unsafe paths fail without writing a draft."
+          ],
+          "expectedResults": [
+            "Accept valid grounded inputs; reject each malformed or unavailable variant before unauthorized work or partial writes. Record actual command outcomes and preserve every stated evidence limitation."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/capture-abstraction.test.mjs",
+            "cd cli && node tests/capture.test.mjs",
+            "cd intelligence && python -m pytest tests -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[5]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "Focused Node22/24 abstraction checks, retained adversarial reproductions, intelligence96 tests+32 subtests, focused gateway/auth tests, and the completed authenticated end-to-end harness. Full final-source CLI remains a separate pending release gate."
+          ]
+        },
+        {
+          "id": "PROVENA-017-T08",
+          "title": "Repository, cache, nested-root, symlink, and tracked-file boundaries",
+          "level": "integration-security",
+          "automation": "mocked-node-and-python",
+          "preconditions": [
+            "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
+          ],
+          "steps": [
+            "Before the call, a locked validated snapshot includes the entire episode and selected current source fingerprints. After the call, a fresh locked read must match; changed sources, changed or removed episode data, nested repositories, symlinks, tracked/unignored cache targets, or unsafe paths fail without writing a draft."
+          ],
+          "expectedResults": [
+            "Accept valid grounded inputs; reject each malformed or unavailable variant before unauthorized work or partial writes. Record actual command outcomes and preserve every stated evidence limitation."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/capture-abstraction.test.mjs",
+            "cd cli && node tests/capture.test.mjs",
+            "cd intelligence && python -m pytest tests -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[5]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "Focused Node22/24 abstraction checks, retained adversarial reproductions, intelligence96 tests+32 subtests, focused gateway/auth tests, and the completed authenticated end-to-end harness. Full final-source CLI remains a separate pending release gate."
+          ]
+        },
+        {
+          "id": "PROVENA-017-T09",
+          "title": "Recorded candidate order, explicit goal/title, and full evidence history",
+          "level": "integration-security",
+          "automation": "mocked-node-and-python",
+          "preconditions": [
+            "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
+          ],
+          "steps": [
+            "Candidate goal remains the explicit caller goal and explicit caller title takes precedence. Candidate steps/arguments are derived only from recorded selected observations in original order. Model recovery text and configured model metadata remain untrusted local wrapper data; deterministic failure warnings and all original evidence remain."
+          ],
+          "expectedResults": [
+            "Accept valid grounded inputs; reject each malformed or unavailable variant before unauthorized work or partial writes. Record actual command outcomes and preserve every stated evidence limitation."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/capture-abstraction.test.mjs",
+            "cd cli && node tests/capture.test.mjs",
+            "cd intelligence && python -m pytest tests -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[6]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "Focused Node22/24 abstraction checks, retained adversarial reproductions, intelligence96 tests+32 subtests, focused gateway/auth tests, and the completed authenticated end-to-end harness. Full final-source CLI remains a separate pending release gate."
+          ]
+        },
+        {
+          "id": "PROVENA-017-T10",
+          "title": "No ledger writes, task-success inference, or approval bypass",
+          "level": "integration-security",
+          "automation": "mocked-node-and-python",
+          "preconditions": [
+            "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
+          ],
+          "steps": [
+            "Every draft remains complete=false, taskOutcome=unknown, verification=[], and unapproved; abstraction never executes commands or writes the authoritative memory ledger. Existing learn/approve/outcome gates are exercised by focused regressions."
+          ],
+          "expectedResults": [
+            "Accept valid grounded inputs; reject each malformed or unavailable variant before unauthorized work or partial writes. Record actual command outcomes and preserve every stated evidence limitation."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/capture-abstraction.test.mjs",
+            "cd cli && node tests/capture.test.mjs",
+            "cd intelligence && python -m pytest tests -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[7]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "Focused Node22/24 abstraction checks, retained adversarial reproductions, intelligence96 tests+32 subtests, focused gateway/auth tests, and the completed authenticated end-to-end harness. Full final-source CLI remains a separate pending release gate."
+          ]
+        },
+        {
+          "id": "PROVENA-017-T11",
+          "title": "Shared-client compatibility, package, documentation, and full regression",
+          "level": "release-evidence",
+          "automation": "command_and_review",
+          "preconditions": [
+            "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
+          ],
+          "steps": [
+            "Use only existing Node/Zod/fetch and FastAPI/Pydantic/httpx/model router/shared LLM client dependencies, with env-driven model selection. Existing callers retain their previous LLM transport behavior.",
+            "Focused lifecycle, authorization, no-network-default, adversarial input/output, concurrency, transport caps, and full CLI/intelligence/E2E checks pass on the final source. Documentation states configured-model metadata limits, opt-in egress, and draft-only status. Actual provider/task-quality and competitor results remain explicitly pending until measured."
+          ],
+          "expectedResults": [
+            "Accept valid grounded inputs; reject each malformed or unavailable variant before unauthorized work or partial writes. Record actual command outcomes and preserve every stated evidence limitation."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/capture-abstraction.test.mjs",
+            "cd cli && node tests/capture.test.mjs",
+            "cd intelligence && python -m pytest tests -q",
+            "cd cli && npm test",
+            "python scripts/run_e2e.py",
+            "cd control-plane && go test ./internal/auth ./cmd/gateway",
+            "cd control-plane && go build ./..."
+          ],
+          "covers": [
+            "acceptanceCriteria[8]",
+            "acceptanceCriteria[9]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "Final full CLI npm test passed with exit 0 on the stable e6725ac product source after the removed-directory review remediation, including packaging, installed-runtime, HTTP/stdio MCP, rollback, incremental/watch/search and concurrency checks. Both complete capture suites passed on Node22.17/24.16; the independent privacy probe and PM remediation review approved T13. The fresh offline-installed archive and its actual authenticated controlled-provider HTTP chain also passed. The earlier full combined CLI npm test passed with exit 0 after rebasing the feature onto the final PR54 capture fixes. Focused abstraction tests passed on Node 22.17 and 24.16; intelligence 96 tests plus 32 subtests and focused gateway/auth checks passed. The earlier configured E2E passed with exit 0 before the removed-directory repair: 79 backend tests, standalone/polyglot services, authenticated unavailable and denied routes, pipeline aliases, actual built-CLI capture/draft through the real gateway to a controlled loopback provider, zero provider calls on denials, minimized observations, incomplete/unapproved drafts, unchanged ledger, and Python/TypeScript/Go/Rust SDK checks. The controlled provider proves integration, not actual serving-model quality. Local Go builds used process-only -buildvcs=false for outer workspace VCS metadata; Rust used the existing MSVC toolchain because default GNU dlltool was unavailable. Clean-checkout CI now builds the CLI before E2E and watches CLI changes. Exact-head publication CI remains a separate merge gate. Actual model quality, held-out comparative performance, native-client hook delivery/trust, and live Sentry telemetry remain unmeasured."
+          ]
+        },
+        {
+          "id": "PROVENA-017-T12",
+          "title": "Actual provider and held-out task evidence stays separate from mock validation",
+          "level": "release-evidence",
+          "automation": "command_and_review",
+          "preconditions": [
+            "Use isolated initialized Git fixtures, scoped fake credentials, and controlled provider responses; never capture user transcripts or make paid requests."
+          ],
+          "steps": [
+            "Review claims and retained evidence: mock validation proves grounding, bounds and authorization behavior; configured model metadata is not backend attestation. Actual provider/task quality and comparative superiority remain explicitly unmeasured until a fresh held-out experiment completes."
+          ],
+          "expectedResults": [
+            "Published documentation and release evidence make no unsupported superiority or actual-provider quality claim."
+          ],
+          "commands": [
+            "cd cli && npm run build",
+            "cd cli && node tests/capture-abstraction.test.mjs",
+            "cd cli && node tests/capture.test.mjs",
+            "cd intelligence && python -m pytest tests -q"
+          ],
+          "covers": [
+            "acceptanceCriteria[9]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "Documentation and source review distinguish configured model metadata, controlled responses, real service authorization, and still-unmeasured task quality. This case checks evidence honesty; it does not pass the quality experiment."
+          ]
+        },
+        {
+          "id": "PROVENA-017-T13",
+          "title": "Historical working directory removal without weakening checkout privacy",
+          "level": "integration",
+          "automation": "existing_commands_and_review",
+          "preconditions": [
+            "Use isolated temporary repositories and actual capture observations."
+          ],
+          "steps": [
+            "Capture tools inside a subdirectory, then remove or rename that directory.",
+            "Verify capture list, subsequent live hooks and drafting an unrelated episode continue to work.",
+            "Verify outside-checkout/replacement symlinks and new nested Git roots remain rejected.",
+            "Verify missing or invalid incoming live working directories are still rejected."
+          ],
+          "expectedResults": [
+            "Historical paths remain usable only when their existing physical ancestor remains in the original checkout; trust boundaries remain enforced."
+          ],
+          "commands": [
+            "cd cli && npm test"
+          ],
+          "covers": [
+            "acceptanceCriteria[10]"
+          ],
+          "status": "passed",
+          "executionNotes": [
+            "[2026-10-08T23:36:12Z] Retained pre-closure evidence: PR55 review4225045594 was reproduced before repair. Both complete focused capture suites passed with exit 0 on Node 22.17 and 24.16, including removal/rename, unchanged history, later live hook, unrelated incomplete draft, strict missing live-directory rejection, canonical path rejection, replacement junction and newly nested Git ancestor denial. Independent built-dist Node22 probe and source/privacy review are clear; PM remediation review approved. A fresh packed archive passed actual offline installation, persisted runtime, direct installed-hook failure/edit/recovery, incomplete/unknown candidate governance, ready count zero and same-runtime reuse. The same installed archive passed actual authenticated gateway/production-intelligence abstraction with a controlled loopback provider, no-cost denials and secret scans. This is harness fixture delivery, not native-engine emission/trust or actual model quality. The final full CLI suite is running and exact final-head CI remains required; previous full-suite receipts remain historical evidence.",
+            "Final full CLI npm test on e6725ac passed with exit 0; final receipt completed 2026-10-08T23:50:08Z. Exact-head publication CI remains a separate gate."
           ]
         }
       ]

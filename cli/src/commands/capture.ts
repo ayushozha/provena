@@ -10,7 +10,7 @@ import {
 import { assertSafeRepoPath } from "../security/paths.js";
 
 const VALUES = new Set(["--provider", "--root", "--goal", "--source", "--title", "--call"]);
-const SWITCHES = new Set(["--json", "--help", "-h"]);
+const SWITCHES = new Set(["--json", "--abstract", "--help", "-h"]);
 function parseArgs(args: string[]): { positional: string[]; flags: Map<string, string[]> } {
   const positional: string[] = [];
   const flags = new Map<string, string[]>();
@@ -20,7 +20,10 @@ function parseArgs(args: string[]): { positional: string[]; flags: Map<string, s
       const value = args[++i];
       if (!value || value.startsWith("--")) throw new Error("capture option requires a value");
       flags.set(item, [...(flags.get(item) ?? []), value]);
-    } else if (SWITCHES.has(item)) flags.set(item, []);
+    } else if (SWITCHES.has(item)) {
+      if (flags.has(item)) throw new Error("duplicate capture option");
+      flags.set(item, []);
+    }
     else if (item.startsWith("-")) throw new Error("unknown capture option");
     else positional.push(item);
   }
@@ -33,7 +36,8 @@ export function printCaptureHelp(): void {
     "  install|uninstall --provider codex|claude [--root <repository>]",
     "  hook --provider codex|claude --root <absolute-installed-root>  Read one native hook JSON object from stdin",
     "  list [--json]                              List local tool episodes without raw inputs",
-    "  draft <episode-id> --goal <goal> --source <path> [--source <path>] [--call <id>] [--title <title>]",
+    "  draft <episode-id> --goal <goal> --source <path> [--source <path>] [--call <id>] [--title <title>] [--abstract]",
+    "  --abstract                                Explicitly send filtered selected observations to config.intelligence_url for review-only abstraction",
     "  --root <repository> --json                  Select repository and machine-readable output",
     "Capture is opt-in and local. Drafts require review; tool completion never proves task success.",
     "Review a draft and its candidate payload before using procedure learn. No command approves or executes stored steps.",
@@ -81,7 +85,7 @@ export async function runCaptureCommand(args: string[], cwd = process.cwd()): Pr
     const optionSets: Record<string, Set<string>> = {
       install: new Set(["--provider", "--root", "--json"]), uninstall: new Set(["--provider", "--root", "--json"]),
       hook: new Set(["--provider", "--root"]), list: new Set(["--root", "--json"]),
-      draft: new Set(["--root", "--json", "--goal", "--source", "--title", "--call"]),
+      draft: new Set(["--root", "--json", "--goal", "--source", "--title", "--call", "--abstract"]),
     };
     const allowed = optionSets[command!];
     if (!allowed || [...flags.keys()].some((flag) => !allowed.has(flag))) throw new Error("unsupported capture command or option");
@@ -99,7 +103,7 @@ export async function runCaptureCommand(args: string[], cwd = process.cwd()): Pr
     } else if (command === "list") result = await listCapturedEpisodes(root);
     else result = await draftCapturedEpisode(root, {
       episodeId: rest[0]!, goal: last("--goal") ?? "", sources: flags.get("--source") ?? [],
-      title: last("--title"), observationIds: flags.get("--call"),
+      title: last("--title"), observationIds: flags.get("--call"), abstract: flags.has("--abstract"),
     });
     console.log(JSON.stringify(result, null, flags.has("--json") ? undefined : 2));
     return 0;

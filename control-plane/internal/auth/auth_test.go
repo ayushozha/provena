@@ -76,6 +76,7 @@ func TestWritePermissionBlocksViewerWrite(t *testing.T) {
 		"/v1/memories/search",
 		"/v1/agent/context",
 		"/v1/memories/graph/temporal",
+		"/v1/pipeline/search",
 	} {
 		if rec := doRequest(h, http.MethodPost, path, "viewer-token"); rec.Code != http.StatusOK {
 			t.Fatalf("viewer POST %s: got %d, want 200", path, rec.Code)
@@ -87,6 +88,14 @@ func TestWritePermissionBlocksViewerWrite(t *testing.T) {
 	if rec := doRequest(h, http.MethodPost, "/v1/repositories/repo-1/memory-events/sync", "viewer-token"); rec.Code != http.StatusForbidden {
 		t.Fatalf("viewer repository sync: got %d, want 403", rec.Code)
 	}
+	if rec := doRequest(h, http.MethodPost, "/v1/procedures/abstract", "viewer-token"); rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer procedure abstraction: got %d, want 403", rec.Code)
+	}
+	for _, path := range []string{"/v1/pipeline/write", "/v1/pipeline/search/refresh"} {
+		if rec := doRequest(h, http.MethodPost, path, "viewer-token"); rec.Code != http.StatusForbidden {
+			t.Fatalf("viewer POST %s: got %d, want 403", path, rec.Code)
+		}
+	}
 
 	// An editor key may write.
 	if rec := doRequest(h, http.MethodPost, "/v1/memories", "editor-token"); rec.Code != http.StatusOK {
@@ -94,6 +103,12 @@ func TestWritePermissionBlocksViewerWrite(t *testing.T) {
 	}
 	if rec := doRequest(h, http.MethodPost, "/v1/repositories/repo-1/memory-events/sync", "editor-token"); rec.Code != http.StatusOK {
 		t.Fatalf("editor repository sync: got %d, want 200", rec.Code)
+	}
+	if rec := doRequest(h, http.MethodPost, "/v1/procedures/abstract", "editor-token"); rec.Code != http.StatusOK {
+		t.Fatalf("editor procedure abstraction: got %d, want 200", rec.Code)
+	}
+	if rec := doRequest(h, http.MethodPost, "/v1/pipeline/write", "editor-token"); rec.Code != http.StatusOK {
+		t.Fatalf("editor pipeline write: got %d, want 200", rec.Code)
 	}
 }
 

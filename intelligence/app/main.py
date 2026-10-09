@@ -25,6 +25,10 @@ from app.models import (
     WriteRequest,
 )
 from app.overview_generator import OverviewGenerator
+from app.procedure_abstraction import (
+    REQUEST_MAX_BYTES, ProcedureAbstractor, ProcedureAbstractionResponse,
+    ProcedureAbstractionUnavailable, parse_abstraction_request,
+)
 from app.read_pipeline import ReadPipeline
 from app.store_auth import (
     authenticate_intelligence_request,
@@ -81,6 +85,7 @@ async def lifespan(app: FastAPI):
     app.state.write_pipeline = write_pipeline
     app.state.read_pipeline = read_pipeline
     app.state.overview_generator = overview_generator
+    app.state.procedure_abstractor = ProcedureAbstractor(model_router, llm)
 
     yield
 
@@ -115,6 +120,30 @@ def create_app(auth_settings: IntelligenceSettings = settings) -> FastAPI:
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    # ------------------------------------------------------------------
+    # Opt-in grounded procedure draft abstraction; never writes memory.
+    # ------------------------------------------------------------------
+
+    @app.post("/v1/procedures/abstract", response_model=ProcedureAbstractionResponse)
+    async def procedure_abstract(request: Request):
+        require_intelligence_write(request)
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > REQUEST_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="procedure abstraction input too large")
+            chunks.append(chunk)
+        try:
+            body = parse_abstraction_request(b"".join(chunks))
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid procedure abstraction input") from None
+        abstractor: ProcedureAbstractor = request.app.state.procedure_abstractor
+        try:
+            return await abstractor.abstract(body)
+        except ProcedureAbstractionUnavailable:
+            raise HTTPException(status_code=503, detail="procedure abstraction unavailable") from None
 
     # ------------------------------------------------------------------
     # Write pipeline

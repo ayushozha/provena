@@ -6,6 +6,7 @@ import {
 import {
   ProvenaClient,
   RepositoryMemorySyncTransportError,
+  readStoreApiKey,
   scopeEnvelopeFromConfig,
   type RepositoryMemorySyncResponse,
 } from "../client.js";
@@ -104,10 +105,6 @@ export async function runSyncCommand(
   }
   printSyncResult(result, hasFlag(args, "--json"));
   return 0;
-}
-
-function readStoreApiKey(environmentVariable: string): string | undefined {
-  return process.env[environmentVariable]?.trim() || undefined;
 }
 
 function printSyncResult(result: RepositoryMemorySyncResponse, json: boolean): void {

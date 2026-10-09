@@ -15,6 +15,7 @@ stage hard-depends on an LLM being present.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -44,6 +45,7 @@ class LLMClient:
         user: str,
         tier: ModelTier = ModelTier.BALANCED,
         max_tokens: int = 2048,
+        response_max_bytes: int | None = None,
     ) -> Any | None:
         """OpenAI-compatible chat call returning parsed JSON, or None on any
         failure. The router selects the provider + real served model for
@@ -57,22 +59,40 @@ class LLMClient:
             headers["Authorization"] = f"Bearer {routed.api_key}"
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    f"{routed.base_url.rstrip('/')}/chat/completions",
-                    headers=headers,
-                    json={
-                        "model": routed.model,
-                        "max_tokens": max_tokens,
-                        "temperature": 0,
-                        "messages": [
-                            {"role": "system", "content": system},
-                            {"role": "user", "content": user},
-                        ],
-                    },
-                )
-                if response.status_code >= 400:
-                    return None
-                data = response.json()
+                payload = {
+                    "model": routed.model,
+                    "max_tokens": max_tokens,
+                    "temperature": 0,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                }
+                url = f"{routed.base_url.rstrip('/')}/chat/completions"
+                if response_max_bytes is None:
+                    response = await client.post(url, headers=headers, json=payload)
+                    if response.status_code >= 400:
+                        return None
+                    data = response.json()
+                else:
+                    # Refuse compressed replies before reading rather than
+                    # materializing a decompression bomb. The total deadline
+                    # also bounds drip-fed replies; legacy callers are unchanged.
+                    if response_max_bytes < 1:
+                        return None
+                    headers["Accept-Encoding"] = "identity"
+                    async with asyncio.timeout(30.0):
+                        async with client.stream("POST", url, headers=headers, json=payload) as response:
+                            if not 200 <= response.status_code < 300 or response.headers.get("content-encoding", "").strip().lower() not in {"", "identity"}:
+                                return None
+                            chunks: list[bytes] = []
+                            size = 0
+                            async for chunk in response.aiter_raw():
+                                size += len(chunk)
+                                if size > response_max_bytes:
+                                    return None
+                                chunks.append(chunk)
+                            data = json.loads(b"".join(chunks).decode("utf-8"))
                 # `or default` so an explicit null falls back to a safe type.
                 choices = data.get("choices") or []
                 message = (choices[0].get("message") or {}) if choices else {}

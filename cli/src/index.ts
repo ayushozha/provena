@@ -2,6 +2,7 @@
 export const CLI_PACKAGE = "@provena/cli";
 export * from "./procedures/index.js";
 export * from "./capture/index.js";
+export * from "./capture/abstraction.js";
 export { runCaptureCommand } from "./commands/capture.js";
 export {
   installCaptureHooks, uninstallCaptureHooks,

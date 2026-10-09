@@ -1,0 +1,61 @@
+{
+  "fixturePurpose": "Cross-language normalized-goal and exact-response canonical hashes; placeholder model metadata, no inference or task receipt.",
+  "request": {
+    "schemaVersion": 1,
+    "goal": " ﻿Review café 🧭 handling﻿ ",
+    "observations": [
+      {
+        "id": "1111111111111111111111111111111111111111111111111111111111111111",
+        "tool": "Bash",
+        "workingDirectory": ".",
+        "args": {
+          "command": "npm test",
+          "workdir": ".",
+          "offset": 0
+        },
+        "status": "failure",
+        "issues": [
+          "hook-coverage-is-partial"
+        ]
+      },
+      {
+        "id": "2222222222222222222222222222222222222222222222222222222222222222",
+        "tool": "Read",
+        "workingDirectory": "src",
+        "args": {
+          "file_path": "src/café 🧭.ts",
+          "limit": 1000000
+        },
+        "status": "unknown",
+        "issues": []
+      }
+    ]
+  },
+  "normalizedGoal": "Review café 🧭 handling",
+  "inputSha256": "c5c3ed01b03f9127a1f89c232dfdc368324552f9c92fcce6c32b506be2a9557d",
+  "response": {
+    "schemaVersion": 1,
+    "title": "  Review café 🧭  ",
+    "triggers": [
+      "  Session refactor  "
+    ],
+    "keptObservationIds": [
+      "2222222222222222222222222222222222222222222222222222222222222222"
+    ],
+    "omitted": [
+      {
+        "observationId": "1111111111111111111111111111111111111111111111111111111111111111",
+        "reason": "  Earlier failure  "
+      }
+    ],
+    "recoverySummary": "",
+    "promptRevision": "grounded-capture-abstraction-v1",
+    "inputSha256": "c5c3ed01b03f9127a1f89c232dfdc368324552f9c92fcce6c32b506be2a9557d",
+    "model": {
+      "provider": "contract-fixture",
+      "model": "${MODEL_NAME}",
+      "tier": "balanced"
+    },
+    "outputSha256": "c5e2d9d45f937d4e152ea02beac8845e82b27e1bfb78113967d9e9bca7989103"
+  }
+}
