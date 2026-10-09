@@ -3,7 +3,7 @@
   "mode": "codex-loop",
   "branchName": "codex/provena-product-loop",
   "objective": "Turn Provena into a production-ready, self-hostable, embeddable governed memory plane that can keep iterating through PM-authored stories and QA-authored test coverage until explicitly stopped.",
-  "updatedAt": "2026-10-08T23:51:09Z",
+  "updatedAt": "2026-10-09T00:07:20Z",
   "sentry": {
     "enabledIfEnvPresent": true,
     "requiredEnv": "SENTRY_AUTH_TOKEN",
@@ -1383,6 +1383,85 @@
       "pmReviewNotes": "Independent PM/documentation review approved the grounded contract and final controlled-provider E2E/clean-CI extension. T12 checks evidence honesty only. Actual model quality and superiority remain unmeasured. All thirteen local feature cases pass; publication CI remains separate.",
       "lastPmReviewCompletedAt": "2026-10-08T23:51:09Z",
       "lastTesterExecutionCompletedAt": "2026-10-08T23:51:09Z"
+    },
+    {
+      "id": "PROVENA-018",
+      "epicId": "EPIC-PRODUCTIZE",
+      "epicTitle": "Standalone Productization",
+      "featureId": "FEATURE-CURRENT-RUNTIME-COMPATIBILITY",
+      "featureTitle": "Current stable runtime compatibility",
+      "title": "Validate current stable runtimes while preserving supported compatibility and storage",
+      "priority": 18,
+      "status": "in_progress",
+      "passes": false,
+      "attempts": 1,
+      "qaStatus": "pending",
+      "qaAttempts": 0,
+      "persona": "Developer using Provena with current supported runtimes",
+      "userStory": "As a developer, I want current stable runtime compatibility and refreshed container bases without losing existing support or mutating persistent storage.",
+      "problemStatement": "Direct dependency resolutions are current, but latest stable runtime compatibility is not covered and the Go/Rust base distribution is older than stable.",
+      "featureDescription": "A bounded runtime/image/CI increment using existing manifests, packages, locks, behavioral suites, and authentication checks.",
+      "acceptanceCriteria": [
+        "Use the verified current stable Python 3.14 image line for the store and intelligence, with declared Python support floors and dependency locks preserved.",
+        "Use the existing current Go/Rust toolchain pins on verified Debian trixie builder images and matching trixie-slim runtime images; shipped images build and their binaries start.",
+        "Run existing real PostgreSQL tests for representative Python 3.12/PostgreSQL 16 and Python 3.14/PostgreSQL 18 pairs. Preserve deployed Compose PostgreSQL 16 and its persistent volume layout; no migration or data mutation is authorized.",
+        "Preserve Node 22.17 compatibility and Node 24 LTS coverage/types, and add current Node 26 Linux compatibility through the same existing full CLI suite.",
+        "Verify the installed noneditable wheel and intelligence suite on Python 3.12 and 3.14, without replacing protected behavioral tests with shallow version assertions.",
+        "Run the existing authenticated end-to-end harness on Python 3.14, preserving PR55 CLI-build preparation, authorization, identity, controlled-provider boundaries, and the full Windows timeout fix after rebase.",
+        "Keep model selection configured and credentials private; do not add dependencies, alter lock resolutions, migrate storage, install system runtimes, or claim unsupported serving-model/performance results.",
+        "Update affected runtime documentation and record actual checks/limits. Publication requires independent review and all exact-head CI; unavailable local Docker/Python runtimes remain unclaimed."
+      ],
+      "expectedBehaviors": [
+        "Use the verified current stable Python 3.14 image line for the store and intelligence, with declared Python support floors and dependency locks preserved.",
+        "Use the existing current Go/Rust toolchain pins on verified Debian trixie builder images and matching trixie-slim runtime images; shipped images build and their binaries start.",
+        "Run existing real PostgreSQL tests for representative Python 3.12/PostgreSQL 16 and Python 3.14/PostgreSQL 18 pairs. Preserve deployed Compose PostgreSQL 16 and its persistent volume layout; no migration or data mutation is authorized.",
+        "Preserve Node 22.17 compatibility and Node 24 LTS coverage/types, and add current Node 26 Linux compatibility through the same existing full CLI suite.",
+        "Verify the installed noneditable wheel and intelligence suite on Python 3.12 and 3.14, without replacing protected behavioral tests with shallow version assertions.",
+        "Run the existing authenticated end-to-end harness on Python 3.14, preserving PR55 CLI-build preparation, authorization, identity, controlled-provider boundaries, and the full Windows timeout fix after rebase.",
+        "Keep model selection configured and credentials private; do not add dependencies, alter lock resolutions, migrate storage, install system runtimes, or claim unsupported serving-model/performance results.",
+        "Update affected runtime documentation and record actual checks/limits. Publication requires independent review and all exact-head CI; unavailable local Docker/Python runtimes remain unclaimed."
+      ],
+      "verificationCommands": [
+        "docker compose config --quiet",
+        "docker compose build",
+        "cd cli && npm test",
+        "python -m pytest -m \"not postgres\"",
+        "python -m pytest -m postgres tests/test_postgres_store.py",
+        "python -m pytest intelligence/tests -q",
+        "python scripts/run_e2e.py"
+      ],
+      "uiTestFocus": [],
+      "qaCoverage": {
+        "api": true,
+        "integration": true,
+        "ui": false
+      },
+      "sentryChecks": [],
+      "qaArtifacts": [
+        "loop/qa_test_plan.json#PROVENA-018"
+      ],
+      "notes": "Reuse existing dependencies/tests. Latest compatible resolutions are distinct from support floors; Node 24 types and the NumPy Python-version split are intentional. No deployed database major upgrade is included.",
+      "qaNotes": "The unpublished runtime branch was rebased onto final PR55 source9e7a4bb, preserving PROVENA-017 green, both CLI path filters, E2E CLI build and Windows30 timeout. On product source8e5bf37 (71a0ebd adds only deployment wording), actual local Python3.14.5 fresh offline noneditable wheel force-install and isolated -I persistence/recall passed; wheelSHA256 bb5c33dd36fe776577bf65fb6e86dbd774abb3d6fbaa35fab979ff4efc30375c. Root tests passed97 plus16subtests, with one unconfigured live-Redis skip and29 PostgreSQL tests deselected; current intelligence passed96 plus32subtests. Fresh CLI npm ci/build and updated-source Go 1.26.3 build/test passed. Earlier14 Rust tests on existing MSVC1.95 remain valid because Rust source/Cargo files are unchanged. Full authenticated configured E2E completed with exit0:79 backend tests, actual CLI abstraction through gateway and production intelligence to a controlled provider, no-cost denials, incomplete/unapproved drafts, standalone/polyglot services and Python/TypeScript/Go SDK smoke plus Rust SDK compile. All task services stopped. General, documentation and matrix review are clear. Exact Python3.14.8/trixie image startup, Go 1.27.2/Rust1.99 image binaries, PostgreSQL16/18, Linux Node26 and all final-head publication CI remain pending; no local Docker engine is available. No actual model/GPU calls, database migration, competitor score, native-client delivery, Sentry or production deployment is established by these receipts.",
+      "pmPrdStatus": "complete",
+      "testerPlanStatus": "complete",
+      "engineerStatus": "complete",
+      "pmReviewStatus": "approved",
+      "testerExecutionStatus": "in_progress",
+      "pmPrdAttempts": 1,
+      "testerPlanAttempts": 1,
+      "engineerAttempts": 1,
+      "pmReviewAttempts": 1,
+      "testerExecutionAttempts": 2,
+      "pmPrdNotes": "Contract recorded before engineering. Official registry/release/image evidence determines compatible targets; broad dependency and operating-system changes are excluded.",
+      "testerPlanNotes": "Six cases trace eight acceptance criteria with existing meaningful behavioral and container checks; unsupported local execution is reported honestly.",
+      "lastPmPrdStartedAt": "2026-10-08T23:09:41Z",
+      "lastTesterPlanStartedAt": "2026-10-08T23:09:41Z",
+      "fixRecommendations": [],
+      "engineerNotes": "The unpublished runtime branch was rebased onto final PR55 source9e7a4bb, preserving PROVENA-017 green, both CLI path filters, E2E CLI build and Windows30 timeout. On product source8e5bf37 (71a0ebd adds only deployment wording), actual local Python3.14.5 fresh offline noneditable wheel force-install and isolated -I persistence/recall passed; wheelSHA256 bb5c33dd36fe776577bf65fb6e86dbd774abb3d6fbaa35fab979ff4efc30375c. Root tests passed97 plus16subtests, with one unconfigured live-Redis skip and29 PostgreSQL tests deselected; current intelligence passed96 plus32subtests. Fresh CLI npm ci/build and updated-source Go 1.26.3 build/test passed. Earlier14 Rust tests on existing MSVC1.95 remain valid because Rust source/Cargo files are unchanged. Full authenticated configured E2E completed with exit0:79 backend tests, actual CLI abstraction through gateway and production intelligence to a controlled provider, no-cost denials, incomplete/unapproved drafts, standalone/polyglot services and Python/TypeScript/Go SDK smoke plus Rust SDK compile. All task services stopped. General, documentation and matrix review are clear. Exact Python3.14.8/trixie image startup, Go 1.27.2/Rust1.99 image binaries, PostgreSQL16/18, Linux Node26 and all final-head publication CI remain pending; no local Docker engine is available. No actual model/GPU calls, database migration, competitor score, native-client delivery, Sentry or production deployment is established by these receipts.",
+      "lastEngineerCompletedAt": "2026-10-08T23:27:32Z",
+      "pmReviewNotes": "Independent general/documentation/matrix and focused security review of7 source/config files through71a0ebd are clear. No P0/P1/P2 publication blocker found. All exact-head hosted image/runtime/PostgreSQL/Node26 gates remain required; local checks do not establish these passed.",
+      "lastPmReviewCompletedAt": "2026-10-09T00:07:20Z",
+      "lastTesterExecutionStartedAt": "2026-10-09T00:05:47Z"
     }
   ]
 }

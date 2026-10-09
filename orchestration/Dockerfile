@@ -1,4 +1,4 @@
-FROM rust:1.99-bookworm AS builder
+FROM rust:1.99-trixie AS builder
 
 WORKDIR /src
 
@@ -7,7 +7,7 @@ COPY src /src/src
 
 RUN cargo build --release --locked
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 WORKDIR /app
 RUN apt-get update \

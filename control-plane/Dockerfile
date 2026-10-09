@@ -1,4 +1,4 @@
-FROM golang:1.27.2-bookworm AS builder
+FROM golang:1.27.2-trixie AS builder
 
 ARG CMD=gateway
 WORKDIR /src
@@ -9,7 +9,7 @@ COPY internal /src/internal
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/service ./cmd/${CMD}
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 WORKDIR /app
 RUN apt-get update \
