@@ -30,7 +30,8 @@ surface for product-to-product traffic.
 The store and intelligence images use Python 3.14.8 on Debian trixie. The Go
 1.27.2 and Rust 1.99 builders also use trixie, with matching `trixie-slim`
 runtime images. Compose CI builds and starts these images and waits for their
-application health checks.
+configured application health checks; services without a health check are
+checked for running status.
 
 Python packages retain their declared 3.11 minimum. CI targets Python 3.12 with
 PostgreSQL 16 and Python 3.14 with PostgreSQL 18; installed-wheel and intelligence
