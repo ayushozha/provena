@@ -3,7 +3,7 @@
   "mode": "codex-loop",
   "branchName": "codex/provena-product-loop",
   "objective": "Turn Provena into a production-ready, self-hostable, embeddable governed memory plane that can keep iterating through PM-authored stories and QA-authored test coverage until explicitly stopped.",
-  "updatedAt": "2026-10-08T23:51:09Z",
+  "updatedAt": "2026-10-09T00:05:47Z",
   "sentry": {
     "enabledIfEnvPresent": true,
     "requiredEnv": "SENTRY_AUTH_TOKEN",
@@ -1441,7 +1441,7 @@
         "loop/qa_test_plan.json#PROVENA-018"
       ],
       "notes": "Reuse existing dependencies/tests. Latest compatible resolutions are distinct from support floors; Node 24 types and the NumPy Python-version split are intentional. No deployed database major upgrade is included.",
-      "qaNotes": "Official registry/image/wheel metadata and independent source review are complete. Existing local Python 3.14.5 ran 97 root tests plus 16 subtests, with one unconfigured live-Redis skip and 29 PostgreSQL tests deselected; pre-PR55 intelligence ran 76 tests. A noneditable installed wheel persistence/recall check, OpenAPI equivalence, authenticated standalone/polyglot E2E (exit 0), YAML/matrix checks, Compose configuration and diff checks passed. The Linux Docker engine is unavailable locally, so exact Python 3.14.8 images, matching trixie Go/Rust runtime startup, real PostgreSQL 16/18 and Linux Node 26 execution remain hosted-CI gates. Final PR55 capture/abstraction source and CI fixes must be preserved by rebase, followed by Python 3.14 intelligence and configured-production E2E. No actual model quality, native-client emission, live Sentry, deployed database migration or performance result is asserted.",
+      "qaNotes": "The unpublished runtime branch was rebased onto final PR55 source9e7a4bb, preserving PROVENA-017 green, both CLI path filters, E2E CLI build and Windows30 timeout. On product source8e5bf37 (71a0ebd adds only deployment wording), actual local Python3.14.5 fresh offline noneditable wheel force-install and isolated -I persistence/recall passed; wheelSHA256 bb5c33dd36fe776577bf65fb6e86dbd774abb3d6fbaa35fab979ff4efc30375c. Root tests passed97 plus16subtests, with one unconfigured live-Redis skip and29 PostgreSQL tests deselected; current intelligence passed96 plus32subtests. Fresh CLI npm ci/build and updated-source Go1.26.3 build/test passed. Earlier14 Rust tests on existing MSVC1.95 remain valid because Rust source/Cargo files are unchanged. Full authenticated configured E2E completed with exit0:79 backend tests, actual CLI abstraction through gateway and production intelligence to a controlled provider, no-cost denials, incomplete/unapproved drafts, standalone/polyglot services and Python/TypeScript/Go SDK smoke plus Rust SDK compile. All task services stopped. General, documentation and matrix review are clear. Exact Python3.14.8/trixie image startup, Go1.27.2/Rust1.99 image binaries, PostgreSQL16/18, Linux Node26 and all final-head publication CI remain pending; no local Docker engine is available. No actual model/GPU calls, database migration, competitor score, native-client delivery, Sentry or production deployment is established by these receipts.",
       "pmPrdStatus": "complete",
       "testerPlanStatus": "complete",
       "engineerStatus": "complete",
@@ -1451,16 +1451,17 @@
       "testerPlanAttempts": 1,
       "engineerAttempts": 1,
       "pmReviewAttempts": 1,
-      "testerExecutionAttempts": 1,
+      "testerExecutionAttempts": 2,
       "pmPrdNotes": "Contract recorded before engineering. Official registry/release/image evidence determines compatible targets; broad dependency and operating-system changes are excluded.",
       "testerPlanNotes": "Six cases trace eight acceptance criteria with existing meaningful behavioral and container checks; unsupported local execution is reported honestly.",
       "lastPmPrdStartedAt": "2026-10-08T23:09:41Z",
       "lastTesterPlanStartedAt": "2026-10-08T23:09:41Z",
       "fixRecommendations": [],
-      "engineerNotes": "Official registry/image/wheel metadata and independent source review are complete. Existing local Python 3.14.5 ran 97 root tests plus 16 subtests, with one unconfigured live-Redis skip and 29 PostgreSQL tests deselected; pre-PR55 intelligence ran 76 tests. A noneditable installed wheel persistence/recall check, OpenAPI equivalence, authenticated standalone/polyglot E2E (exit 0), YAML/matrix checks, Compose configuration and diff checks passed. The Linux Docker engine is unavailable locally, so exact Python 3.14.8 images, matching trixie Go/Rust runtime startup, real PostgreSQL 16/18 and Linux Node 26 execution remain hosted-CI gates. Final PR55 capture/abstraction source and CI fixes must be preserved by rebase, followed by Python 3.14 intelligence and configured-production E2E. No actual model quality, native-client emission, live Sentry, deployed database migration or performance result is asserted.",
+      "engineerNotes": "The unpublished runtime branch was rebased onto final PR55 source9e7a4bb, preserving PROVENA-017 green, both CLI path filters, E2E CLI build and Windows30 timeout. On product source8e5bf37 (71a0ebd adds only deployment wording), actual local Python3.14.5 fresh offline noneditable wheel force-install and isolated -I persistence/recall passed; wheelSHA256 bb5c33dd36fe776577bf65fb6e86dbd774abb3d6fbaa35fab979ff4efc30375c. Root tests passed97 plus16subtests, with one unconfigured live-Redis skip and29 PostgreSQL tests deselected; current intelligence passed96 plus32subtests. Fresh CLI npm ci/build and updated-source Go1.26.3 build/test passed. Earlier14 Rust tests on existing MSVC1.95 remain valid because Rust source/Cargo files are unchanged. Full authenticated configured E2E completed with exit0:79 backend tests, actual CLI abstraction through gateway and production intelligence to a controlled provider, no-cost denials, incomplete/unapproved drafts, standalone/polyglot services and Python/TypeScript/Go SDK smoke plus Rust SDK compile. All task services stopped. General, documentation and matrix review are clear. Exact Python3.14.8/trixie image startup, Go1.27.2/Rust1.99 image binaries, PostgreSQL16/18, Linux Node26 and all final-head publication CI remain pending; no local Docker engine is available. No actual model/GPU calls, database migration, competitor score, native-client delivery, Sentry or production deployment is established by these receipts.",
       "lastEngineerCompletedAt": "2026-10-08T23:27:32Z",
-      "pmReviewNotes": "Independent source/documentation and official image/wheel review found no blocker. Final rebased validation and exact-head CI remain required.",
-      "lastPmReviewCompletedAt": "2026-10-08T23:27:32Z"
+      "pmReviewNotes": "Current scoped general/documentation/matrix review is clear. Independent security publication review and all exact-head hosted gates remain required; local source checks do not establish image/runtime startup.",
+      "lastPmReviewCompletedAt": "2026-10-08T23:27:32Z",
+      "lastTesterExecutionStartedAt": "2026-10-09T00:05:47Z"
     }
   ]
 }
