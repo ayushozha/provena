@@ -158,6 +158,11 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Configure an ephemeral queue ingress token
+        run: |
+          queue_ingress_token=$(openssl rand -hex 32)
+          echo "::add-mask::$queue_ingress_token"
+          echo "PROVENA_QUEUE_INGRESS_TOKEN=$queue_ingress_token" >> "$GITHUB_ENV"
       - name: Validate Compose configuration
         run: docker compose config --quiet
       - name: Build the shipped Compose services
