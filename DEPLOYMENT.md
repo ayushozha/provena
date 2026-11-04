@@ -367,6 +367,124 @@ and coverage APIs exposed by the gateway, while direct
 `POST /v1/integrations/connectors/{connector_id}/sync-jobs` remains available
 for manual or upstream-driven writes.
 
+## Local store mode (on-device memory for a browser app)
+
+`PROVENA_MEMORY_MODE=local-store` runs the Go gateway and the Python store on
+one machine, bound to loopback, so a web app in the same browser (for example
+Valcairn's Memory page) can keep a private, provenance-tracked memory on the
+device. Nothing leaves the machine: no intelligence pipeline, no embeddings, no
+model or provider calls. Retrieval is the store's deterministic full-text and
+term scoring.
+
+What the mode changes in the gateway:
+
+- The surface is only what a person's own notes need: `GET /healthz`,
+  `GET /v1/auth/validate`, `GET /v1/auth/whoami`, `POST /v1/memories`,
+  `POST /v1/memories/search`, `GET`/`PUT`/`DELETE /v1/memories/{id}` and
+  `GET /v1/memories/{id}/history`, all straight to the store. No admin, erase,
+  lifecycle, integration, relation, feedback, procedure, pipeline, readiness or
+  UI routes exist in this mode. Deletes are always soft: a `DELETE` with any
+  query option (such as `hard_delete=true`) gets `403` and never reaches the
+  store. A memory path that is not already canonical (an encoded slash or dot,
+  or a `..` segment) gets `404` before the store sees it.
+- Every key must be bound to one workspace and one person (`scope.workspace_id`
+  and `scope.user_id` on the key record); the gateway refuses to start
+  otherwise. It forwards that scope as `X-Provena-Scope-Workspace-Id` and
+  `X-Provena-Scope-User-Id` (caller copies are stripped), and the store
+  confines the key to records carrying exactly those values: creating
+  elsewhere gets `403`, reading, editing, deleting or superseding anything
+  else gets `404`, searches return nothing, and legacy rows without a
+  workspace are out of reach too.
+- `GET /v1/auth/whoami` returns the verified claims behind the bearer key
+  (`key_id`, `tenant_id`, `role`, `principal_id`, `scope`) so the client can
+  check the key is bound to the workspace and person it is signed in as.
+- Browser access is exact: `PROVENA_BROWSER_ORIGINS` and
+  `PROVENA_BROWSER_HOSTS` must both be set. A request whose `Host` is not
+  listed gets `421`; a request whose `Origin` is not listed gets `403` with no
+  CORS headers. CORS headers are echoed only for a listed origin, never `*`,
+  never `null`, and never with credentials. Preflights are answered before
+  authentication; everything else still needs `Authorization: Bearer`.
+- The proxy never forwards a browser `Origin` upstream and never follows an
+  upstream redirect (a `3xx` is returned to the caller as is, so the rebuilt
+  identity headers and the transport credential are never replayed
+  elsewhere). This holds in every mode.
+- Fail-closed startup: the mode refuses to start unless
+  `PROVENA_AUTH_ENABLED=true`, `PROVENA_GATEWAY_SERVICE_TOKEN` is set (auth on
+  requires it, exactly as in polyglot mode), `PROVENA_LISTEN_ADDR` is a
+  loopback address, `PROVENA_STORE_URL` is a plain `http://` loopback origin
+  with a port (no userinfo, path or query), both browser lists are valid and
+  every key is bound.
+
+The store stays private: bind it to `127.0.0.1`, give it the same
+`PROVENA_GATEWAY_SERVICE_TOKEN` so every `/v1` request must carry the gateway's
+transport bearer before any identity header is read, set
+`PROVENA_ALLOW_UNAUTHENTICATED_LOCAL=false` so a missing token is a startup
+error rather than an open store, and set `PROVENA_ALLOWED_HOSTS` to the exact
+`host:port` values the gateway uses, so the store answers `421` to any other
+`Host` (a rebound name included) and `403` to any request carrying an `Origin`
+header (a browser), before it reads the `X-Provena-*` headers it trusts.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `PROVENA_MEMORY_MODE` | No | `pipeline` (default) or `local-store`. |
+| `PROVENA_GATEWAY_SERVICE_TOKEN` (gateway and store) | Yes in local-store mode | The private transport bearer between the two processes; never the raw API key and never given to the browser. |
+| `PROVENA_BROWSER_ORIGINS` | Yes in local-store mode | Comma-separated exact origins of the browser app, e.g. `http://localhost:3000,http://127.0.0.1:3000`. |
+| `PROVENA_BROWSER_HOSTS` | Yes in local-store mode | Comma-separated exact `host[:port]` values the gateway answers to, e.g. `127.0.0.1:8787,localhost:8787`. |
+| `PROVENA_ALLOWED_HOSTS` (store) | Yes for a private store | Comma-separated exact `host[:port]` values the store answers to, e.g. `127.0.0.1:8700,localhost:8700`. Unset keeps the store's existing behaviour for other deployments. |
+
+### Create a key
+
+`scripts/local_gateway_key.py` (standard library only) writes the raw token
+and the matching `PROVENA_API_KEYS` record (SHA-256 only, plus the bound
+scope) to a private directory that must be outside the repository, and prints
+only the two paths. The workspace and user ids are the client's: Valcairn's
+Memory page shows the two values to use. Generate the transport bearer into
+the same private directory.
+
+```powershell
+cd provena
+$keys = "$env:LOCALAPPDATA\Valcairn\local-memory"
+python .\scripts\local_gateway_key.py --out-dir $keys `
+  --tenant valcairn-local --principal person-1 --workspace <workspace id> --user <user id>
+python -c "import secrets; print(secrets.token_urlsafe(32))" | Set-Content "$keys\gateway-transport.token"
+```
+
+One key is one tenant, one principal, one workspace and one person. Never
+commit any of these files.
+
+### Run
+
+```powershell
+cd provena
+$keys = "$env:LOCALAPPDATA\Valcairn\local-memory"
+$transport = (Get-Content "$keys\gateway-transport.token" -Raw).Trim()
+
+# Store, private, loopback only, answering the gateway's host names only, bearer required on every /v1 call.
+$env:PROVENA_DB_PATH = "$keys\memory.db"
+$env:PROVENA_ENVIRONMENT = "local"
+$env:PROVENA_ALLOW_UNAUTHENTICATED_LOCAL = "false"
+$env:PROVENA_GATEWAY_SERVICE_TOKEN = $transport
+$env:PROVENA_ALLOWED_HOSTS = "127.0.0.1:8700,localhost:8700"
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8700
+
+# Gateway, in another shell.
+cd provena\control-plane
+$keys = "$env:LOCALAPPDATA\Valcairn\local-memory"
+$env:PROVENA_LISTEN_ADDR = "127.0.0.1:8787"
+$env:PROVENA_STORE_URL = "http://127.0.0.1:8700"
+$env:PROVENA_MEMORY_MODE = "local-store"
+$env:PROVENA_AUTH_ENABLED = "true"
+$env:PROVENA_GATEWAY_SERVICE_TOKEN = (Get-Content "$keys\gateway-transport.token" -Raw).Trim()
+$env:PROVENA_API_KEYS = Get-Content "$keys\valcairn-local-memory.keys.json" -Raw
+$env:PROVENA_BROWSER_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
+$env:PROVENA_BROWSER_HOSTS = "127.0.0.1:8787,localhost:8787"
+go run ./cmd/gateway
+```
+
+The browser app then calls `http://127.0.0.1:8787` with the raw token from the
+`.key` file. Disconnecting or signing out in the app forgets the token in that
+browser; the memories stay in the store's database file.
+
 ## Calling Provena from another project
 
 ### Private NeverZero Compose path

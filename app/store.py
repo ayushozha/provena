@@ -225,6 +225,9 @@ class AccessContext:
     principal_id: str | None = None
     key_id: str | None = None
     groups: list[str] = field(default_factory=list)
+    # Scope fields the key is bound to (workspace_id, user_id), from gateway-verified claims. Every memory the
+    # key touches must carry exactly these values; rows with other values or none are out of reach.
+    bound_scope: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -386,6 +389,9 @@ class ProvenaStore:
             and access.tenant_id not in {None, payload.scope.tenant_id}
         ):
             raise ValueError("memory scope tenant does not match access tenant")
+        for scope_field, bound_value in (access.bound_scope.items() if access else ()):
+            if getattr(payload.scope, scope_field) != bound_value:
+                raise ValueError("memory scope does not match the key's bound scope")
         create_request_digest = self._create_request_digest(payload) if payload.memory_id else None
         fingerprint = self._fingerprint(
             payload.scope,
@@ -3623,6 +3629,11 @@ class ProvenaStore:
     ) -> bool:
         if access is None:
             return True
+        # A bound key reaches nothing outside its workspace and person, whatever its role: records with
+        # another value, and legacy records with none, are not visible to it.
+        for scope_field, bound_value in access.bound_scope.items():
+            if getattr(record.scope, scope_field, None) != bound_value:
+                return False
         if access.role == "superadmin":
             return True
         if access.tenant_id and access.tenant_id != record.scope.tenant_id:
@@ -5094,6 +5105,7 @@ class ProvenaStore:
                 "role": access.role if access else None,
                 "principal_id": access.principal_id if access else None,
                 "groups": sorted(access.groups) if access else [],
+                "bound_scope": dict(sorted(access.bound_scope.items())) if access else {},
             },
         }
         return hashlib.sha256(self._to_json(envelope).encode("utf-8")).hexdigest()

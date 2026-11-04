@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // Role represents an authorization level.
@@ -43,6 +45,22 @@ var RolePermissions = map[Role][]Permission{
 	SuperAdmin: {Read, Write, Delete, AdminPerm},
 }
 
+// KeyScope binds a key to one workspace and one person inside its tenant. A local-store gateway requires it on
+// every key, and the store then refuses any memory outside that scope whatever scope a caller names.
+type KeyScope struct {
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	UserID      string `json:"user_id,omitempty"`
+}
+
+// Bound reports whether both the workspace and the person are fixed by canonical values: nonblank, no leading
+// or trailing white space and no control characters. The store strips header values, so a value that only
+// looks set would silently vanish upstream; such a key must fail at load time instead.
+func (s KeyScope) Bound() bool { return canonicalID(s.WorkspaceID) && canonicalID(s.UserID) }
+
+func canonicalID(value string) bool {
+	return value != "" && value == strings.TrimSpace(value) && !strings.ContainsFunc(value, unicode.IsControl)
+}
+
 // APIKey represents a stored API key with metadata.
 type APIKey struct {
 	KeyID       string    `json:"key_id"`
@@ -50,6 +68,7 @@ type APIKey struct {
 	Role        Role      `json:"role"`
 	PrincipalID string    `json:"principal_id,omitempty"`
 	Groups      []string  `json:"groups,omitempty"`
+	Scope       KeyScope  `json:"scope"`
 	HashedKey   string    `json:"hashed_key"`
 	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -63,6 +82,7 @@ type AuthContext struct {
 	Role        Role
 	PrincipalID string
 	Groups      []string
+	Scope       KeyScope
 }
 
 type contextKey string
@@ -142,10 +162,25 @@ func (ks *KeyStore) Validate(rawToken string) (*AuthContext, bool) {
 				Role:        key.Role,
 				PrincipalID: principalID,
 				Groups:      groups,
+				Scope:       key.Scope,
 			}, true
 		}
 	}
 	return nil, false
+}
+
+// Unbound lists the ids of keys that lack a full workspace and user scope, sorted.
+func (ks *KeyStore) Unbound() []string {
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+	var ids []string
+	for _, key := range ks.keys {
+		if !key.Scope.Bound() {
+			ids = append(ids, key.KeyID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // AuthMiddleware returns HTTP middleware that enforces API key authentication.
@@ -199,6 +234,27 @@ func VerifiedKeyHandler() http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// WhoAmIHandler reports the verified claims behind the caller's API key so a client can derive its memory
+// scope from the key instead of choosing one. Like VerifiedKeyHandler it rejects the anonymous context.
+func WhoAmIHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ac, ok := FromContext(r.Context())
+		if !ok || ac.KeyID == "" || ac.KeyID == "anonymous" {
+			http.Error(w, `{"error":"verified API key required"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		json.NewEncoder(w).Encode(map[string]any{
+			"key_id":       ac.KeyID,
+			"tenant_id":    ac.TenantID,
+			"role":         ac.Role,
+			"principal_id": ac.PrincipalID,
+			"scope":        ac.Scope,
+		})
 	}
 }
 
