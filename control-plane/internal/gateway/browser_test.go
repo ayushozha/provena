@@ -113,7 +113,7 @@ func TestBrowserAccessRefusesOtherHostsBeforeAnythingElse(t *testing.T) {
 		t.Fatalf("a wrong host reached the handler (%d)", *reached)
 	}
 
-	// No Origin header: a command-line client. The Host check still applies; authentication follows.
+	// No Origin header: a CLI client. The Host check still applies; authentication follows.
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, browserRequest(http.MethodGet, "LOCALHOST:8787", ""))
 	if rec.Code != http.StatusNoContent || *reached != 1 {

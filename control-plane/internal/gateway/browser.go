@@ -51,7 +51,7 @@ func NewBrowserAccess(origins, hosts []string) (*BrowserAccess, error) {
 }
 
 // Middleware refuses a wrong Host (421) or an unlisted Origin (403), answers preflights for listed origins
-// and echoes CORS headers only for them. A request without an Origin header (a command-line client) passes
+// and echoes CORS headers only for them. A request without an Origin header (a CLI client) passes
 // through to authentication on the Host check alone.
 func (b *BrowserAccess) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
