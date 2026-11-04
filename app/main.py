@@ -115,6 +115,33 @@ def create_app() -> FastAPI:
                 )
         return await call_next(request)
 
+    allowed_hosts = {host.strip().lower() for host in settings.allowed_hosts.split(",") if host.strip()}
+    if allowed_hosts:
+        # Private-store boundary: this service trusts gateway identity headers, so when it is configured as a
+        # private store it answers only the exact hosts it was given (never a rebound name) and never a browser
+        # (any Origin header), whatever CORS would or would not allow. Registered last so it runs first.
+        @app.middleware("http")
+        async def private_boundary(request: Request, call_next):
+            if (request.headers.get("host") or "").strip().lower() not in allowed_hosts:
+                return JSONResponse(status_code=421, content={"detail": "request host is not allowed"})
+            if "origin" in request.headers:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "browser requests are not accepted by the store"},
+                )
+            return await call_next(request)
+
+    def bound_scope_from(request: Request) -> dict[str, str]:
+        # A key bound to one workspace and person (gateway-verified claims): the store confines it to them.
+        return {
+            scope_field: value
+            for scope_field, header in (
+                ("workspace_id", "X-Provena-Scope-Workspace-Id"),
+                ("user_id", "X-Provena-Scope-User-Id"),
+            )
+            if (value := (request.headers.get(header) or "").strip())
+        }
+
     @app.exception_handler(TenantOwnershipError)
     @app.exception_handler(TenantOwnershipConflictError)
     async def tenant_ownership_conflict(
@@ -186,6 +213,7 @@ def create_app() -> FastAPI:
                         for group in request.headers.get("X-Provena-Groups", "").split(",")
                         if group.strip()
                     ],
+                    bound_scope=bound_scope_from(request),
                 )
             if matched_identity is not None:
                 return AccessContext(
@@ -215,9 +243,10 @@ def create_app() -> FastAPI:
             for group in request.headers.get("X-Provena-Groups", "").split(",")
             if group.strip()
         ]
+        bound_scope = bound_scope_from(request)
         if role_header is not None and role_header not in {"viewer", "editor", "admin", "superadmin"}:
             raise HTTPException(status_code=400, detail="invalid Provena role")
-        if not any([tenant_id, role_header, principal_id, key_id, groups]):
+        if not any([tenant_id, role_header, principal_id, key_id, groups, bound_scope]):
             return None
         role = role_header or "viewer"
         if role != "superadmin" and tenant_id is None:
@@ -231,6 +260,7 @@ def create_app() -> FastAPI:
             principal_id=principal_id,
             key_id=key_id,
             groups=groups,
+            bound_scope=bound_scope,
         )
 
     def require_tenant(access: AccessContext | None, tenant_id: str) -> None:

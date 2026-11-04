@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     redis_url: str | None = None
     default_limit: int = 10
     max_limit: int = 50
+    # Private-store boundary (local-store mode): comma-separated exact host[:port] values this service answers
+    # to. When set, any other Host gets 421 and any request carrying an Origin header (a browser) gets 403,
+    # because this service trusts gateway identity headers and must only ever be reached by the gateway.
+    allowed_hosts: str = ""
     # Dimension of the sqlite-vec KNN index. Must match the embedding model in
     # use. The index is an optional fast path; if the
     # sqlite-vec extension can't load, the store falls back to a linear scan.

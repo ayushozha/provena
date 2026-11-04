@@ -176,11 +176,16 @@ func (credential *UpstreamCredential) ValidateCredentialSeparation(keyStore *aut
 	return nil
 }
 
-// NewProxyHandler creates a proxy handler with the given upstream URL and timeout.
+// NewProxyHandler creates a proxy handler with the given upstream URL and timeout. An upstream redirect is
+// returned to the caller as is, never followed: following one would replay the rebuilt identity headers and
+// the private transport credential against whatever location the upstream named.
 func NewProxyHandler(upstreamURL string, timeout time.Duration) *ProxyHandler {
 	return &ProxyHandler{
 		UpstreamURL: upstreamURL,
-		Client:      &http.Client{Timeout: timeout},
+		Client: &http.Client{
+			Timeout:       timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 	}
 }
 
@@ -215,6 +220,12 @@ func applyAuthContext(header http.Header, ac *auth.AuthContext) {
 	}
 	if len(ac.Groups) > 0 {
 		header.Set("X-Provena-Groups", strings.Join(ac.Groups, ","))
+	}
+	if ac.Scope.WorkspaceID != "" {
+		header.Set("X-Provena-Scope-Workspace-Id", ac.Scope.WorkspaceID)
+	}
+	if ac.Scope.UserID != "" {
+		header.Set("X-Provena-Scope-User-Id", ac.Scope.UserID)
 	}
 }
 
@@ -267,6 +278,10 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"X-Provena-Key-Id",
 		"X-Provena-Principal-Id",
 		"X-Provena-Groups",
+		"X-Provena-Scope-Workspace-Id",
+		"X-Provena-Scope-User-Id",
+		// The gateway is the only place with an origin policy; upstream services never see a browser origin.
+		"Origin",
 	} {
 		req.Header.Del(header)
 	}
